@@ -1,0 +1,114 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: oggy-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-oggy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oggy_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-oggy_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./services/memory/db/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-oggy} -d ${POSTGRES_DB:-oggy_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache / Working Memory
+  redis:
+    image: redis:7-alpine
+    container_name: oggy-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # OpenTelemetry Collector
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    container_name: oggy-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+      - "8889:8889"   # Prometheus metrics
+      - "13133:13133" # Health check
+    depends_on:
+      - postgres
+
+  # Memory Service (Node.js)
+  memory-service:
+    build:
+      context: ./services/memory
+      dockerfile: Dockerfile
+    container_name: oggy-memory-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: ${MEMORY_SERVICE_PORT:-3000}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-oggy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oggy_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-oggy_db}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: memory-service
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./services/memory:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    command: npm run dev
+
+  # Learning Service (Python)
+  learning-service:
+    build:
+      context: ./services/learning
+      dockerfile: Dockerfile
+    container_name: oggy-learning-service
+    restart: unless-stopped
+    environment:
+      PYTHONUNBUFFERED: 1
+      MEMORY_SERVICE_URL: http://memory-service:3000
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: learning-service
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./services/learning:/app
+      - ./data:/app/data
+    depends_on:
+      - memory-service
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: oggy-network
