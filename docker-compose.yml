@@ -67,6 +67,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-oggy_db}
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_SERVICE_NAME: memory-service
     ports:
@@ -93,6 +94,7 @@ services:
     environment:
       PYTHONUNBUFFERED: 1
       MEMORY_SERVICE_URL: http://memory-service:3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-oggy}:${POSTGRES_PASSWORD:-oggy_dev_password}@postgres:5432/${POSTGRES_DB:-oggy_db}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_SERVICE_NAME: learning-service
       OPENAI_API_KEY: ${OPENAI_API_KEY}

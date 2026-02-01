@@ -125,8 +125,8 @@ async def run_bundle_evaluation(
                 score=scoring_result.score,
                 max_score=max_score,
                 passed=scoring_result.passed,
-                feedback=scoring_result.feedback,
-                reasoning=scoring_result.reasoning,
+                feedback=scoring_result.details.get("feedback"),
+                reasoning=scoring_result.details.get("reasoning"),
             )
 
             item_results.append(item_result)

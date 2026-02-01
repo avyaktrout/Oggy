@@ -1,9 +1,15 @@
 """
 Violation Logger - Audit trail for CIR violations
 Logs all CIR violations to database with full context
+
+NOTE: This directly writes to the database, bypassing the memory service.
+This is a known architectural compromise for Week 3.
+Future: Route through memory service API for unified audit trail.
+See docs/AUDIT-ARCHITECTURE.md for details and migration plan.
 """
 
 import os
+import json
 import asyncpg
 from datetime import datetime
 from typing import Dict, Optional
@@ -93,7 +99,7 @@ async def log_violation(
                 user_input,
                 agent_response,
                 blocked,
-                metadata,
+                json.dumps(metadata),
             )
 
             return result['violation_id']

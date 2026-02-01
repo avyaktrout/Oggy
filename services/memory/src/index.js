@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
 const redis = require('redis');
+const authenticate = require('./middleware/auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -69,10 +70,10 @@ const cardRoutes = require('./routes/cards');
 const retrievalRoutes = require('./routes/retrieval');
 const utilityRoutes = require('./routes/utility');
 
-// Mount routes
-app.use('/cards', cardRoutes(pool, redisClient));
-app.use('/retrieve', retrievalRoutes(pool, redisClient));
-app.use('/utility', utilityRoutes(pool, redisClient));
+// Mount routes with authentication
+app.use('/cards', authenticate, cardRoutes(pool, redisClient));
+app.use('/retrieve', authenticate, retrievalRoutes(pool, redisClient));
+app.use('/utility', authenticate, utilityRoutes(pool, redisClient));
 
 // Error handling middleware
 app.use((err, req, res, next) => {

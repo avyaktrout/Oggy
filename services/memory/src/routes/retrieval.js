@@ -99,7 +99,14 @@ module.exports = (pool, redisClient) => {
         // Calculate semantic similarity if both query and card have embeddings
         if (queryEmbedding && card.embedding) {
           try {
-            const cardEmbedding = JSON.parse(card.embedding);
+            // Handle both pre-parsed (from pg) and stringified embeddings
+            let cardEmbedding = card.embedding;
+
+            // If it's a string, parse it; if already an array, use it
+            if (typeof cardEmbedding === 'string') {
+              cardEmbedding = JSON.parse(cardEmbedding);
+            }
+
             similarity = cosineSimilarity(queryEmbedding, cardEmbedding);
           } catch (err) {
             console.error('Failed to calculate similarity for card:', card.card_id, err.message);
