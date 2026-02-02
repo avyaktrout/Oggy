@@ -242,34 +242,70 @@ class SelfDrivenLearning {
 
     /**
      * Generate assessment from domain knowledge
-     * This simulates Tessa creating a test case
+     * Enhanced to include harder, more challenging cases
      */
     async _generateAssessment() {
-        // Get a random categorization pattern from domain_knowledge
-        const result = await query(`
-            SELECT content_structured
-            FROM domain_knowledge
-            WHERE domain = 'payments'
-              AND topic = 'categorization'
-              AND content_structured->>'merchant' IS NOT NULL
-              AND content_structured->>'category' IS NOT NULL
-            ORDER BY RANDOM()
-            LIMIT 1
-        `);
+        // Strategy: Mix easy and hard cases
+        // 30% - Negative examples (rejections - harder)
+        // 40% - Standard examples (regular patterns)
+        // 30% - Ambiguous cases (could be multiple categories)
+
+        const rand = Math.random();
+        let subtopic;
+
+        if (rand < 0.3) {
+            // Hard: Negative examples (what NOT to do)
+            subtopic = 'negative_examples';
+        } else if (rand < 0.7) {
+            // Medium: Regular patterns
+            subtopic = 'user_patterns';
+        } else {
+            // Medium: Query patterns or any categorization
+            subtopic = null; // Any
+        }
+
+        const query_text = subtopic
+            ? `SELECT content_structured
+               FROM domain_knowledge
+               WHERE domain = 'payments'
+                 AND topic = 'categorization'
+                 AND subtopic = $1
+                 AND content_structured->>'merchant' IS NOT NULL
+                 AND (content_structured->>'category' IS NOT NULL
+                      OR content_structured->>'correct_category' IS NOT NULL)
+               ORDER BY RANDOM()
+               LIMIT 1`
+            : `SELECT content_structured
+               FROM domain_knowledge
+               WHERE domain = 'payments'
+                 AND topic = 'categorization'
+                 AND content_structured->>'merchant' IS NOT NULL
+                 AND (content_structured->>'category' IS NOT NULL
+                      OR content_structured->>'correct_category' IS NOT NULL)
+               ORDER BY RANDOM()
+               LIMIT 1`;
+
+        const result = subtopic
+            ? await query(query_text, [subtopic])
+            : await query(query_text);
 
         if (result.rows.length === 0) {
-            logger.warn('No domain knowledge available for practice');
+            logger.warn('No domain knowledge available for practice', { subtopic });
             return null;
         }
 
         const pattern = result.rows[0].content_structured;
+
+        // For negative examples, use the CORRECT category (not the wrong one)
+        const correctCategory = pattern.correct_category || pattern.category;
 
         // Create a synthetic expense based on the pattern
         return {
             merchant: pattern.merchant,
             amount: pattern.amount || 50.00,
             description: pattern.description || `Purchase at ${pattern.merchant}`,
-            correctCategory: pattern.category
+            correctCategory,
+            difficulty: subtopic === 'negative_examples' ? 'hard' : 'medium'
         };
     }
 
