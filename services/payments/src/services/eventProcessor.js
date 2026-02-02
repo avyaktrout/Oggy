@@ -3,26 +3,48 @@
  * Processes app_events and feeds them to:
  * 1. domain_knowledge table (for Tessa assessment generation)
  * 2. memory substrate (for Oggy continuous learning)
- * Stage 0, Week 5
+ * Stage 0, Week 7: Enhanced with resilience and structured logging
  */
 
 const { query, transaction } = require('../utils/db');
 const { getEventTypeConfig, hasValidEvidence } = require('../utils/eventTypes');
 const axios = require('axios');
 const crypto = require('crypto');
+const logger = require('../utils/logger');
+const CircuitBreaker = require('../utils/circuitBreaker');
+const retryHandler = require('../utils/retry');
 
 const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory:3000';
 
 class AppEventProcessor {
+    constructor() {
+        // Circuit breaker for memory service calls
+        this.memoryCircuitBreaker = new CircuitBreaker({
+            name: 'memory-service-events',
+            failureThreshold: 5,
+            timeout: 60000
+        });
+    }
+
     /**
      * Process a single app event
      */
     async processEvent(event) {
-        console.log(`[EventProcessor] Processing event ${event.event_id}, type: ${event.event_type}`);
+        const startTime = Date.now();
+
+        logger.info('Processing app event', {
+            event_id: event.event_id,
+            event_type: event.event_type,
+            user_id: event.user_id,
+            timestamp: event.ts
+        });
 
         const config = getEventTypeConfig(event.event_type);
         if (!config) {
-            console.error(`[EventProcessor] Unknown event type: ${event.event_type}`);
+            logger.error('Unknown event type', {
+                event_id: event.event_id,
+                event_type: event.event_type
+            });
             await this._recordError(event.event_id, 'unknown_event_type', 'Event type not in configuration');
             return;
         }
@@ -38,9 +60,18 @@ class AppEventProcessor {
                 await this._feedToMemorySubstrate(event, config);
             }
 
-            console.log(`[EventProcessor] Successfully processed event ${event.event_id}`);
+            const duration = Date.now() - startTime;
+            logger.info('Successfully processed event', {
+                event_id: event.event_id,
+                event_type: event.event_type,
+                duration_ms: duration
+            });
         } catch (error) {
-            console.error(`[EventProcessor] Error processing event ${event.event_id}:`, error);
+            logger.logError(error, {
+                operation: 'processEvent',
+                event_id: event.event_id,
+                event_type: event.event_type
+            });
             await this._recordError(event.event_id, 'processing_error', error.message);
         }
     }
@@ -50,11 +81,17 @@ class AppEventProcessor {
      * This creates knowledge entries that Tessa can use for assessment generation
      */
     async _feedToDomainKnowledge(event) {
-        console.log(`[EventProcessor] Feeding to domain_knowledge: ${event.event_id}`);
+        logger.info('Feeding event to domain_knowledge', {
+            event_id: event.event_id,
+            event_type: event.event_type
+        });
 
         const knowledgeEntry = this._buildKnowledgeEntry(event);
         if (!knowledgeEntry) {
-            console.log(`[EventProcessor] No knowledge entry generated for event ${event.event_id}`);
+            logger.debug('No knowledge entry generated', {
+                event_id: event.event_id,
+                event_type: event.event_type
+            });
             await query(
                 `UPDATE app_events SET processed_for_domain_knowledge = TRUE WHERE event_id = $1`,
                 [event.event_id]
@@ -89,7 +126,12 @@ class AppEventProcessor {
             [event.event_id]
         );
 
-        console.log(`[EventProcessor] Created domain knowledge entry for event ${event.event_id}`);
+        logger.info('Created domain knowledge entry', {
+            event_id: event.event_id,
+            domain: knowledgeEntry.domain,
+            topic: knowledgeEntry.topic,
+            subtopic: knowledgeEntry.subtopic
+        });
     }
 
     /**
@@ -205,7 +247,11 @@ class AppEventProcessor {
      * This updates memory cards for Oggy's continuous learning
      */
     async _feedToMemorySubstrate(event, config) {
-        console.log(`[EventProcessor] Feeding to memory substrate: ${event.event_id}`);
+        logger.info('Feeding event to memory substrate', {
+            event_id: event.event_id,
+            event_type: event.event_type,
+            has_trace_id: !!event.event_data.trace_id
+        });
 
         const eventData = event.event_data;
 
@@ -230,7 +276,10 @@ class AppEventProcessor {
         if (eventData.trace_id) {
             await this._updateMemoryCardsFromTrace(eventData.trace_id, event, context);
         } else {
-            console.log(`[EventProcessor] No trace_id for event ${event.event_id}, cannot update memory cards`);
+            logger.debug('No trace_id for event, skipping memory card update', {
+                event_id: event.event_id,
+                event_type: event.event_type
+            });
         }
 
         // Mark as processed
@@ -252,42 +301,100 @@ class AppEventProcessor {
             );
 
             if (traceResult.rows.length === 0) {
-                console.log(`[EventProcessor] Trace ${trace_id} not found`);
+                logger.warn('Retrieval trace not found', {
+                    trace_id,
+                    event_id: event.event_id
+                });
                 return;
             }
 
             const cardIds = traceResult.rows[0].selected_card_ids || [];
 
             if (cardIds.length === 0) {
-                console.log(`[EventProcessor] No cards in trace ${trace_id}, creating new memory card`);
+                logger.info('No cards in trace, creating new memory card', {
+                    trace_id,
+                    event_id: event.event_id
+                });
                 await this._createMemoryCardFromEvent(event, context);
                 return;
             }
 
-            console.log(`[EventProcessor] Updating ${cardIds.length} memory cards from trace ${trace_id}`);
+            logger.info('Updating memory cards from trace', {
+                trace_id,
+                card_count: cardIds.length,
+                event_id: event.event_id
+            });
 
             // Determine weight adjustment based on event type
             const patch = this._computeFeedbackPatch(event);
 
-            // Update each card
+            // Update each card with retry and circuit breaker
+            let successCount = 0;
+            let failCount = 0;
+
             for (const card_id of cardIds) {
                 try {
-                    await axios.post(
-                        `${MEMORY_SERVICE_URL}/utility/update`,
-                        {
-                            card_id,
-                            context,
-                            patch
-                        },
-                        { timeout: 5000 }
-                    );
-                    console.log(`[EventProcessor] Updated memory card ${card_id}`);
+                    await this.memoryCircuitBreaker.execute(async () => {
+                        return await retryHandler.withRetry(
+                            async () => {
+                                return await axios.post(
+                                    `${MEMORY_SERVICE_URL}/utility/update`,
+                                    {
+                                        card_id,
+                                        context,
+                                        patch
+                                    },
+                                    {
+                                        timeout: 5000,
+                                        headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
+                                    }
+                                );
+                            },
+                            {
+                                maxRetries: 2,
+                                baseDelay: 500,
+                                operationName: 'memory-card-update',
+                                shouldRetry: retryHandler.constructor.retryableHttpErrors
+                            }
+                        );
+                    });
+
+                    successCount++;
+                    logger.debug('Updated memory card', {
+                        card_id,
+                        trace_id,
+                        patch
+                    });
                 } catch (error) {
-                    console.error(`[EventProcessor] Failed to update card ${card_id}:`, error.message);
+                    failCount++;
+                    if (error.circuitBreakerOpen) {
+                        logger.error('Memory service circuit breaker open', {
+                            card_id,
+                            trace_id
+                        });
+                        // Don't try remaining cards if circuit is open
+                        break;
+                    } else {
+                        logger.warn('Failed to update memory card', {
+                            card_id,
+                            trace_id,
+                            error: error.message
+                        });
+                    }
                 }
             }
+
+            logger.info('Memory card updates completed', {
+                trace_id,
+                total: cardIds.length,
+                succeeded: successCount,
+                failed: failCount
+            });
         } catch (error) {
-            console.error(`[EventProcessor] Failed to process trace ${trace_id}:`, error.message);
+            logger.logError(error, {
+                operation: 'updateMemoryCardsFromTrace',
+                trace_id
+            });
             throw error;
         }
     }
@@ -350,33 +457,56 @@ class AppEventProcessor {
                 }
             };
 
-            // Create card via memory service
-            const response = await axios.post(
-                `${MEMORY_SERVICE_URL}/cards`,
-                {
-                    owner_type: 'user',
-                    owner_id: event.user_id,
-                    tier: 2, // short-term memory initially
-                    kind: 'expense_category_pattern',
-                    content: cardContent,
-                    tags: ['payments', 'categorization', category, merchant.toLowerCase().replace(/\s+/g, '_')],
-                    utility_weight: 0.7, // initial weight
-                    reliability: 0.8
-                },
-                {
-                    timeout: 5000,
-                    headers: {
-                        'Authorization': `Bearer ${process.env.MEMORY_SERVICE_TOKEN || 'internal-service-token'}`
+            // Create card via memory service with retry and circuit breaker
+            const response = await this.memoryCircuitBreaker.execute(async () => {
+                return await retryHandler.withRetry(
+                    async () => {
+                        return await axios.post(
+                            `${MEMORY_SERVICE_URL}/cards`,
+                            {
+                                owner_type: 'user',
+                                owner_id: event.user_id,
+                                tier: 2, // short-term memory initially
+                                kind: 'expense_category_pattern',
+                                content: cardContent,
+                                tags: ['payments', 'categorization', category, merchant.toLowerCase().replace(/\s+/g, '_')],
+                                utility_weight: 0.7, // initial weight
+                                reliability: 0.8
+                            },
+                            {
+                                timeout: 5000,
+                                headers: {
+                                    'x-api-key': process.env.INTERNAL_API_KEY || ''
+                                }
+                            }
+                        );
+                    },
+                    {
+                        maxRetries: 2,
+                        baseDelay: 500,
+                        operationName: 'memory-card-creation',
+                        shouldRetry: retryHandler.constructor.retryableHttpErrors
                     }
-                }
-            );
+                );
+            });
 
             const card_id = response.data.card_id;
-            console.log(`[EventProcessor] Created memory card ${card_id} for ${merchant} -> ${category}`);
+            logger.info('Created memory card', {
+                card_id,
+                merchant,
+                category,
+                event_id: event.event_id,
+                user_id: event.user_id
+            });
 
             return card_id;
         } catch (error) {
-            console.error(`[EventProcessor] Failed to create memory card:`, error.message);
+            logger.logError(error, {
+                operation: 'createMemoryCard',
+                event_id: event.event_id,
+                merchant: eventData.merchant,
+                category: eventData.category
+            });
             throw error;
         }
     }
@@ -419,6 +549,8 @@ class AppEventProcessor {
      * Process all unprocessed events (batch)
      */
     async processUnprocessedEvents(limit = 100) {
+        const startTime = Date.now();
+
         const result = await query(
             `SELECT * FROM app_events
              WHERE (NOT processed_for_domain_knowledge OR NOT processed_for_memory_substrate)
@@ -429,11 +561,40 @@ class AppEventProcessor {
         );
 
         const events = result.rows;
-        console.log(`[EventProcessor] Processing ${events.length} unprocessed events`);
+
+        if (events.length === 0) {
+            return 0;
+        }
+
+        logger.info('Starting batch event processing', {
+            unprocessed_count: events.length,
+            limit
+        });
+
+        let successCount = 0;
+        let errorCount = 0;
 
         for (const event of events) {
-            await this.processEvent(event);
+            try {
+                await this.processEvent(event);
+                successCount++;
+            } catch (error) {
+                errorCount++;
+                logger.warn('Event processing failed', {
+                    event_id: event.event_id,
+                    event_type: event.event_type,
+                    error: error.message
+                });
+            }
         }
+
+        const duration = Date.now() - startTime;
+        logger.info('Batch event processing completed', {
+            total: events.length,
+            succeeded: successCount,
+            failed: errorCount,
+            duration_ms: duration
+        });
 
         return events.length;
     }

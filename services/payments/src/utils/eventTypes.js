@@ -102,6 +102,21 @@ const APP_EVENT_TYPES = {
         feeds_memory_substrate: false, // just a request, not a learning signal
         entity_type: 'expense',
         action: 'suggest'
+    },
+
+    // =====================================================
+    // Self-driven learning events
+    // =====================================================
+    OGGY_SELF_PRACTICE: {
+        description: 'Oggy autonomously practiced categorization (self-driven learning)',
+        feeds_domain_knowledge: false,
+        feeds_memory_substrate: false, // already processed by self-learning service
+        memory_intent: {
+            event_type: 'autonomous_learning',
+            learning_mode: 'self_driven'
+        },
+        entity_type: 'practice',
+        action: 'self_learn'
     }
 };
 
