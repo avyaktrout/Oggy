@@ -1,0 +1,5 @@
+{
+  "expected": "reset password",
+  "answer": "reset password",
+  "scoring_method": "exact"
+}
