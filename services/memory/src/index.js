@@ -69,11 +69,16 @@ app.get('/health', async (req, res) => {
 const cardRoutes = require('./routes/cards');
 const retrievalRoutes = require('./routes/retrieval');
 const utilityRoutes = require('./routes/utility');
+const auditRoutes = require('./routes/audit');
 
 // Mount routes with authentication
 app.use('/cards', authenticate, cardRoutes(pool, redisClient));
 app.use('/retrieve', authenticate, retrievalRoutes(pool, redisClient));
 app.use('/utility', authenticate, utilityRoutes(pool, redisClient));
+
+// Audit routes (no auth for internal service-to-service communication)
+// TODO: Consider adding internal API key authentication for production
+app.use('/audit', auditRoutes(pool));
 
 // Error handling middleware
 app.use((err, req, res, next) => {

@@ -253,7 +253,8 @@ module.exports = (pool, redisClient) => {
         version: after_state.version,
       };
 
-      // Insert audit event
+      // Week 4: Dual-write to both old table and new unified audit_log
+      // Insert audit event to old memory_audit_events table (for backward compatibility)
       const auditResult = await client.query(
         `INSERT INTO memory_audit_events (
           agent, program, action, card_id,
@@ -278,6 +279,36 @@ module.exports = (pool, redisClient) => {
       );
 
       const event_id = auditResult.rows[0].event_id;
+
+      // Insert to new unified audit_log table
+      const correlationId = ctx.evidence?.trace_id || null;
+      await client.query(
+        `INSERT INTO audit_log (event_type, service, payload, correlation_id, user_id)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          'card_update',
+          'memory',
+          JSON.stringify({
+            card_id,
+            action: ctx.action || 'UPDATE_CARD',
+            agent: ctx.agent || 'unknown',
+            program: ctx.program || 'unknown',
+            event_type,
+            intent,
+            reason_code,
+            reason_text: ctx.reason_text || '',
+            evidence: ctx.evidence || {},
+            delta_score: ctx.delta_score || null,
+            old_utility: before_state.utility_weight,
+            new_utility: after_state.utility_weight,
+            utility_delta: utility_delta,
+            before: before_delta,
+            after: after_delta
+          }),
+          correlationId,
+          before_state.owner_id
+        ]
+      );
 
       // Commit transaction
       await client.query('COMMIT');

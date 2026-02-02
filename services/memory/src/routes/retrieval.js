@@ -153,6 +153,8 @@ module.exports = (pool, redisClient) => {
         };
       });
 
+      // Week 4: Dual-write to both old table and new unified audit_log
+      // Write to old retrieval_traces table (for backward compatibility)
       await pool.query(
         `INSERT INTO retrieval_traces (
           trace_id, agent, owner_type, owner_id, query,
@@ -167,6 +169,27 @@ module.exports = (pool, redisClient) => {
           selected_card_ids,
           top_k,
           JSON.stringify(score_map),
+        ]
+      );
+
+      // Write to new unified audit_log table
+      await pool.query(
+        `INSERT INTO audit_log (event_type, service, payload, correlation_id, user_id)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          'retrieval',
+          'memory',
+          JSON.stringify({
+            query: query || null,
+            agent,
+            owner_type,
+            owner_id,
+            selected_card_ids,
+            top_k,
+            scores: score_map
+          }),
+          trace_id,  // Use trace_id as correlation_id
+          owner_id
         ]
       );
 
