@@ -3,10 +3,11 @@ import httpx
 import asyncio
 import json
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import uuid
+from contextlib import asynccontextmanager
 from scoring import score_response
 from cir import validate_request, validate_response, log_violation
 from cir.violation_logger import init_logger, get_violations, get_violation_stats
@@ -14,7 +15,95 @@ from cir.pattern_learning import learn_from_violations, get_learned_patterns, an
 from evaluation.runner import run_bundle_evaluation, compare_results
 from agents import BaseAgent, OggyAgent
 
-app = FastAPI(title="Learning Service", version="0.1.0")
+# Week 4: Continuous Learning Loop imports
+from loop import (
+    OggyLearningLoop,
+    MemoryValidationUtility,
+    GateState,
+    TessaClient,
+    WorkQueue,
+    SelfDrivenLearning,
+)
+
+# APScheduler for periodic learning
+try:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    SCHEDULER_AVAILABLE = True
+except ImportError:
+    SCHEDULER_AVAILABLE = False
+    print("Warning: APScheduler not available. Scheduled learning disabled.")
+
+# Learning loop instance (initialized on startup)
+learning_loop: Optional[OggyLearningLoop] = None
+scheduler: Optional["AsyncIOScheduler"] = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan handler for startup/shutdown"""
+    global learning_loop, scheduler
+
+    print("\n🚀 Learning Service starting...")
+
+    # Initialize learning loop
+    learning_loop = OggyLearningLoop(
+        memory_service_url=os.getenv("MEMORY_SERVICE_URL", "http://localhost:3000"),
+        enable_self_driven=os.getenv("ENABLE_SELF_DRIVEN", "false").lower() == "true",
+    )
+    print(f"   Learning Loop: Initialized")
+    print(f"   Gate State: {learning_loop.get_gate_state().value}")
+
+    # Initialize scheduler if available
+    if SCHEDULER_AVAILABLE:
+        scheduler = AsyncIOScheduler()
+
+        # Schedule learning cycle (default: daily at 2am)
+        schedule_hour = int(os.getenv("LEARNING_SCHEDULE_HOUR", "2"))
+        schedule_minute = int(os.getenv("LEARNING_SCHEDULE_MINUTE", "0"))
+
+        scheduler.add_job(
+            scheduled_learning_cycle,
+            CronTrigger(hour=schedule_hour, minute=schedule_minute),
+            id="learning_cycle",
+            name="Daily Learning Cycle",
+        )
+
+        scheduler.start()
+        print(f"   Scheduler: Running (next cycle at {schedule_hour:02d}:{schedule_minute:02d})")
+    else:
+        print("   Scheduler: Not available (APScheduler not installed)")
+
+    # Initialize CIR violation logger
+    db_url = os.getenv(
+        "DATABASE_URL",
+        "postgresql://oggy:oggy_password@postgres:5432/oggy_db"
+    )
+    try:
+        await init_logger(db_url)
+        print(f"   CIR Logger: Connected to database")
+    except Exception as e:
+        print(f"   CIR Logger: WARNING - Failed to connect to database: {e}")
+        print(f"   CIR violations will be logged to console only")
+
+    print(f"   Memory Service: {os.getenv('MEMORY_SERVICE_URL', 'http://localhost:3000')}")
+    print(f"   Endpoints:")
+    print(f"     - GET  /health")
+    print(f"     - GET  /metrics")
+    print(f"     - POST /training/loop (manual trigger)")
+    print(f"     - POST /training/sdl (self-driven learning)")
+    print(f"     - GET  /training/stats")
+    print()
+
+    yield
+
+    # Shutdown
+    if scheduler:
+        scheduler.shutdown()
+    print("Learning Service stopped")
+
+
+app = FastAPI(title="Learning Service", version="0.1.0", lifespan=lifespan)
 
 # Memory service URL
 MEMORY_SERVICE_URL = os.getenv("MEMORY_SERVICE_URL", "http://localhost:3000")
@@ -68,6 +157,24 @@ class AgentGenerateRequest(BaseModel):
     context: Optional[Dict[str, Any]] = None
     outcome: Optional[str] = None  # 'success' or 'failure' (for Oggy learning)
     score: Optional[float] = None  # 0-10 (for Oggy learning)
+
+
+# Week 4: Learning Loop Request Models
+class LearningLoopRequest(BaseModel):
+    owner_type: str = "user"
+    owner_id: str = "training"
+    max_items: Optional[int] = None
+    cycle_type: str = "manual"
+
+
+class SDLTriggerRequest(BaseModel):
+    owner_type: str = "user"
+    owner_id: str = "sdl"
+    max_plans: int = 1
+
+
+class SetGateStateRequest(BaseModel):
+    gate_state: str  # GATE_CLOSED, GATE_OPEN_LIMITED, GATE_OPEN_FULL
 
 
 @app.get("/health")
@@ -523,29 +630,228 @@ async def run_bundle(request: RunBundleRequest):
         raise HTTPException(status_code=500, detail=f"Evaluation error: {str(e)}")
 
 
-@app.on_event("startup")
-async def startup_event():
-    print("\n🚀 Learning Service started")
-    print(f"   Memory Service: {MEMORY_SERVICE_URL}")
-    print(f"   Metrics: http://localhost:8000/metrics")
-    print(f"   Scoring Test: POST /evaluation/test-scoring")
-    print(f"   Bundle Evaluation: POST /evaluation/run-bundle")
-    print(f"   Agent Generation: POST /agents/generate")
-    print(f"   CIR Gates: POST /cir/validate-request, POST /cir/validate-response")
+# Week 4: Scheduled Learning Cycle
+async def scheduled_learning_cycle():
+    """Scheduled learning cycle (called by APScheduler)"""
+    global learning_loop
 
-    # Initialize CIR violation logger
-    db_url = os.getenv(
-        "DATABASE_URL",
-        "postgresql://oggy:oggy_password@postgres:5432/oggy_db"
-    )
+    if not learning_loop:
+        print("Warning: Learning loop not initialized, skipping scheduled cycle")
+        return
+
+    print(f"🔄 Starting scheduled learning cycle...")
     try:
-        await init_logger(db_url)
-        print(f"   CIR Logger: Connected to database")
+        result = await learning_loop.run_cycle(
+            cycle_type="scheduled",
+            owner_type="user",
+            owner_id="scheduled",
+        )
+        print(f"✅ Scheduled cycle completed: {result.completed_items}/{result.total_items} items, "
+              f"avg score: {result.average_score:.2f}, updates: {result.updates_applied}")
     except Exception as e:
-        print(f"   CIR Logger: WARNING - Failed to connect to database: {e}")
-        print(f"   CIR violations will be logged to console only")
+        print(f"❌ Scheduled cycle failed: {e}")
 
-    print()
+
+# Week 4: Learning Loop Endpoints
+@app.post("/training/loop")
+async def trigger_learning_loop(request: LearningLoopRequest, background_tasks: BackgroundTasks):
+    """
+    Manually trigger a learning cycle
+
+    Args:
+        request: Learning loop configuration
+
+    Returns:
+        Cycle result with processing stats
+    """
+    global learning_loop
+
+    if not learning_loop:
+        raise HTTPException(status_code=503, detail="Learning loop not initialized")
+
+    try:
+        result = await learning_loop.run_cycle(
+            cycle_type=request.cycle_type,
+            owner_type=request.owner_type,
+            owner_id=request.owner_id,
+            max_items=request.max_items,
+        )
+
+        return {
+            "cycle_id": result.cycle_id,
+            "cycle_type": result.cycle_type,
+            "total_items": result.total_items,
+            "completed_items": result.completed_items,
+            "failed_items": result.failed_items,
+            "average_score": result.average_score,
+            "pass_rate": result.pass_rate,
+            "updates_proposed": result.updates_proposed,
+            "updates_applied": result.updates_applied,
+            "updates_rejected": result.updates_rejected,
+            "gate_state": result.gate_state,
+            "benchmark_delta": result.benchmark_delta,
+            "duration_seconds": result.duration_seconds,
+            "metadata": result.metadata,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Learning cycle error: {str(e)}")
+
+
+@app.post("/training/sdl")
+async def trigger_self_driven_learning(request: SDLTriggerRequest):
+    """
+    Trigger self-driven learning (gap detection and targeted practice)
+
+    Args:
+        request: SDL configuration
+
+    Returns:
+        SDL execution results
+    """
+    global learning_loop
+
+    if not learning_loop:
+        raise HTTPException(status_code=503, detail="Learning loop not initialized")
+
+    if not learning_loop.enable_self_driven or not learning_loop.sdl:
+        raise HTTPException(status_code=400, detail="Self-driven learning is not enabled")
+
+    try:
+        # Detect gaps
+        gaps = await learning_loop.sdl.detect_gaps()
+
+        if not gaps:
+            return {
+                "message": "No gaps detected",
+                "gaps_detected": 0,
+                "plans_executed": 0,
+            }
+
+        # Execute SDL plans
+        executed_plans = []
+        for gap in gaps[:request.max_plans]:
+            plan = await learning_loop.sdl.create_sdl_plan(gap)
+            if plan:
+                plan_result = await learning_loop.sdl.execute_plan(plan)
+                executed_plans.append({
+                    "plan_id": plan.plan_id,
+                    "goal": plan.goal,
+                    "trigger_type": plan.trigger_type,
+                    "status": plan.status,
+                    "items_practiced": plan.items_practiced,
+                    "final_score": plan.final_score,
+                    "updates_applied": plan.updates_applied,
+                    "duration_seconds": plan_result.duration_seconds,
+                })
+
+        return {
+            "gaps_detected": len(gaps),
+            "gaps": [
+                {
+                    "signal_id": gap.signal_id,
+                    "trigger_type": gap.trigger_type,
+                    "severity": gap.severity,
+                    "domain": gap.domain,
+                    "description": gap.description,
+                }
+                for gap in gaps
+            ],
+            "plans_executed": len(executed_plans),
+            "plans": executed_plans,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"SDL error: {str(e)}")
+
+
+@app.get("/training/stats")
+async def get_training_stats():
+    """
+    Get learning loop and SDL statistics
+
+    Returns:
+        Current training statistics
+    """
+    global learning_loop
+
+    if not learning_loop:
+        raise HTTPException(status_code=503, detail="Learning loop not initialized")
+
+    try:
+        stats = await learning_loop.get_stats()
+
+        # Add SDL stats if enabled
+        if learning_loop.enable_self_driven and learning_loop.sdl:
+            stats["sdl"] = learning_loop.sdl.get_stats()
+
+        # Add scheduler info
+        if scheduler and SCHEDULER_AVAILABLE:
+            jobs = scheduler.get_jobs()
+            stats["scheduler"] = {
+                "running": scheduler.running,
+                "jobs": [
+                    {
+                        "id": job.id,
+                        "name": job.name,
+                        "next_run": str(job.next_run_time) if job.next_run_time else None,
+                    }
+                    for job in jobs
+                ],
+            }
+        else:
+            stats["scheduler"] = {"available": False}
+
+        return stats
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Stats error: {str(e)}")
+
+
+@app.post("/training/gate-state")
+async def set_gate_state(request: SetGateStateRequest):
+    """
+    Set the learning gate state
+
+    Args:
+        request: Gate state to set
+
+    Returns:
+        New gate state
+    """
+    global learning_loop
+
+    if not learning_loop:
+        raise HTTPException(status_code=503, detail="Learning loop not initialized")
+
+    try:
+        state = GateState(request.gate_state)
+        learning_loop.set_gate_state(state)
+
+        return {
+            "gate_state": state.value,
+            "message": f"Gate state set to {state.value}",
+        }
+
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid gate state: {request.gate_state}. "
+                   f"Must be one of: GATE_CLOSED, GATE_OPEN_LIMITED, GATE_OPEN_FULL"
+        )
+
+
+@app.get("/training/gate-state")
+async def get_gate_state():
+    """Get current learning gate state"""
+    global learning_loop
+
+    if not learning_loop:
+        raise HTTPException(status_code=503, detail="Learning loop not initialized")
+
+    return {
+        "gate_state": learning_loop.get_gate_state().value,
+    }
 
 
 if __name__ == "__main__":
