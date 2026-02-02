@@ -9,7 +9,7 @@ from typing import Dict, Optional
 # Blocked patterns for prompt injection and malicious content
 BLOCKED_PATTERNS = [
     # Prompt injection attempts
-    (r"ignore\s+(previous|all)\s+instructions?", "prompt_injection", "Ignore previous instructions"),
+    (r"ignore\s+.*instructions?", "prompt_injection", "Ignore instructions attempt"),
     (r"system\s+prompt", "prompt_injection", "System prompt access"),
     (r"jailbreak", "prompt_injection", "Jailbreak attempt"),
     (r"you\s+are\s+now", "prompt_injection", "Role override attempt"),
