@@ -290,12 +290,17 @@ class OggyLearningLoop:
 
             # Convert to WorkItems
             for practice_item in practice_items:
+                # Merge scoring_criteria into context
+                context = practice_item.context or {}
+                if practice_item.scoring_criteria:
+                    context = {**context, "scoring_criteria": practice_item.scoring_criteria}
+
                 work_item = WorkItem(
                     task_id=str(uuid.uuid4()),
                     task_type="practice",
                     user_input=practice_item.input,
                     expected_output=practice_item.expected_output,
-                    context=practice_item.context,
+                    context=context,
                     owner_type=owner_type,
                     owner_id=owner_id,
                     domain=practice_item.domain,
@@ -337,8 +342,9 @@ class OggyLearningLoop:
         async with httpx.AsyncClient() as client:
             try:
                 # Step 1: Generate response using Oggy agent
+                # Call the learning service's own agents endpoint
                 agent_response = await client.post(
-                    f"{self.memory_service_url.replace(':3000', ':8000')}/agents/generate",
+                    "http://localhost:8000/agents/generate",
                     json={
                         "user_input": item.user_input,
                         "agent": "oggy",
@@ -369,17 +375,25 @@ class OggyLearningLoop:
                     "tags": item.tags,
                 }
 
+                # Use LLM judge scoring method
+                scoring_config = {
+                    "method": "llm_judge",
+                    "judge_model": "gpt-4o-mini",  # Use cheaper model for scoring
+                    "pass_threshold": 7.0,
+                }
+
                 score_result = await score_response(
                     agent_output=result.agent_response,
                     item=scoring_item,
-                    scoring_config={},
+                    scoring_config=scoring_config,
                 )
 
                 result.score = score_result.score
                 result.max_score = score_result.max_score
                 result.passed = score_result.passed
-                result.feedback = score_result.feedback
-                result.reasoning = score_result.reasoning
+                # Extract feedback and reasoning from details if available
+                result.feedback = score_result.details.get("overall_feedback", "")
+                result.reasoning = score_result.details.get("reasoning", "")
 
                 # Step 3: Apply learning (memory updates)
                 if result.memories_used and result.trace_id:
@@ -427,6 +441,9 @@ class OggyLearningLoop:
 
             except Exception as e:
                 result.error = str(e)
+                print(f"ERROR processing item {item.task_id}: {e}")
+                import traceback
+                traceback.print_exc()
 
         result.processing_time_ms = (time.time() - start_time) * 1000
         return result

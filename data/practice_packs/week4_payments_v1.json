@@ -1,204 +1,319 @@
 {
   "pack_id": "practice-payments-week4-v1",
-  "domain": "payments",
-  "sealed": false,
-  "created_at": "2026-02-01T00:00:00Z",
-  "version": "1.0",
+  "name": "payments Practice Pack",
   "description": "Week 4 practice pack for payment domain - categorization, patterns, and budget advice",
-  "assessments": [
+  "domain": "payments",
+  "items": [
     {
-      "assessment_id": "cat-001",
-      "difficulty": 2,
-      "type": "categorization",
-      "prompt": "User spent $45.23 at 'Whole Foods Market' on 2024-01-15. What category should this transaction be assigned to?",
+      "item_id": "cat-001",
+      "input": "User spent $45.23 at 'Whole Foods Market' on 2024-01-15. What category should this transaction be assigned to?",
       "expected_output": "Groceries",
-      "rubric": {
-        "exact_match": {"weight": 0.7, "points": 10},
-        "semantic_match": {"weight": 0.3, "points": 7, "acceptable": ["Food", "Shopping", "Groceries", "Food & Dining"]}
-      },
-      "metadata": {
-        "topic": "categorization",
-        "tags": ["groceries", "basic", "food"],
-        "merchant_type": "grocery"
+      "difficulty": "easy",
+      "domain": "payments",
+      "tags": [
+        "groceries",
+        "basic",
+        "food"
+      ],
+      "scoring_criteria": {
+        "exact_match": {
+          "weight": 0.7,
+          "points": 10
+        },
+        "semantic_match": {
+          "weight": 0.3,
+          "points": 7,
+          "acceptable": [
+            "Food",
+            "Shopping",
+            "Groceries",
+            "Food & Dining"
+          ]
+        }
       }
     },
     {
-      "assessment_id": "cat-002",
-      "difficulty": 3,
-      "type": "categorization",
-      "prompt": "User paid $89.99 to 'Amazon.com' with description 'Monthly subscription renewal'. How should this be categorized?",
+      "item_id": "cat-002",
+      "input": "User paid $89.99 to 'Amazon.com' with description 'Monthly subscription renewal'. How should this be categorized?",
       "expected_output": "Subscriptions",
-      "rubric": {
-        "exact_match": {"weight": 0.7, "points": 10},
-        "semantic_match": {"weight": 0.3, "points": 7, "acceptable": ["Entertainment", "Subscriptions", "Online Services", "Digital Services"]}
-      },
-      "metadata": {
-        "topic": "categorization",
-        "tags": ["subscription", "recurring", "online"],
-        "merchant_type": "online_retail"
+      "difficulty": "medium",
+      "domain": "payments",
+      "tags": [
+        "subscription",
+        "recurring",
+        "online"
+      ],
+      "scoring_criteria": {
+        "exact_match": {
+          "weight": 0.7,
+          "points": 10
+        },
+        "semantic_match": {
+          "weight": 0.3,
+          "points": 7,
+          "acceptable": [
+            "Entertainment",
+            "Subscriptions",
+            "Online Services",
+            "Digital Services"
+          ]
+        }
       }
     },
     {
-      "assessment_id": "cat-003",
-      "difficulty": 2,
-      "type": "categorization",
-      "prompt": "Transaction: $3.75 at 'Starbucks' on morning of workday. What category?",
+      "item_id": "cat-003",
+      "input": "Transaction: $3.75 at 'Starbucks' on morning of workday. What category?",
       "expected_output": "Coffee & Cafes",
-      "rubric": {
-        "exact_match": {"weight": 0.6, "points": 10},
-        "semantic_match": {"weight": 0.4, "points": 8, "acceptable": ["Food & Dining", "Coffee", "Restaurants", "Dining Out"]}
-      },
-      "metadata": {
-        "topic": "categorization",
-        "tags": ["coffee", "dining", "daily"],
-        "merchant_type": "cafe"
+      "difficulty": "easy",
+      "domain": "payments",
+      "tags": [
+        "coffee",
+        "dining",
+        "daily"
+      ],
+      "scoring_criteria": {
+        "exact_match": {
+          "weight": 0.6,
+          "points": 10
+        },
+        "semantic_match": {
+          "weight": 0.4,
+          "points": 8,
+          "acceptable": [
+            "Food & Dining",
+            "Coffee",
+            "Restaurants",
+            "Dining Out"
+          ]
+        }
       }
     },
     {
-      "assessment_id": "cat-004",
-      "difficulty": 4,
-      "type": "categorization",
-      "prompt": "User paid $1,250 to 'Dr. Smith Medical Associates' with insurance claim pending. Category?",
+      "item_id": "cat-004",
+      "input": "User paid $1,250 to 'Dr. Smith Medical Associates' with insurance claim pending. Category?",
       "expected_output": "Healthcare",
-      "rubric": {
-        "exact_match": {"weight": 0.8, "points": 10},
-        "semantic_match": {"weight": 0.2, "points": 6, "acceptable": ["Medical", "Health", "Doctor", "Healthcare & Medical"]}
-      },
-      "metadata": {
-        "topic": "categorization",
-        "tags": ["healthcare", "medical", "high-value"],
-        "merchant_type": "healthcare"
+      "difficulty": "medium",
+      "domain": "payments",
+      "tags": [
+        "healthcare",
+        "medical",
+        "high-value"
+      ],
+      "scoring_criteria": {
+        "exact_match": {
+          "weight": 0.8,
+          "points": 10
+        },
+        "semantic_match": {
+          "weight": 0.2,
+          "points": 6,
+          "acceptable": [
+            "Medical",
+            "Health",
+            "Doctor",
+            "Healthcare & Medical"
+          ]
+        }
       }
     },
     {
-      "assessment_id": "cat-005",
-      "difficulty": 3,
-      "type": "categorization",
-      "prompt": "Venmo payment of $25 to 'Sarah J.' with note 'dinner split'. How to categorize?",
+      "item_id": "cat-005",
+      "input": "Venmo payment of $25 to 'Sarah J.' with note 'dinner split'. How to categorize?",
       "expected_output": "Restaurants",
-      "rubric": {
-        "exact_match": {"weight": 0.5, "points": 10},
-        "semantic_match": {"weight": 0.5, "points": 8, "acceptable": ["Food & Dining", "Dining Out", "Social", "Restaurants", "Personal"]}
-      },
-      "metadata": {
-        "topic": "categorization",
-        "tags": ["peer-to-peer", "dining", "social"],
-        "merchant_type": "p2p_payment"
+      "difficulty": "medium",
+      "domain": "payments",
+      "tags": [
+        "peer-to-peer",
+        "dining",
+        "social"
+      ],
+      "scoring_criteria": {
+        "exact_match": {
+          "weight": 0.5,
+          "points": 10
+        },
+        "semantic_match": {
+          "weight": 0.5,
+          "points": 8,
+          "acceptable": [
+            "Food & Dining",
+            "Dining Out",
+            "Social",
+            "Restaurants",
+            "Personal"
+          ]
+        }
       }
     },
     {
-      "assessment_id": "pattern-001",
-      "difficulty": 4,
-      "type": "pattern_analysis",
-      "prompt": "User has 8 transactions at coffee shops over 14 days, averaging $4.50 each, all on weekday mornings. Identify the spending pattern.",
+      "item_id": "pattern-001",
+      "input": "User has 8 transactions at coffee shops over 14 days, averaging $4.50 each, all on weekday mornings. Identify the spending pattern.",
       "expected_output": "Recurring weekday coffee habit - approximately 4 times per week, $18-20/week on coffee",
-      "rubric": {
+      "difficulty": "medium",
+      "domain": "payments",
+      "tags": [
+        "recurring",
+        "frequency_analysis",
+        "coffee"
+      ],
+      "scoring_criteria": {
         "components": [
-          {"element": "frequency", "weight": 0.3, "required": "4 times per week"},
-          {"element": "timing", "weight": 0.2, "required": "weekday mornings"},
-          {"element": "cost", "weight": 0.3, "required": "$18-20 per week"},
-          {"element": "pattern_type", "weight": 0.2, "required": "recurring habit"}
+          {
+            "element": "frequency",
+            "weight": 0.3,
+            "required": "4 times per week"
+          },
+          {
+            "element": "timing",
+            "weight": 0.2,
+            "required": "weekday mornings"
+          },
+          {
+            "element": "cost",
+            "weight": 0.3,
+            "required": "$18-20 per week"
+          },
+          {
+            "element": "pattern_type",
+            "weight": 0.2,
+            "required": "recurring habit"
+          }
         ]
-      },
-      "metadata": {
-        "topic": "pattern_detection",
-        "tags": ["recurring", "frequency_analysis", "coffee"],
-        "complexity": "medium"
       }
     },
     {
-      "assessment_id": "pattern-002",
-      "difficulty": 5,
-      "type": "pattern_analysis",
-      "prompt": "User's grocery spending: Week 1: $120, Week 2: $45, Week 3: $130, Week 4: $50. User shops at Costco biweekly ($120-130) and local market weekly ($45-50). Describe this pattern.",
+      "item_id": "pattern-002",
+      "input": "User's grocery spending: Week 1: $120, Week 2: $45, Week 3: $130, Week 4: $50. User shops at Costco biweekly ($120-130) and local market weekly ($45-50). Describe this pattern.",
       "expected_output": "Biweekly bulk shopping pattern at Costco (~$125) supplemented by weekly fresh market trips (~$47). Total monthly grocery spending approximately $340.",
-      "rubric": {
+      "difficulty": "hard",
+      "domain": "payments",
+      "tags": [
+        "groceries",
+        "biweekly",
+        "bulk_shopping"
+      ],
+      "scoring_criteria": {
         "components": [
-          {"element": "bulk_pattern", "weight": 0.35, "required": "biweekly bulk shopping"},
-          {"element": "supplement_pattern", "weight": 0.25, "required": "weekly supplemental trips"},
-          {"element": "cost_breakdown", "weight": 0.3, "required": "~$125 bulk, ~$47 weekly"},
-          {"element": "total_insight", "weight": 0.1, "required": "monthly total ~$340"}
+          {
+            "element": "bulk_pattern",
+            "weight": 0.35,
+            "required": "biweekly bulk shopping"
+          },
+          {
+            "element": "supplement_pattern",
+            "weight": 0.25,
+            "required": "weekly supplemental trips"
+          },
+          {
+            "element": "cost_breakdown",
+            "weight": 0.3,
+            "required": "~$125 bulk, ~$47 weekly"
+          },
+          {
+            "element": "total_insight",
+            "weight": 0.1,
+            "required": "monthly total ~$340"
+          }
         ]
-      },
-      "metadata": {
-        "topic": "pattern_detection",
-        "tags": ["groceries", "biweekly", "bulk_shopping"],
-        "complexity": "high"
       }
     },
     {
-      "assessment_id": "budget-001",
-      "difficulty": 3,
-      "type": "budget_advice",
-      "prompt": "User spends $180/month on dining out (target: $120). Last month: 12 restaurant visits averaging $15 each. Provide actionable budget advice.",
+      "item_id": "budget-001",
+      "input": "User spends $180/month on dining out (target: $120). Last month: 12 restaurant visits averaging $15 each. Provide actionable budget advice.",
       "expected_output": "You're $60 over your dining budget. To reach your $120 target, reduce restaurant visits from 12 to 8 per month (4 fewer visits). Consider meal prepping or cooking at home 1-2 more times per week.",
-      "rubric": {
+      "difficulty": "medium",
+      "domain": "payments",
+      "tags": [
+        "dining",
+        "overspending",
+        "actionable_advice"
+      ],
+      "scoring_criteria": {
         "components": [
-          {"element": "gap_identification", "weight": 0.25, "required": "$60 over budget"},
-          {"element": "actionable_goal", "weight": 0.35, "required": "reduce to 8 visits"},
-          {"element": "practical_suggestion", "weight": 0.4, "required": "meal prep or cook at home"}
+          {
+            "element": "gap_identification",
+            "weight": 0.25,
+            "required": "$60 over budget"
+          },
+          {
+            "element": "actionable_goal",
+            "weight": 0.35,
+            "required": "reduce to 8 visits"
+          },
+          {
+            "element": "practical_suggestion",
+            "weight": 0.4,
+            "required": "meal prep or cook at home"
+          }
         ]
-      },
-      "metadata": {
-        "topic": "budget_optimization",
-        "tags": ["dining", "overspending", "actionable_advice"],
-        "complexity": "medium"
       }
     },
     {
-      "assessment_id": "budget-002",
-      "difficulty": 4,
-      "type": "budget_advice",
-      "prompt": "User has 5 active subscriptions: Netflix ($15), Spotify ($10), Gym ($45), NYT ($20), Adobe ($35). Total: $125/month. User wants to cut $40. Which should they consider canceling?",
+      "item_id": "budget-002",
+      "input": "User has 5 active subscriptions: Netflix ($15), Spotify ($10), Gym ($45), NYT ($20), Adobe ($35). Total: $125/month. User wants to cut $40. Which should they consider canceling?",
       "expected_output": "To save $40, consider canceling Adobe ($35) + NYT ($20) = $55 saved, or Gym ($45) alone if not using it regularly. Adobe and NYT are less essential than entertainment (Netflix/Spotify) for most users. Ask user about usage frequency to confirm.",
-      "rubric": {
+      "difficulty": "medium",
+      "domain": "payments",
+      "tags": [
+        "subscriptions",
+        "cost_cutting",
+        "prioritization"
+      ],
+      "scoring_criteria": {
         "components": [
-          {"element": "math_correct", "weight": 0.2, "required": "identifies combinations totaling ~$40"},
-          {"element": "prioritization", "weight": 0.4, "required": "suggests least essential subscriptions"},
-          {"element": "user_context", "weight": 0.4, "required": "asks about usage or mentions user needs"}
+          {
+            "element": "math_correct",
+            "weight": 0.2,
+            "required": "identifies combinations totaling ~$40"
+          },
+          {
+            "element": "prioritization",
+            "weight": 0.4,
+            "required": "suggests least essential subscriptions"
+          },
+          {
+            "element": "user_context",
+            "weight": 0.4,
+            "required": "asks about usage or mentions user needs"
+          }
         ]
-      },
-      "metadata": {
-        "topic": "budget_optimization",
-        "tags": ["subscriptions", "cost_cutting", "prioritization"],
-        "complexity": "high"
       }
     },
     {
-      "assessment_id": "budget-003",
-      "difficulty": 5,
-      "type": "budget_advice",
-      "prompt": "User's monthly income: $4,500. Spending: Rent $1,400, Utilities $150, Groceries $400, Dining $300, Transport $200, Entertainment $250, Shopping $600, Savings $50. Remaining: $150. User wants to save $500/month. Create a realistic savings plan.",
+      "item_id": "budget-003",
+      "input": "User's monthly income: $4,500. Spending: Rent $1,400, Utilities $150, Groceries $400, Dining $300, Transport $200, Entertainment $250, Shopping $600, Savings $50. Remaining: $150. User wants to save $500/month. Create a realistic savings plan.",
       "expected_output": "Current savings: $50/month ($200 discretionary remaining). To save $500/month, need to cut $450 from spending. Recommended plan: Reduce shopping $300 (from $600 to $300), dining out $100 (from $300 to $200), entertainment $50 (from $250 to $200). This saves $450, bringing total savings to $500/month while maintaining reasonable spending on essentials.",
-      "rubric": {
+      "difficulty": "hard",
+      "domain": "payments",
+      "tags": [
+        "comprehensive_budget",
+        "savings_plan",
+        "financial_planning"
+      ],
+      "scoring_criteria": {
         "components": [
-          {"element": "math_accuracy", "weight": 0.2, "required": "correctly calculates $450 needed"},
-          {"element": "realistic_cuts", "weight": 0.3, "required": "targets discretionary categories"},
-          {"element": "specific_amounts", "weight": 0.3, "required": "provides specific dollar cuts per category"},
-          {"element": "maintains_essentials", "weight": 0.2, "required": "preserves rent, utilities, groceries, transport"}
+          {
+            "element": "math_accuracy",
+            "weight": 0.2,
+            "required": "correctly calculates $450 needed"
+          },
+          {
+            "element": "realistic_cuts",
+            "weight": 0.3,
+            "required": "targets discretionary categories"
+          },
+          {
+            "element": "specific_amounts",
+            "weight": 0.3,
+            "required": "provides specific dollar cuts per category"
+          },
+          {
+            "element": "maintains_essentials",
+            "weight": 0.2,
+            "required": "preserves rent, utilities, groceries, transport"
+          }
         ]
-      },
-      "metadata": {
-        "topic": "budget_optimization",
-        "tags": ["comprehensive_budget", "savings_plan", "financial_planning"],
-        "complexity": "very_high"
       }
     }
-  ],
-  "usage_notes": {
-    "purpose": "Practice pack for Week 4 continuous learning loop testing",
-    "target_skills": [
-      "Transaction categorization with ambiguous merchants",
-      "Spending pattern recognition across time series",
-      "Budget optimization with competing priorities"
-    ],
-    "difficulty_distribution": {
-      "easy": 2,
-      "medium": 4,
-      "hard": 3,
-      "very_hard": 1
-    },
-    "expected_accuracy_baseline": 0.65,
-    "expected_accuracy_oggy": 0.80
-  }
+  ]
 }
