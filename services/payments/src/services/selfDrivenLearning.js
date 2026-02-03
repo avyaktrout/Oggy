@@ -14,6 +14,7 @@ const logger = require('../utils/logger');
 const { query } = require('../utils/db');
 const OggyCategorizer = require('./oggyCategorizer');
 const tessaAssessmentGenerator = require('./tessaAssessmentGenerator');
+const categoryRulesManager = require('./categoryRulesManager');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
 const { adaptiveDifficultyScaler } = require('./adaptiveDifficultyScaler');
@@ -274,6 +275,12 @@ class SelfDrivenLearning {
                 confidence: suggestion.confidence,
                 source: assessment.source || 'practice'
             });
+
+            // Step 4.5: If this was a confusion-targeted scenario and we got it right,
+            // create a category distinction rule that will be injected into ALL future prompts
+            if (assessment.confusion_context) {
+                await this._createCategoryDistinctionRule(assessment, suggestion.reasoning);
+            }
         }
 
         // Step 5: Record practice event for audit trail
@@ -773,6 +780,46 @@ Oggy correctly categorized this during autonomous practice and added it to domai
             logger.warn('Failed to expand domain knowledge', {
                 error: error.message,
                 merchant: learningData.merchant
+            });
+        }
+    }
+
+    /**
+     * Create a category distinction rule from successful confusion-targeted learning
+     * These rules are ALWAYS injected into categorization prompts, bypassing semantic retrieval
+     */
+    async _createCategoryDistinctionRule(assessment, reasoning) {
+        try {
+            const { confusion_context } = assessment;
+            if (!confusion_context) return;
+
+            const { actual_category, confused_with, training_goal } = confusion_context;
+
+            // Build a distinction hint from the training goal and reasoning
+            const distinctionHint = training_goal ||
+                `${actual_category} differs from ${confused_with}: ${reasoning || 'context determines category'}`;
+
+            // Create the rule using the rules manager
+            const ruleId = await categoryRulesManager.createDistinctionRule(
+                {
+                    actual: actual_category,
+                    predicted: confused_with,
+                    confusion_rate: confusion_context.confusion_rate || 0.5
+                },
+                distinctionHint
+            );
+
+            if (ruleId) {
+                logger.info('Created category distinction rule from confusion training', {
+                    rule_id: ruleId,
+                    actual: actual_category,
+                    confused_with,
+                    distinction: distinctionHint.substring(0, 100)
+                });
+            }
+        } catch (error) {
+            logger.warn('Failed to create category distinction rule', {
+                error: error.message
             });
         }
     }

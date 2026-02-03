@@ -13,6 +13,7 @@
 const sealedBenchmarkEvaluator = require('./sealedBenchmarkEvaluator');
 const weaknessAnalyzer = require('./weaknessAnalyzer');
 const selfDrivenLearning = require('./selfDrivenLearning'); // Singleton instance
+const categoryRulesManager = require('./categoryRulesManager');
 const logger = require('../utils/logger');
 
 class BenchmarkDrivenLearning {
@@ -74,6 +75,43 @@ class BenchmarkDrivenLearning {
                 weak_categories: weakCategories,
                 avg_weak_accuracy: (avgWeakAccuracy * 100).toFixed(1) + '%'
             });
+
+            // STEP 2.5: Create category distinction rules from confusion patterns
+            // These rules are ALWAYS injected into prompts, bypassing semantic retrieval
+            const confusionPatterns = weaknessAnalysis.confusion_patterns || [];
+            let rulesCreated = 0;
+            for (const pattern of confusionPatterns.slice(0, 5)) {
+                try {
+                    // Build a rich, actionable distinction hint
+                    let distinctionHint = pattern.training_focus ||
+                        `When distinguishing ${pattern.actual} from ${pattern.predicted}: check context carefully.`;
+
+                    // Add indicator information if available
+                    if (pattern.actual_indicators) {
+                        distinctionHint += `\n• ${pattern.actual}: ${pattern.actual_indicators}`;
+                    }
+                    if (pattern.confused_indicators) {
+                        distinctionHint += `\n• ${pattern.predicted}: ${pattern.confused_indicators}`;
+                    }
+
+                    const ruleId = await categoryRulesManager.createDistinctionRule(
+                        pattern,
+                        distinctionHint
+                    );
+                    if (ruleId) rulesCreated++;
+                } catch (error) {
+                    logger.warn('Failed to create rule from confusion pattern', {
+                        pattern: `${pattern.actual}→${pattern.predicted}`,
+                        error: error.message
+                    });
+                }
+            }
+            if (rulesCreated > 0) {
+                logger.info(`Cycle ${cycle + 1}: Created ${rulesCreated} category distinction rules`, {
+                    user_id,
+                    patterns: confusionPatterns.slice(0, 5).map(p => `${p.actual}→${p.predicted}`)
+                });
+            }
 
             // Store cycle results
             const cycleResult = {

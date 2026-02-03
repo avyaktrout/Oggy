@@ -21,6 +21,50 @@ class WeaknessAnalyzer {
             'dining',
             'shopping'
         ];
+
+        // Actionable distinctions between commonly confused category pairs
+        this.categoryDistinctions = {
+            'dining:business_meal': {
+                actual_indicators: 'dining = personal meals, social outings, dates, catching up with friends, casual meals with no work context',
+                confused_indicators: 'business_meal = mentions client, meeting, team, conference, work lunch, networking, professional context',
+                key_rule: 'If NO business/work/client/meeting context is mentioned, classify as dining. Only use business_meal when there is EXPLICIT work-related context.'
+            },
+            'business_meal:dining': {
+                actual_indicators: 'business_meal = client dinners, team lunches, networking events, conference meals, meetings over food',
+                confused_indicators: 'dining = personal meals, social occasions, dates, family dinners, casual eating out',
+                key_rule: 'Look for keywords: client, meeting, team, work, conference, networking. Without these, use dining.'
+            },
+            'groceries:shopping': {
+                actual_indicators: 'groceries = food items for home, supermarkets, grocery stores, produce, household consumables',
+                confused_indicators: 'shopping = non-food retail, clothing, electronics, home goods, general merchandise',
+                key_rule: 'If the purchase is primarily FOOD for home consumption, use groceries. Non-food items = shopping.'
+            },
+            'shopping:groceries': {
+                actual_indicators: 'shopping = retail stores, clothing, electronics, non-food items, general merchandise',
+                confused_indicators: 'groceries = food stores, supermarkets, food items for home',
+                key_rule: 'Food from grocery stores = groceries. Everything else from retail = shopping.'
+            },
+            'entertainment:dining': {
+                actual_indicators: 'entertainment = movies, concerts, streaming, gaming, sports events, leisure activities',
+                confused_indicators: 'dining = restaurants, cafes, food service establishments',
+                key_rule: 'Food service = dining. Non-food leisure activities = entertainment.'
+            },
+            'dining:entertainment': {
+                actual_indicators: 'dining = restaurants, cafes, bars (food focus), coffee shops',
+                confused_indicators: 'entertainment = venues where food is secondary (theaters, concerts, sports)',
+                key_rule: 'Primary purpose eating/drinking = dining. Primary purpose activity with incidental food = entertainment.'
+            },
+            'transportation:utilities': {
+                actual_indicators: 'transportation = gas, parking, tolls, rideshare, public transit, car-related',
+                confused_indicators: 'utilities = monthly bills, home services, internet, phone, electric, water',
+                key_rule: 'Travel/vehicle costs = transportation. Monthly home/phone bills = utilities.'
+            },
+            'health:personal_care': {
+                actual_indicators: 'health = pharmacy, medical, doctor, gym, fitness, wellness treatments',
+                confused_indicators: 'personal_care = salon, spa, haircut, grooming, cosmetic services',
+                key_rule: 'Medical/fitness = health. Beauty/grooming services = personal_care.'
+            }
+        };
     }
 
     /**
@@ -267,6 +311,9 @@ class WeaknessAnalyzer {
 
                 // Include if significant confusion (>10% of that category)
                 if (confusion_rate >= 0.10 || (weak_categories.has(actual) && confusion_count > 0)) {
+                    // Get actionable distinction for this category pair
+                    const distinction = this._getActionableDistinction(actual, predicted);
+
                     patterns.push({
                         actual,
                         predicted,
@@ -276,7 +323,9 @@ class WeaknessAnalyzer {
                         percentage: (confusion_rate * 100).toFixed(1),
                         severity: this._calculateConfusionSeverity(confusion_rate),
                         description: `${actual} misclassified as ${predicted}`,
-                        training_focus: `Generate scenarios that clearly distinguish ${actual} from ${predicted}`
+                        training_focus: distinction.key_rule,
+                        actual_indicators: distinction.actual_indicators,
+                        confused_indicators: distinction.confused_indicators
                     });
                 }
             }
@@ -296,6 +345,28 @@ class WeaknessAnalyzer {
         if (confusion_rate >= 0.30) return 'severe';
         if (confusion_rate >= 0.15) return 'moderate';
         return 'mild';
+    }
+
+    /**
+     * Get actionable distinction for a category pair
+     * Returns specific guidance on how to differentiate the categories
+     */
+    _getActionableDistinction(actual, predicted) {
+        const key = `${actual}:${predicted}`;
+
+        // Check if we have a predefined distinction
+        if (this.categoryDistinctions[key]) {
+            return this.categoryDistinctions[key];
+        }
+
+        // Generate a reasonable default
+        return {
+            actual_indicators: `${actual} = typical ${actual} transactions`,
+            confused_indicators: `${predicted} = typical ${predicted} transactions`,
+            key_rule: `When distinguishing ${actual} from ${predicted}: Look for specific context clues. ` +
+                `${actual} should have clear ${actual}-related indicators. ` +
+                `If the expense seems ambiguous, consider the PRIMARY purpose of the transaction.`
+        };
     }
 
     /**

@@ -147,7 +147,7 @@ This rule was learned from confusion pattern training where ${actual} was being 
                 'category_distinction_rules',
                 content_text,
                 JSON.stringify(content_structured),
-                'confusion_training',
+                'tessa_ai',  // Using tessa_ai as source since rules come from Tessa-generated training
                 `confusion:${actual}:${predicted}`,
                 'shareable',
                 3,

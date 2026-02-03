@@ -23,6 +23,7 @@ const sealedBenchmarkRouter = require('./routes/sealedBenchmark');
 const memoryPruningRouter = require('./routes/memoryPruning');
 const trainingRouter = require('./routes/training');
 const benchmarkDrivenLearningRouter = require('./routes/benchmarkDrivenLearning');
+const continuousLearningRouter = require('./routes/continuousLearning');
 
 const auditChecker = require('./utils/auditChecker');
 
