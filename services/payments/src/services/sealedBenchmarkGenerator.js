@@ -15,6 +15,8 @@ const retryHandler = require('../utils/retry');
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const ANTHROPIC_MODEL = 'claude-3-5-haiku-20241022'; // Different from Tessa's GPT-4o-mini
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_MODEL = 'gpt-4o-mini';
 
 /**
  * Out-of-Distribution Sealed Benchmark Generator
@@ -24,6 +26,12 @@ class SealedBenchmarkGenerator {
     constructor() {
         this.claudeCircuitBreaker = new CircuitBreaker({
             name: 'sealed-benchmark-claude',
+            failureThreshold: 3,
+            timeout: 30000
+        });
+
+        this.openaiCircuitBreaker = new CircuitBreaker({
+            name: 'sealed-benchmark-openai',
             failureThreshold: 3,
             timeout: 30000
         });
@@ -156,9 +164,9 @@ class SealedBenchmarkGenerator {
         // This is for control/comparison benchmarks
         const prompt = this._buildGPTLikePrompt(category, difficulty);
 
-        return await this.claudeCircuitBreaker.execute(async () => {
+        return await this.openaiCircuitBreaker.execute(async () => {
             return await retryHandler.withRetry(
-                async () => await this._callClaude(prompt),
+                async () => await this._callOpenAI(prompt, category),
                 {
                     maxRetries: 2,
                     baseDelay: 1000,
@@ -166,6 +174,51 @@ class SealedBenchmarkGenerator {
                 }
             );
         });
+    }
+
+    /**
+     * Call OpenAI API for in-distribution scenario generation
+     */
+    async _callOpenAI(prompt, category) {
+        const response = await axios.post(
+            'https://api.openai.com/v1/chat/completions',
+            {
+                model: OPENAI_MODEL,
+                messages: [
+                    {
+                        role: 'system',
+                        content: 'You are an expert at generating realistic expense categorization scenarios. Return only valid JSON.'
+                    },
+                    {
+                        role: 'user',
+                        content: prompt
+                    }
+                ],
+                temperature: 0.9,
+                max_tokens: 300
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                    'Content-Type': 'application/json'
+                },
+                timeout: 15000
+            }
+        );
+
+        const content = response.data.choices[0].message.content.trim();
+        const jsonStr = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        const parsed = JSON.parse(jsonStr);
+
+        return {
+            merchant: parsed.merchant,
+            amount: parsed.amount,
+            description: parsed.description,
+            category: category,
+            reasoning: parsed.reasoning || '',
+            generator: 'gpt-style',
+            model: OPENAI_MODEL
+        };
     }
 
     /**
@@ -190,24 +243,30 @@ Requirements:
 - Create a realistic merchant name (can be fictional but plausible)
 - Generate a natural transaction description
 - Use a realistic USD amount
-- Ensure the transaction legitimately belongs to "${category}" upon careful analysis
-- For harder difficulties, include realistic ambiguity or edge cases
+- The transaction must CLEARLY and UNAMBIGUOUSLY belong to "${category}"
+- The description must make it obvious which category applies
+
+CRITICAL RULES FOR CLARITY:
+- For "dining": NEVER mention business, clients, meetings, colleagues, or work. Use phrases like "birthday dinner", "date night", "catching up with friends", "weekend brunch"
+- For "business_meal": ALWAYS explicitly mention clients, business meeting, work event, networking, or professional context
+- AVOID scenarios that could reasonably fit multiple categories
+- The description should make the category obvious to any reader
 
 Category definitions:
-- business_meal: Work-related dining (client meetings, team lunches)
+- business_meal: Work-related dining - MUST mention clients, business purpose, work meeting, or professional networking
 - groceries: Food shopping at supermarkets for home use
 - transportation: Travel expenses (gas, rideshare, parking, car-related)
 - utilities: Home services (electricity, water, internet, phone)
 - entertainment: Leisure activities (movies, concerts, streaming, hobbies)
 - health: Medical and wellness (gym, pharmacy, doctor visits)
-- dining: Personal restaurant/cafe visits (non-business)
+- dining: Personal restaurant/cafe visits - MUST be clearly personal/social (friends, family, dates), NO work context
 - shopping: Retail purchases (clothing, household items, online shopping)
 
 Return ONLY valid JSON in this format:
 {
   "merchant": "Merchant Name",
   "amount": 45.50,
-  "description": "Transaction description",
+  "description": "Transaction description that clearly indicates the category",
   "category": "${category}",
   "reasoning": "Brief explanation why this is ${category}"
 }`;
@@ -330,37 +389,58 @@ Return only the JSON object.`;
         ]);
 
         // Store individual scenarios
+        let scenariosStored = 0;
         for (const scenario of scenarios) {
-            await query(`
-                INSERT INTO sealed_benchmark_scenarios (
-                    scenario_id,
+            try {
+                await query(`
+                    INSERT INTO sealed_benchmark_scenarios (
+                        scenario_id,
+                        benchmark_id,
+                        order_index,
+                        merchant,
+                        amount,
+                        description,
+                        correct_category,
+                        reasoning,
+                        generator,
+                        model
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                `, [
+                    scenario.scenario_id,
                     benchmark_id,
-                    order_index,
-                    merchant,
-                    amount,
-                    description,
-                    correct_category,
-                    reasoning,
-                    generator,
-                    model
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            `, [
-                scenario.scenario_id,
-                benchmark_id,
-                scenario.order_index,
-                scenario.merchant,
-                scenario.amount,
-                scenario.description,
-                scenario.category,
-                scenario.reasoning,
-                scenario.generator || 'claude',
-                scenario.model || ANTHROPIC_MODEL
-            ]);
+                    scenario.order_index,
+                    scenario.merchant,
+                    scenario.amount,
+                    scenario.description,
+                    scenario.category,
+                    scenario.reasoning,
+                    scenario.generator || 'claude',
+                    scenario.model || ANTHROPIC_MODEL
+                ]);
+                scenariosStored++;
+            } catch (insertError) {
+                logger.warn('Failed to insert scenario', {
+                    benchmark_id,
+                    scenario_id: scenario.scenario_id,
+                    category: scenario.category,
+                    error: insertError.message
+                });
+            }
+        }
+
+        // Update scenario_count with actual stored count
+        if (scenariosStored !== scenarios.length) {
+            await query(`
+                UPDATE sealed_benchmarks
+                SET scenario_count = $1
+                WHERE benchmark_id = $2
+            `, [scenariosStored, benchmark_id]);
         }
 
         logger.info('Sealed benchmark stored in database', {
             benchmark_id,
-            scenarios_stored: scenarios.length
+            scenarios_generated: scenarios.length,
+            scenarios_stored: scenariosStored
         });
     }
 

@@ -20,6 +20,7 @@ const evaluationRouter = require('./routes/evaluation');
 const learningRouter = require('./routes/learning');
 const tessaRouter = require('./routes/tessa');
 const sealedBenchmarkRouter = require('./routes/sealedBenchmark');
+const trainingRouter = require('./routes/training');
 
 const auditChecker = require('./utils/auditChecker');
 
@@ -208,6 +209,7 @@ app.use('/v0/tessa', tessaRouter);
 
 // Sealed benchmark routes (OOD testing)
 app.use('/v0/sealed-benchmark', sealedBenchmarkRouter);
+app.use('/v0/training', trainingRouter);
 
 // Event processing endpoint (for manual trigger or webhook)
 app.post('/v0/process-events', async (req, res) => {

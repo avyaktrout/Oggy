@@ -325,6 +325,256 @@ This is a realistic example for training categorization AI.`;
     _sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
+
+    /**
+     * Generate targeted practice items for specific weak categories
+     * Used by benchmark-driven learning to focus on areas Oggy struggles with
+     *
+     * @param {Array} weakCategories - Array of {category, accuracy, severity}
+     * @param {number} itemsPerCategory - Number of items per category (default 10)
+     * @returns {Array} Practice items with category metadata
+     */
+    async generateForWeakCategories(weakCategories, itemsPerCategory = 10) {
+        const items = [];
+
+        logger.info('Generating items for weak categories', {
+            weak_categories: weakCategories.map(w => w.category),
+            items_per_category: itemsPerCategory
+        });
+
+        for (const weakness of weakCategories) {
+            // Select difficulty tier based on severity
+            const tier = this._severityToTier(weakness.severity);
+
+            for (let i = 0; i < itemsPerCategory; i++) {
+                try {
+                    const scenario = await this.generateNovelScenario({
+                        category: weakness.category,
+                        difficultyTier: tier
+                    });
+
+                    if (scenario) {
+                        items.push({
+                            ...scenario,
+                            weakness_context: {
+                                original_accuracy: weakness.accuracy,
+                                severity: weakness.severity,
+                                target_improvement: Math.max(0.60 - weakness.accuracy, 0.10)
+                            }
+                        });
+                    }
+
+                    // Rate limit to avoid API issues
+                    await this._sleep(300);
+
+                } catch (error) {
+                    logger.warn('Failed to generate targeted item', {
+                        category: weakness.category,
+                        index: i,
+                        error: error.message
+                    });
+                }
+            }
+        }
+
+        logger.info('Generated weak category items', {
+            total: items.length,
+            by_category: this._countByCategory(items)
+        });
+
+        return items;
+    }
+
+    /**
+     * Map weakness severity to appropriate difficulty tier
+     * Weaker categories get easier practice first (build foundation)
+     */
+    _severityToTier(severity) {
+        switch (severity) {
+            case 'critical':  // < 30% accuracy
+                return DIFFICULTY_TIERS.TIER_1_WARMUP;
+            case 'severe':    // < 45% accuracy
+                return DIFFICULTY_TIERS.TIER_2_STANDARD;
+            case 'moderate':  // < 60% accuracy
+                return DIFFICULTY_TIERS.TIER_3_CHALLENGE;
+            default:
+                return DIFFICULTY_TIERS.TIER_2_STANDARD;
+        }
+    }
+
+    /**
+     * Count items by category
+     */
+    _countByCategory(items) {
+        const counts = {};
+        for (const item of items) {
+            const cat = item.correctCategory;
+            counts[cat] = (counts[cat] || 0) + 1;
+        }
+        return counts;
+    }
+
+    /**
+     * Generate scenarios specifically targeting confusion patterns
+     * These scenarios are designed to help Oggy distinguish between commonly confused categories
+     *
+     * @param {Array} confusionPatterns - Array of {actual, predicted, count, confusion_rate}
+     * @param {number} itemsPerPattern - Number of items per confusion pattern (default 5)
+     * @returns {Array} Practice items targeting specific confusion patterns
+     */
+    async generateForConfusionPatterns(confusionPatterns, itemsPerPattern = 5) {
+        const items = [];
+
+        logger.info('Generating confusion-targeted scenarios', {
+            patterns: confusionPatterns.map(p => `${p.actual}→${p.predicted}`),
+            items_per_pattern: itemsPerPattern
+        });
+
+        for (const pattern of confusionPatterns) {
+            const { actual, predicted, confusion_rate } = pattern;
+
+            for (let i = 0; i < itemsPerPattern; i++) {
+                try {
+                    const scenario = await this._generateConfusionScenario(actual, predicted, confusion_rate);
+
+                    if (scenario) {
+                        items.push({
+                            ...scenario,
+                            confusion_context: {
+                                actual_category: actual,
+                                confused_with: predicted,
+                                confusion_rate: confusion_rate,
+                                training_goal: `Learn to distinguish ${actual} from ${predicted}`
+                            }
+                        });
+                    }
+
+                    // Rate limit to avoid API issues
+                    await this._sleep(300);
+
+                } catch (error) {
+                    logger.warn('Failed to generate confusion-targeted item', {
+                        actual,
+                        predicted,
+                        index: i,
+                        error: error.message
+                    });
+                }
+            }
+        }
+
+        logger.info('Generated confusion-targeted items', {
+            total: items.length,
+            by_pattern: this._countByConfusionPattern(items)
+        });
+
+        return items;
+    }
+
+    /**
+     * Generate a scenario that specifically addresses confusion between two categories
+     * The scenario will be clearly in the 'actual' category but have elements that might
+     * superficially seem like 'confused_with' category, forcing Oggy to learn the distinction
+     */
+    async _generateConfusionScenario(actualCategory, confusedWith, confusionRate) {
+        const prompt = this._buildConfusionPrompt(actualCategory, confusedWith, confusionRate);
+
+        const scenario = await this.openaiCircuitBreaker.execute(async () => {
+            return await retryHandler.withRetry(
+                async () => await this._callOpenAI(prompt),
+                {
+                    maxRetries: 2,
+                    baseDelay: 1000,
+                    operationName: 'tessa-confusion-scenario'
+                }
+            );
+        });
+
+        // Add to domain knowledge
+        await this._addToDomainKnowledge(scenario, DIFFICULTY_TIERS.TIER_3_CHALLENGE);
+
+        logger.debug('Generated confusion-targeted scenario', {
+            actual: actualCategory,
+            confused_with: confusedWith,
+            merchant: scenario.merchant
+        });
+
+        return {
+            merchant: scenario.merchant,
+            amount: scenario.amount,
+            description: scenario.description,
+            correctCategory: scenario.category,
+            difficulty: 'confusion_targeted',
+            source: 'tessa_confusion_training',
+            knowledge_id: scenario.knowledge_id,
+            distinction_hint: scenario.distinction_hint
+        };
+    }
+
+    /**
+     * Build a prompt specifically for confusion-targeted scenarios
+     */
+    _buildConfusionPrompt(actualCategory, confusedWith, confusionRate) {
+        const categoryDefinitions = {
+            'business_meal': 'Work-related dining: client meetings, team lunches, business dinners, networking events over food',
+            'groceries': 'Food shopping at supermarkets/grocery stores for home cooking and household food supplies',
+            'transportation': 'Travel and vehicle expenses: gas, rideshare, parking, car repairs, public transit, flights',
+            'utilities': 'Home services: electricity, water, internet, phone bills, gas utilities',
+            'entertainment': 'Leisure activities: movies, concerts, streaming services, hobbies, sports events, gaming',
+            'health': 'Medical and wellness: gym memberships, pharmacy, doctor visits, health supplements, therapy',
+            'dining': 'Personal restaurant/cafe visits for pleasure (NOT work-related), casual meals out, coffee shops',
+            'shopping': 'Retail purchases: clothing, electronics, household items, online shopping, general merchandise'
+        };
+
+        const severityNote = confusionRate >= 0.30
+            ? 'This is a CRITICAL confusion pattern - make the distinction very clear.'
+            : 'Help clarify the distinction between these commonly confused categories.';
+
+        return `You are generating a TRAINING scenario to help an AI learn to distinguish between "${actualCategory}" and "${confusedWith}".
+
+CRITICAL TASK: Create a scenario that is CLEARLY "${actualCategory}" but has elements that might superficially seem like "${confusedWith}".
+
+Category definitions:
+- ${actualCategory}: ${categoryDefinitions[actualCategory]}
+- ${confusedWith}: ${categoryDefinitions[confusedWith]}
+
+${severityNote}
+
+Requirements:
+1. The transaction MUST legitimately belong to "${actualCategory}"
+2. Include realistic details that might cause confusion with "${confusedWith}"
+3. But also include clear indicators that distinguish it as "${actualCategory}"
+4. Create a realistic merchant name and transaction description
+5. Include a "distinction_hint" explaining WHY this is ${actualCategory} and NOT ${confusedWith}
+
+Example for dining vs business_meal confusion:
+- A dinner at an upscale restaurant with friends (NOT business) is "dining"
+- Key distinction: personal/social vs. work-related purpose
+
+Return ONLY valid JSON:
+{
+  "merchant": "Realistic Merchant Name",
+  "amount": 45.50,
+  "description": "Transaction description with realistic details",
+  "category": "${actualCategory}",
+  "reasoning": "Why this is clearly ${actualCategory}",
+  "distinction_hint": "Key factor that distinguishes this from ${confusedWith}: [specific distinguishing detail]"
+}`;
+    }
+
+    /**
+     * Count items by confusion pattern
+     */
+    _countByConfusionPattern(items) {
+        const counts = {};
+        for (const item of items) {
+            if (item.confusion_context) {
+                const key = `${item.confusion_context.actual_category}→${item.confusion_context.confused_with}`;
+                counts[key] = (counts[key] || 0) + 1;
+            }
+        }
+        return counts;
+    }
 }
 
 // Singleton instance

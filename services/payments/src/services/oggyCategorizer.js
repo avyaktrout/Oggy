@@ -156,11 +156,11 @@ class OggyCategorizer {
     _buildCategorizationPrompt(expenseData, memoryCards) {
         const { merchant, description, amount, transaction_date } = expenseData;
 
-        // Extract relevant patterns from memory
+        // Extract relevant patterns from memory, formatting correction memories specially
         const contextStr = memoryCards.length > 0
             ? memoryCards.map((card, idx) => {
                 const content = card.content || {};
-                return `${idx + 1}. ${content.text || JSON.stringify(content)}`;
+                return `${idx + 1}. ${this._formatMemoryCard(content)}`;
             }).join('\n')
             : 'No previous patterns available.';
 
@@ -172,8 +172,10 @@ Description: ${description}
 Amount: $${amount}
 Date: ${transaction_date}
 
-# Relevant Past Patterns and Rules
+# Learned Rules and Patterns (MUST FOLLOW)
 ${contextStr}
+
+IMPORTANT: If any RULE above matches this expense, you MUST use the category specified in that rule.
 
 # Available Categories
 - dining: Restaurants, cafes, food delivery
@@ -245,6 +247,35 @@ Respond in JSON format (no markdown, just raw JSON):
                 shouldRetry: retryHandler.constructor.retryableOpenAIErrors
             }
         );
+    }
+
+    /**
+     * Format memory card content for the prompt
+     * Handles correction memories specially for clarity
+     */
+    _formatMemoryCard(content) {
+        // Handle correction memories - format them as clear rules
+        if (content.type === 'BENCHMARK_CORRECTION') {
+            return `RULE: "${content.description}" should be "${content.correct_category}" (NOT ${content.wrong_prediction}). ${content.key_distinction || ''}`;
+        }
+
+        // Handle pattern memories
+        if (content.type === 'PATTERN') {
+            return `PATTERN: ${content.merchant || ''} ${content.description || ''} → ${content.category}`;
+        }
+
+        // Handle text-based memories
+        if (content.text) {
+            return content.text;
+        }
+
+        // Handle other structured content
+        if (content.merchant && content.category) {
+            return `${content.merchant}: ${content.description || ''} → ${content.category}`;
+        }
+
+        // Fallback: stringify but keep it concise
+        return JSON.stringify(content);
     }
 
     /**

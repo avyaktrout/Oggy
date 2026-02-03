@@ -67,15 +67,22 @@ class WeaknessAnalyzer {
         // Generate learning recommendations
         const recommendations = this._generateRecommendations(weaknesses, category_performance);
 
+        // Build confusion matrix to identify specific confusion patterns
+        const confusion_matrix = this._buildConfusionMatrix(detailed_results);
+        const confusion_patterns = this._identifyConfusionPatterns(confusion_matrix, weaknesses);
+
         logger.info('Weakness analysis complete', {
             user_id,
             weak_categories: weaknesses.map(w => w.category),
+            confusion_patterns: confusion_patterns.map(p => `${p.actual}→${p.predicted}`),
             total_categories_analyzed: Object.keys(category_performance).length
         });
 
         return {
             category_performance,
             weaknesses,
+            confusion_matrix,
+            confusion_patterns,
             recommendations,
             analysis_summary: this._generateSummary(category_performance, weaknesses)
         };
@@ -205,6 +212,89 @@ class WeaknessAnalyzer {
         if (accuracy < 0.30) return 'critical';
         if (accuracy < 0.45) return 'severe';
         if (accuracy < 0.60) return 'moderate';
+        return 'mild';
+    }
+
+    /**
+     * Build confusion matrix from results
+     * Shows which categories are being confused with which
+     */
+    _buildConfusionMatrix(results) {
+        const matrix = {};
+
+        // Initialize matrix
+        for (const actual of this.categories) {
+            matrix[actual] = {};
+            for (const predicted of this.categories) {
+                matrix[actual][predicted] = 0;
+            }
+        }
+
+        // Populate matrix
+        for (const result of results) {
+            const actual = result.correct_category;
+            const predicted = result.predicted_category;
+            if (matrix[actual] && matrix[actual][predicted] !== undefined) {
+                matrix[actual][predicted]++;
+            }
+        }
+
+        return matrix;
+    }
+
+    /**
+     * Identify specific confusion patterns from the matrix
+     * Returns pairs of categories that are frequently confused
+     */
+    _identifyConfusionPatterns(confusion_matrix, weaknesses) {
+        const patterns = [];
+        const weak_categories = new Set(weaknesses.map(w => w.category));
+
+        for (const actual of this.categories) {
+            // Only analyze weak categories or categories with errors
+            const row = confusion_matrix[actual];
+            const total = Object.values(row).reduce((sum, v) => sum + v, 0);
+
+            if (total === 0) continue;
+
+            for (const predicted of this.categories) {
+                if (actual === predicted) continue; // Skip correct predictions
+
+                const confusion_count = row[predicted];
+                if (confusion_count === 0) continue;
+
+                const confusion_rate = confusion_count / total;
+
+                // Include if significant confusion (>10% of that category)
+                if (confusion_rate >= 0.10 || (weak_categories.has(actual) && confusion_count > 0)) {
+                    patterns.push({
+                        actual,
+                        predicted,
+                        count: confusion_count,
+                        total,
+                        confusion_rate,
+                        percentage: (confusion_rate * 100).toFixed(1),
+                        severity: this._calculateConfusionSeverity(confusion_rate),
+                        description: `${actual} misclassified as ${predicted}`,
+                        training_focus: `Generate scenarios that clearly distinguish ${actual} from ${predicted}`
+                    });
+                }
+            }
+        }
+
+        // Sort by confusion count (most confused first)
+        patterns.sort((a, b) => b.count - a.count);
+
+        return patterns;
+    }
+
+    /**
+     * Calculate severity of a confusion pattern
+     */
+    _calculateConfusionSeverity(confusion_rate) {
+        if (confusion_rate >= 0.50) return 'critical';
+        if (confusion_rate >= 0.30) return 'severe';
+        if (confusion_rate >= 0.15) return 'moderate';
         return 'mild';
     }
 
