@@ -20,7 +20,9 @@ const evaluationRouter = require('./routes/evaluation');
 const learningRouter = require('./routes/learning');
 const tessaRouter = require('./routes/tessa');
 const sealedBenchmarkRouter = require('./routes/sealedBenchmark');
+const memoryPruningRouter = require('./routes/memoryPruning');
 const trainingRouter = require('./routes/training');
+const benchmarkDrivenLearningRouter = require('./routes/benchmarkDrivenLearning');
 
 const auditChecker = require('./utils/auditChecker');
 
@@ -209,7 +211,14 @@ app.use('/v0/tessa', tessaRouter);
 
 // Sealed benchmark routes (OOD testing)
 app.use('/v0/sealed-benchmark', sealedBenchmarkRouter);
+
+// Memory pruning routes
+app.use('/v0/memory-pruning', memoryPruningRouter);
+
 app.use('/v0/training', trainingRouter);
+
+// Benchmark-driven learning routes (feedback loop)
+app.use('/v0/benchmark-learning', benchmarkDrivenLearningRouter);
 
 // Event processing endpoint (for manual trigger or webhook)
 app.post('/v0/process-events', async (req, res) => {
