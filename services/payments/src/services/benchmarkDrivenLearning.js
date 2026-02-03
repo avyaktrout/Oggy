@@ -95,15 +95,20 @@ class BenchmarkDrivenLearning {
             // STEP 3: Configure targeted training (if weaknesses found)
             if (cycle < cycles - 1) { // Don't train after last cycle
                 if (weaknessAnalysis.recommendations.priority === 'targeted') {
+                    // Get top confusion patterns for targeted training
+                    const topConfusionPatterns = weaknessAnalysis.confusion_patterns?.slice(0, 5) || [];
+
                     logger.info(`Cycle ${cycle + 1}: Configuring TARGETED training`, {
                         user_id,
                         focus_categories: weaknessAnalysis.recommendations.focus_categories,
+                        confusion_patterns: topConfusionPatterns.map(p => `${p.actual}→${p.predicted}`),
                         training_mix: weaknessAnalysis.recommendations.training_mix
                     });
 
                     this.selfDrivenLearning.setTargetedLearning(
                         weaknessAnalysis.recommendations.training_mix,
-                        weaknessAnalysis.recommendations.focus_categories
+                        weaknessAnalysis.recommendations.focus_categories,
+                        topConfusionPatterns
                     );
                 } else {
                     logger.info(`Cycle ${cycle + 1}: No weaknesses - using BALANCED training`, { user_id });
@@ -137,7 +142,8 @@ class BenchmarkDrivenLearning {
                     attempts: trainingStats.total_attempts,
                     accuracy: trainingStats.accuracy,
                     was_targeted: weaknessAnalysis.recommendations.priority === 'targeted',
-                    focus_categories: weaknessAnalysis.recommendations.focus_categories || []
+                    focus_categories: weaknessAnalysis.recommendations.focus_categories || [],
+                    confusion_patterns_targeted: weaknessAnalysis.confusion_patterns?.slice(0, 5).map(p => `${p.actual}→${p.predicted}`) || []
                 };
             }
 

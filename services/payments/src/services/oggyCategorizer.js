@@ -2,6 +2,7 @@
  * Oggy Categorization Service
  * Uses memory retrieval to suggest expense categories
  * Stage 0, Week 5 + Week 7 resilience improvements
+ * Week 8+: Enhanced with learned category distinction rules
  */
 
 const axios = require('axios');
@@ -9,6 +10,7 @@ const logger = require('../utils/logger');
 const retryHandler = require('../utils/retry');
 const CircuitBreaker = require('../utils/circuitBreaker');
 const { costGovernor } = require('../middleware/costGovernor');
+const categoryRulesManager = require('./categoryRulesManager');
 
 const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory:3000';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -72,8 +74,25 @@ class OggyCategorizer {
                 // Continue without memory cards (graceful degradation)
             }
 
-            // Step 3: Build prompt with memory context
-            const prompt = this._buildCategorizationPrompt(expenseData, memoryCards);
+            // Step 2.5: Fetch learned category distinction rules (ALWAYS retrieved)
+            let categoryRules = [];
+            try {
+                // Get all active rules - these bypass semantic retrieval
+                categoryRules = await categoryRulesManager.getActiveRules();
+                if (categoryRules.length > 0) {
+                    logger.debug('Loaded category distinction rules', {
+                        count: categoryRules.length,
+                        rules: categoryRules.map(r => `${r.category_a}↔${r.category_b}`)
+                    });
+                }
+            } catch (error) {
+                logger.warn('Failed to load category rules, continuing without', {
+                    error: error.message
+                });
+            }
+
+            // Step 3: Build prompt with memory context AND category rules
+            const prompt = this._buildCategorizationPrompt(expenseData, memoryCards, categoryRules);
 
             // Step 4: Call OpenAI (with circuit breaker and cost tracking)
             const suggestion = await this.openaiCircuitBreaker.execute(() =>
@@ -151,9 +170,9 @@ class OggyCategorizer {
     }
 
     /**
-     * Build categorization prompt with memory context
+     * Build categorization prompt with memory context and category rules
      */
-    _buildCategorizationPrompt(expenseData, memoryCards) {
+    _buildCategorizationPrompt(expenseData, memoryCards, categoryRules = []) {
         const { merchant, description, amount, transaction_date } = expenseData;
 
         // Extract relevant patterns from memory, formatting correction memories specially
@@ -164,6 +183,9 @@ class OggyCategorizer {
             }).join('\n')
             : 'No previous patterns available.';
 
+        // Format learned category distinction rules (ALWAYS APPLIED)
+        const rulesStr = categoryRulesManager.formatRulesForPrompt(categoryRules);
+
         return `You are a financial categorization assistant helping to categorize expenses.
 
 # Expense Details
@@ -172,25 +194,31 @@ Description: ${description}
 Amount: $${amount}
 Date: ${transaction_date}
 
-# Learned Rules and Patterns (MUST FOLLOW)
+${rulesStr}
+
+# Learned Patterns from Memory
 ${contextStr}
 
-IMPORTANT: If any RULE above matches this expense, you MUST use the category specified in that rule.
+IMPORTANT: If any RULE or DISTINCTION above matches this expense, you MUST apply it.
 
 # Available Categories
-- dining: Restaurants, cafes, food delivery
-- groceries: Supermarkets, grocery stores
-- transportation: Gas, public transit, ride sharing, parking
-- utilities: Electric, gas, water, internet, phone
-- entertainment: Movies, concerts, streaming services
-- business_meal: Client dinners, business lunches
-- shopping: Retail stores, online shopping
-- health: Pharmacy, medical, fitness
+- dining: Personal restaurant/cafe visits for pleasure, casual meals out, coffee shops (NOT work-related)
+- groceries: Supermarkets, grocery stores, food shopping for home
+- transportation: Gas, public transit, ride sharing, parking, car expenses
+- utilities: Electric, gas, water, internet, phone bills
+- entertainment: Movies, concerts, streaming services, hobbies, gaming
+- business_meal: Client dinners, business lunches, team meals, work-related dining
+- shopping: Retail stores, online shopping, clothing, electronics
+- health: Pharmacy, medical, fitness, gym, wellness
 - personal_care: Salon, spa, grooming
 - other: Anything that doesn't fit above categories
 
+# Key Distinctions
+- **dining vs business_meal**: dining = personal/social meals; business_meal = work-related (client meetings, team events, conferences)
+- **groceries vs shopping**: groceries = food for home; shopping = non-food retail items
+
 # Instructions
-Based on the expense details and past patterns, suggest the most appropriate category.
+Based on the expense details, learned distinctions, and past patterns, suggest the most appropriate category.
 Respond in JSON format (no markdown, just raw JSON):
 {
   "category": "<category_name>",
