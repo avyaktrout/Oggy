@@ -14,7 +14,7 @@ const CircuitBreaker = require('../utils/circuitBreaker');
 const retryHandler = require('../utils/retry');
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const ANTHROPIC_MODEL = 'claude-3-5-haiku-20241022'; // Different from Tessa's GPT-4o-mini
+const ANTHROPIC_MODEL = 'claude-3-haiku-20240307'; // Claude 3 Haiku - fast and affordable
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = 'gpt-4o-mini';
 

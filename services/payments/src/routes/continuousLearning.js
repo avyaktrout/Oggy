@@ -22,7 +22,9 @@ router.post('/start', async (req, res) => {
             questions_per_benchmark = 100,
             accuracy_threshold = 0.90,
             training_interval_ms = 5000,
-            practice_count = 3
+            practice_count = 3,
+            starting_difficulty = null,  // null = load from DB, or specify 1-5
+            starting_scale = null        // null = load from DB, or specify 1-10
         } = req.body;
 
         if (!user_id) {
@@ -32,7 +34,9 @@ router.post('/start', async (req, res) => {
         logger.info('Starting continuous learning via API', {
             requestId: req.requestId,
             user_id,
-            duration_minutes
+            duration_minutes,
+            starting_scale,
+            starting_difficulty
         });
 
         // Start the loop (this will run in the background)
@@ -41,7 +45,9 @@ router.post('/start', async (req, res) => {
             questions_per_benchmark,
             accuracy_threshold,
             training_interval_ms,
-            practice_count
+            practice_count,
+            starting_difficulty,
+            starting_scale
         });
 
         // Return immediately with status
@@ -51,7 +57,9 @@ router.post('/start', async (req, res) => {
             config: {
                 duration_minutes,
                 questions_per_benchmark,
-                accuracy_threshold
+                accuracy_threshold,
+                starting_scale,
+                starting_difficulty
             }
         });
 
@@ -86,7 +94,8 @@ router.post('/start-and-wait', async (req, res) => {
             questions_per_benchmark = 100,
             accuracy_threshold = 0.90,
             training_interval_ms = 5000,
-            practice_count = 3
+            practice_count = 3,
+            starting_difficulty = null  // null = load from DB, or specify 1-5
         } = req.body;
 
         if (!user_id) {
@@ -96,7 +105,8 @@ router.post('/start-and-wait', async (req, res) => {
         logger.info('Starting continuous learning (blocking) via API', {
             requestId: req.requestId,
             user_id,
-            duration_minutes
+            duration_minutes,
+            starting_difficulty
         });
 
         const results = await continuousLearningLoop.start(user_id, {
@@ -104,7 +114,8 @@ router.post('/start-and-wait', async (req, res) => {
             questions_per_benchmark,
             accuracy_threshold,
             training_interval_ms,
-            practice_count
+            practice_count,
+            starting_difficulty
         });
 
         res.json(results);

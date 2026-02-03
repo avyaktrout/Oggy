@@ -6,7 +6,10 @@
  * - Continuous training with question tracking
  * - Auto-generates benchmarks every N questions if accuracy > threshold
  * - Runs Oggy vs Base comparisons
- * - Adaptive difficulty scaling based on performance
+ * - Adaptive difficulty scaling with SCALE system (S1, S2, S3...)
+ *   - Each scale has levels 1-5
+ *   - Passing level 5 advances to next scale at level 3
+ *   - Higher scales = more complex payment scenarios
  *
  * Week 8+: Advanced autonomous learning
  */
@@ -16,6 +19,7 @@ const sealedBenchmarkEvaluator = require('./sealedBenchmarkEvaluator');
 const sealedBenchmarkGenerator = require('./sealedBenchmarkGenerator');
 const benchmarkValidator = require('./benchmarkValidator');
 const logger = require('../utils/logger');
+const { query } = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
 
 class ContinuousLearningLoop {
@@ -29,8 +33,9 @@ class ContinuousLearningLoop {
             current_window_correct: 0,
             benchmarks_generated: 0,
             benchmarks_passed: 0,
-            current_difficulty: 'balanced',
-            difficulty_level: 1,  // 1-5 scale
+            current_scale: 1,        // S1, S2, S3... (higher = more complex)
+            difficulty_level: 1,      // 1-5 within each scale
+            current_difficulty: 'S1 L1 - Easy',
             session_start: null,
             session_duration_ms: 0,
             benchmark_results: []
@@ -40,20 +45,72 @@ class ContinuousLearningLoop {
         this.config = {
             questions_per_benchmark: 100,
             accuracy_threshold_for_benchmark: 0.90,
-            both_models_threshold_for_upgrade: 0.95,
+            both_models_threshold_for_upgrade: 0.80,  // Changed from 0.95 to 0.80
             benchmark_scenario_count: 30,
             training_interval_ms: 5000,
             practice_count_per_session: 3,
-            max_difficulty_level: 5
+            max_difficulty_level: 5,
+            max_scale: 10  // Allow up to S10
         };
 
-        // Difficulty progression
-        this.difficultySettings = {
+        // Base difficulty progression (within each scale)
+        this.baseDifficultySettings = {
             1: { mix: 'easy', description: 'Easy - clear scenarios' },
             2: { mix: 'balanced', description: 'Balanced - mixed difficulty' },
             3: { mix: 'mixed', description: 'Mixed - emphasis on hard cases' },
             4: { mix: 'hard', description: 'Hard - challenging distinctions' },
             5: { mix: 'hard', description: 'Expert - edge cases and ambiguity', extra_hard: true }
+        };
+
+        // Scale complexity multipliers - each scale adds new challenges
+        this.scaleComplexity = {
+            1: {
+                name: 'Foundation',
+                description: 'Basic payment categorization',
+                complexity_factors: ['single_category', 'clear_merchants', 'standard_amounts']
+            },
+            2: {
+                name: 'Intermediate',
+                description: 'Multi-factor payment scenarios',
+                complexity_factors: ['category_overlap', 'context_dependent', 'amount_edge_cases', 'time_sensitivity']
+            },
+            3: {
+                name: 'Advanced',
+                description: 'Complex real-world payment patterns',
+                complexity_factors: ['multi_category_transactions', 'subscription_variations', 'business_personal_blur', 'international_payments']
+            },
+            4: {
+                name: 'Expert',
+                description: 'Edge cases requiring deep context',
+                complexity_factors: ['tax_implications', 'regulatory_nuances', 'fraud_adjacent', 'unusual_merchant_types']
+            },
+            5: {
+                name: 'Master',
+                description: 'Ambiguous scenarios with multiple valid interpretations',
+                complexity_factors: ['multi_valid_categories', 'temporal_context', 'user_intent_inference', 'chained_transactions']
+            }
+        };
+    }
+
+    /**
+     * Get difficulty settings for current scale and level
+     */
+    getDifficultyConfig(scale, level) {
+        const baseConfig = this.baseDifficultySettings[level];
+        const scaleConfig = this.scaleComplexity[Math.min(scale, 5)] || this.scaleComplexity[5];
+
+        return {
+            ...baseConfig,
+            scale: scale,
+            level: level,
+            scale_name: scaleConfig.name,
+            complexity_factors: scaleConfig.complexity_factors,
+            description: `S${scale} L${level} - ${scaleConfig.name}: ${baseConfig.description}`,
+            // Higher scales get progressively harder mix adjustments
+            effective_mix: scale >= 3 ? 'hard' : baseConfig.mix,
+            require_context: scale >= 2,
+            require_reasoning: scale >= 3,
+            multi_step: scale >= 4
         };
     }
 
@@ -64,6 +121,8 @@ class ContinuousLearningLoop {
      * @param {number} options.duration_minutes - How long to run (default: indefinite)
      * @param {number} options.questions_per_benchmark - Questions before benchmark check (default: 100)
      * @param {number} options.accuracy_threshold - Accuracy needed to trigger benchmark (default: 0.90)
+     * @param {number} options.starting_difficulty - Starting difficulty level 1-5 (default: load from DB or 3)
+     * @param {number} options.starting_scale - Starting scale S1, S2, etc. (default: load from DB or 1)
      */
     async start(userId, options = {}) {
         if (this.isRunning) {
@@ -76,7 +135,9 @@ class ContinuousLearningLoop {
             questions_per_benchmark = 100,
             accuracy_threshold = 0.90,
             training_interval_ms = 5000,
-            practice_count = 3
+            practice_count = 3,
+            starting_difficulty = null,  // null = load from DB, or use specified level
+            starting_scale = null        // null = load from DB, or use specified scale
         } = options;
 
         this.userId = userId;
@@ -86,7 +147,13 @@ class ContinuousLearningLoop {
         this.config.training_interval_ms = training_interval_ms;
         this.config.practice_count_per_session = practice_count;
 
-        // Reset stats
+        // Load or set scale and difficulty level
+        let { scale, level } = await this._loadScaleAndLevel(userId, starting_scale, starting_difficulty);
+
+        // Get the difficulty config for this scale/level
+        const difficultyConfig = this.getDifficultyConfig(scale, level);
+
+        // Reset stats but preserve/set difficulty
         this.stats = {
             total_questions: 0,
             correct_answers: 0,
@@ -94,8 +161,9 @@ class ContinuousLearningLoop {
             current_window_correct: 0,
             benchmarks_generated: 0,
             benchmarks_passed: 0,
-            current_difficulty: this.difficultySettings[1].description,
-            difficulty_level: 1,
+            current_scale: scale,
+            difficulty_level: level,
+            current_difficulty: difficultyConfig.description,
             session_start: Date.now(),
             session_duration_ms: 0,
             benchmark_results: []
@@ -105,7 +173,11 @@ class ContinuousLearningLoop {
             userId,
             duration_minutes,
             questions_per_benchmark,
-            accuracy_threshold
+            accuracy_threshold,
+            starting_scale: scale,
+            starting_difficulty: level,
+            scale_name: difficultyConfig.scale_name,
+            complexity_factors: difficultyConfig.complexity_factors
         });
 
         // Set up stop timer if duration specified
@@ -135,6 +207,8 @@ class ContinuousLearningLoop {
             ? Date.now() - this.stats.session_start
             : this.stats.session_duration_ms;
 
+        const difficultyConfig = this.getDifficultyConfig(this.stats.current_scale, this.stats.difficulty_level);
+
         return {
             ...this.stats,
             session_duration_ms: runningDuration,
@@ -146,7 +220,12 @@ class ContinuousLearningLoop {
                 ? ((this.stats.current_window_correct / this.stats.current_window_questions) * 100).toFixed(1) + '%'
                 : 'N/A',
             questions_until_next_benchmark: this.config.questions_per_benchmark - this.stats.current_window_questions,
-            is_running: this.isRunning
+            is_running: this.isRunning,
+            // Scale information
+            scale_name: difficultyConfig.scale_name,
+            scale_level_display: `S${this.stats.current_scale} L${this.stats.difficulty_level}`,
+            complexity_factors: difficultyConfig.complexity_factors,
+            upgrade_threshold: (this.config.both_models_threshold_for_upgrade * 100) + '%'
         };
     }
 
@@ -222,17 +301,18 @@ class ContinuousLearningLoop {
                 this.stats.benchmark_results.push(benchmarkResult);
                 this.stats.benchmarks_generated++;
 
-                // Check if both models scored > 95%
+                // Check if both models scored >= 80% (threshold for upgrade)
                 if (benchmarkResult.oggy_accuracy >= this.config.both_models_threshold_for_upgrade &&
                     benchmarkResult.base_accuracy >= this.config.both_models_threshold_for_upgrade) {
 
-                    logger.info('Both models exceeded 95% - increasing difficulty', {
+                    logger.info('Both models exceeded 80% threshold - advancing difficulty', {
                         oggy: (benchmarkResult.oggy_accuracy * 100).toFixed(1) + '%',
                         base: (benchmarkResult.base_accuracy * 100).toFixed(1) + '%',
+                        current_scale: this.stats.current_scale,
                         current_level: this.stats.difficulty_level
                     });
 
-                    this._increaseDifficulty();
+                    await this._advanceDifficulty();
                 }
 
                 // Count as passed if Oggy beats or matches base
@@ -266,22 +346,36 @@ class ContinuousLearningLoop {
      * Generate a new benchmark and run Oggy vs Base
      */
     async _generateAndRunBenchmark() {
-        const difficultyConfig = this.difficultySettings[this.stats.difficulty_level];
-        const benchmarkName = `auto_benchmark_L${this.stats.difficulty_level}_${Date.now()}`;
+        const scale = this.stats.current_scale;
+        const level = this.stats.difficulty_level;
+        const difficultyConfig = this.getDifficultyConfig(scale, level);
+        const benchmarkName = `auto_benchmark_S${scale}L${level}_${Date.now()}`;
 
         logger.info('Generating new benchmark', {
             name: benchmarkName,
+            scale: scale,
+            level: level,
+            scale_name: difficultyConfig.scale_name,
             difficulty: difficultyConfig.description,
+            complexity_factors: difficultyConfig.complexity_factors,
             scenario_count: this.config.benchmark_scenario_count
         });
 
-        // Generate benchmark
+        // Generate benchmark using Claude (Anthropic) for out-of-distribution scenarios
+        // This prevents overfitting to Tessa's GPT-4o-mini generation patterns
         const generationResult = await sealedBenchmarkGenerator.createSealedBenchmark({
             name: benchmarkName,
-            description: `Auto-generated benchmark at difficulty level ${this.stats.difficulty_level}`,
+            description: `Auto-generated benchmark at S${scale} L${level} (${difficultyConfig.scale_name})`,
             count: this.config.benchmark_scenario_count,
-            difficulty_mix: difficultyConfig.mix,
-            use_ood: true  // Use Claude for out-of-distribution scenarios
+            difficulty_mix: difficultyConfig.effective_mix,
+            use_ood: true,  // Use Claude for truly independent OOD test sets
+            // Pass scale-specific complexity requirements
+            scale: scale,
+            level: level,
+            complexity_factors: difficultyConfig.complexity_factors,
+            require_context: difficultyConfig.require_context,
+            require_reasoning: difficultyConfig.require_reasoning,
+            multi_step: difficultyConfig.multi_step
         });
 
         // Validate the generated scenarios
@@ -327,8 +421,12 @@ class ContinuousLearningLoop {
         const result = {
             benchmark_name: benchmarkName,
             benchmark_id: generationResult.benchmark_id,
-            difficulty_level: this.stats.difficulty_level,
+            scale: scale,
+            difficulty_level: level,
+            scale_level_display: `S${scale} L${level}`,
+            scale_name: difficultyConfig.scale_name,
             difficulty_description: difficultyConfig.description,
+            complexity_factors: difficultyConfig.complexity_factors,
             scenario_count: this.config.benchmark_scenario_count,
             oggy_accuracy: testResult.oggy.accuracy,
             base_accuracy: testResult.base.accuracy,
@@ -361,19 +459,145 @@ class ContinuousLearningLoop {
     }
 
     /**
-     * Increase difficulty level
+     * Advance difficulty level with scale system
+     * At level 5, advance to next scale at level 3
      */
-    _increaseDifficulty() {
-        if (this.stats.difficulty_level < this.config.max_difficulty_level) {
-            this.stats.difficulty_level++;
-            this.stats.current_difficulty = this.difficultySettings[this.stats.difficulty_level].description;
+    async _advanceDifficulty() {
+        const oldScale = this.stats.current_scale;
+        const oldLevel = this.stats.difficulty_level;
 
-            logger.info('Difficulty increased', {
+        if (this.stats.difficulty_level < this.config.max_difficulty_level) {
+            // Advance within current scale
+            this.stats.difficulty_level++;
+        } else if (this.stats.current_scale < this.config.max_scale) {
+            // At level 5, advance to next scale at level 3
+            this.stats.current_scale++;
+            this.stats.difficulty_level = 3;  // Start new scale at level 3
+
+            logger.info('🎉 SCALE ADVANCEMENT! Moving to next scale', {
+                old_scale: oldScale,
+                new_scale: this.stats.current_scale,
                 new_level: this.stats.difficulty_level,
-                description: this.stats.current_difficulty
+                user_id: this.userId
             });
         } else {
-            logger.info('Already at maximum difficulty level');
+            logger.info('Already at maximum scale and difficulty level (S10 L5)');
+            return;
+        }
+
+        // Update difficulty description
+        const difficultyConfig = this.getDifficultyConfig(this.stats.current_scale, this.stats.difficulty_level);
+        this.stats.current_difficulty = difficultyConfig.description;
+
+        // Persist to database
+        await this._saveScaleAndLevel(this.userId, this.stats.current_scale, this.stats.difficulty_level);
+
+        logger.info('Difficulty advanced and saved', {
+            old_scale: oldScale,
+            old_level: oldLevel,
+            new_scale: this.stats.current_scale,
+            new_level: this.stats.difficulty_level,
+            new_description: this.stats.current_difficulty,
+            scale_name: difficultyConfig.scale_name,
+            user_id: this.userId
+        });
+    }
+
+    /**
+     * Load scale and level from database or use provided values
+     */
+    async _loadScaleAndLevel(userId, startingScale, startingLevel) {
+        let scale = startingScale;
+        let level = startingLevel;
+
+        // If not explicitly provided, try to load from database
+        if (scale === null || level === null) {
+            try {
+                const result = await query(`
+                    SELECT scale, difficulty_level FROM continuous_learning_state
+                    WHERE user_id = $1
+                `, [userId]);
+
+                if (result.rows.length > 0) {
+                    if (scale === null) scale = result.rows[0].scale;
+                    if (level === null) level = result.rows[0].difficulty_level;
+
+                    logger.info('Loaded scale and level from database', {
+                        user_id: userId,
+                        scale: scale,
+                        difficulty_level: level
+                    });
+                }
+            } catch (error) {
+                // Table might not exist yet or missing column, that's OK
+                logger.debug('Could not load scale/level', { error: error.message });
+            }
+        }
+
+        // Ensure valid ranges with defaults
+        scale = Math.max(1, Math.min(this.config.max_scale, scale || 1));
+        level = Math.max(1, Math.min(5, level || 3));
+
+        return { scale, level };
+    }
+
+    /**
+     * Save scale and level to database
+     */
+    async _saveScaleAndLevel(userId, scale, level) {
+        try {
+            // Upsert the scale and level
+            await query(`
+                INSERT INTO continuous_learning_state (user_id, scale, difficulty_level, updated_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (user_id)
+                DO UPDATE SET scale = $2, difficulty_level = $3, updated_at = NOW()
+            `, [userId, scale, level]);
+
+            logger.debug('Saved scale and level to database', {
+                user_id: userId,
+                scale: scale,
+                difficulty_level: level
+            });
+        } catch (error) {
+            // If table doesn't exist or missing column, create/update it
+            if (error.message.includes('does not exist') || error.message.includes('column')) {
+                await this._createStateTable();
+                await this._saveScaleAndLevel(userId, scale, level);
+            } else {
+                logger.warn('Could not save scale/level', { error: error.message });
+            }
+        }
+    }
+
+    /**
+     * Create or update the state table with scale support
+     */
+    async _createStateTable() {
+        try {
+            // Create table with scale column
+            await query(`
+                CREATE TABLE IF NOT EXISTS continuous_learning_state (
+                    user_id VARCHAR(255) PRIMARY KEY,
+                    scale INTEGER DEFAULT 1,
+                    difficulty_level INTEGER DEFAULT 3,
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            `);
+
+            // Add scale column if it doesn't exist (for existing tables)
+            try {
+                await query(`
+                    ALTER TABLE continuous_learning_state
+                    ADD COLUMN IF NOT EXISTS scale INTEGER DEFAULT 1
+                `);
+            } catch (alterError) {
+                // Column might already exist, that's OK
+            }
+
+            logger.info('Created/updated continuous_learning_state table with scale support');
+        } catch (error) {
+            logger.warn('Could not create state table', { error: error.message });
         }
     }
 

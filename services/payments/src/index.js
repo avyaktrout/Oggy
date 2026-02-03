@@ -221,6 +221,9 @@ app.use('/v0/training', trainingRouter);
 // Benchmark-driven learning routes (feedback loop)
 app.use('/v0/benchmark-learning', benchmarkDrivenLearningRouter);
 
+// Continuous learning routes (long-running self-driven learning with auto-benchmark)
+app.use('/v0/continuous-learning', continuousLearningRouter);
+
 // Event processing endpoint (for manual trigger or webhook)
 app.post('/v0/process-events', async (req, res) => {
     const startTime = Date.now();
