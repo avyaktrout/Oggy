@@ -18,6 +18,7 @@ const queryRouter = require('./routes/query');
 const categorizationRouter = require('./routes/categorization');
 const evaluationRouter = require('./routes/evaluation');
 const learningRouter = require('./routes/learning');
+const tessaRouter = require('./routes/tessa');
 
 const auditChecker = require('./utils/auditChecker');
 
@@ -200,6 +201,9 @@ app.use('/v0/evaluation', async (req, res, next) => {
 
 // Self-driven learning routes
 app.use('/v0/learning', learningRouter);
+
+// Tessa assessment generation routes
+app.use('/v0/tessa', tessaRouter);
 
 // Event processing endpoint (for manual trigger or webhook)
 app.post('/v0/process-events', async (req, res) => {
