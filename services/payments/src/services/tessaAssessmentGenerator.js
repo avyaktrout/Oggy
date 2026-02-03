@@ -12,6 +12,7 @@ const { query } = require('../utils/db');
 const logger = require('../utils/logger');
 const CircuitBreaker = require('../utils/circuitBreaker');
 const retryHandler = require('../utils/retry');
+const { adaptiveDifficultyScaler, DIFFICULTY_TIERS } = require('./adaptiveDifficultyScaler');
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = 'gpt-4o-mini';
@@ -45,12 +46,16 @@ class TessaAssessmentGenerator {
     async generateNovelScenario(options = {}) {
         const {
             category = this._randomCategory(),
-            difficulty = 'medium',
-            includeAmbiguity = false
+            difficultyTier = DIFFICULTY_TIERS.TIER_2_STANDARD,
+            // Legacy support for old difficulty parameter
+            difficulty = null
         } = options;
 
+        // Convert old difficulty to tier if needed
+        const tier = difficulty ? this._legacyDifficultyToTier(difficulty) : difficultyTier;
+
         try {
-            const prompt = this._buildPrompt(category, difficulty, includeAmbiguity);
+            const prompt = adaptiveDifficultyScaler.buildTessaPrompt(category, tier);
 
             const scenario = await this.openaiCircuitBreaker.execute(async () => {
                 return await retryHandler.withRetry(
@@ -63,13 +68,19 @@ class TessaAssessmentGenerator {
                 );
             });
 
+            // Add tier information to scenario
+            scenario.difficulty_tier = tier.name;
+            scenario.tier_level = tier.tier_level;
+
             // Add to domain knowledge for future learning
-            await this._addToDomainKnowledge(scenario);
+            await this._addToDomainKnowledge(scenario, tier);
 
             logger.info('Tessa generated novel scenario', {
                 category: scenario.category,
                 merchant: scenario.merchant,
-                difficulty,
+                difficulty_tier: tier.name,
+                tier_level: tier.tier_level,
+                baseline_scale: adaptiveDifficultyScaler.baselineDifficultyScale,
                 knowledge_id: scenario.knowledge_id
             });
 
@@ -78,14 +89,16 @@ class TessaAssessmentGenerator {
                 amount: scenario.amount,
                 description: scenario.description,
                 correctCategory: scenario.category,
-                difficulty,
+                difficulty: tier.name,
+                difficultyTier: tier,
                 source: 'tessa_generated',
                 knowledge_id: scenario.knowledge_id
             };
         } catch (error) {
             logger.logError(error, {
                 operation: 'generateNovelScenario',
-                category
+                category,
+                tier: tier.name
             });
 
             // Fallback: return null so self-learning can use existing domain knowledge
@@ -94,49 +107,17 @@ class TessaAssessmentGenerator {
     }
 
     /**
-     * Build GPT prompt for generating realistic expense scenarios
+     * Convert legacy difficulty string to new tier system
      */
-    _buildPrompt(category, difficulty, includeAmbiguity) {
-        const difficultyInstructions = {
-            'easy': 'very obvious, typical example',
-            'medium': 'realistic, common scenario',
-            'hard': 'edge case, ambiguous, or requires careful reasoning',
-            'very_hard': 'highly ambiguous, could be multiple categories, requires expert judgment'
+    _legacyDifficultyToTier(difficulty) {
+        const mapping = {
+            'easy': DIFFICULTY_TIERS.TIER_1_WARMUP,
+            'medium': DIFFICULTY_TIERS.TIER_2_STANDARD,
+            'hard': DIFFICULTY_TIERS.TIER_3_CHALLENGE,
+            'very_hard': DIFFICULTY_TIERS.TIER_4_EXPERT,
+            'extreme': DIFFICULTY_TIERS.TIER_5_EXTREME
         };
-
-        const ambiguityNote = includeAmbiguity
-            ? '\n- Make this somewhat ambiguous - it could reasonably be categorized in multiple ways, but one is most correct.'
-            : '';
-
-        return `You are Tessa, an AI that generates realistic expense categorization training scenarios.
-
-Generate a realistic expense transaction that should be categorized as "${category}".
-
-Requirements:
-- Make it a ${difficultyInstructions[difficulty]} for the category "${category}"
-- Use a real-world merchant name (can be fictional but realistic)
-- Include a descriptive transaction description
-- Use a realistic amount in USD${ambiguityNote}
-- The expense MUST clearly belong to category "${category}" when considered carefully
-
-Categories:
-- business_meal: Client dinners, team lunches, work-related meals
-- groceries: Supermarkets, food shopping for home
-- transportation: Gas, Uber, parking, car expenses
-- utilities: Electric, water, internet, phone bills
-- entertainment: Movies, streaming, concerts, hobbies
-- health: Gym, pharmacy, doctor, medical
-- dining: Restaurants, cafes (personal, not business)
-- shopping: Retail, online shopping, household items
-
-Return ONLY a JSON object with this exact structure:
-{
-  "merchant": "Merchant Name",
-  "amount": 45.50,
-  "description": "Detailed description of the transaction",
-  "category": "${category}",
-  "reasoning": "Why this belongs in ${category} category"
-}`;
+        return mapping[difficulty] || DIFFICULTY_TIERS.TIER_2_STANDARD;
     }
 
     /**
@@ -188,17 +169,20 @@ Return ONLY a JSON object with this exact structure:
      * Add generated scenario to domain_knowledge
      * This expands Oggy's knowledge base automatically
      */
-    async _addToDomainKnowledge(scenario) {
+    async _addToDomainKnowledge(scenario, tier) {
         const knowledge_id = uuidv4();
+
+        const tierInfo = tier ? `\n**Difficulty Tier:** ${tier.name} (Level ${tier.tier_level}/5)` : '';
 
         const content_text = `**AI-Generated Expense Scenario (Tessa):**
 - Merchant: ${scenario.merchant}
 - Category: ${scenario.category}
 - Amount: $${scenario.amount}
-- Description: ${scenario.description}
+- Description: ${scenario.description}${tierInfo}
 
 **Reasoning:** ${scenario.reasoning}
 
+${scenario.ambiguity_notes ? `**Challenge:** ${scenario.ambiguity_notes}\n` : ''}
 This is a realistic example for training categorization AI.`;
 
         const content_structured = {
@@ -207,6 +191,9 @@ This is a realistic example for training categorization AI.`;
             amount: scenario.amount,
             description: scenario.description,
             reasoning: scenario.reasoning,
+            difficulty_tier: scenario.difficulty_tier,
+            tier_level: scenario.tier_level,
+            ambiguity_notes: scenario.ambiguity_notes,
             source: 'tessa_generated'
         };
 
@@ -241,8 +228,8 @@ This is a realistic example for training categorization AI.`;
             'tessa_ai',
             `tessa_generated:${knowledge_id}`,
             'shareable',
-            3, // Difficulty band for AI-generated
-            JSON.stringify(['categorization', 'ai_generated', scenario.category, 'tessa']),
+            tier ? tier.tier_level : 3, // Use tier level as difficulty band (1-5)
+            JSON.stringify(['categorization', 'ai_generated', scenario.category, 'tessa', tier ? tier.name : 'standard']),
             content_hash
         ]);
 
