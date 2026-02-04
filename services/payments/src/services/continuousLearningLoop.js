@@ -39,7 +39,13 @@ class ContinuousLearningLoop {
             current_difficulty: 'S1 L1 - Easy',
             session_start: null,
             session_duration_ms: 0,
-            benchmark_results: []
+            benchmark_results: [],
+            // Separate time tracking: training time vs benchmark time
+            training_time_ms: 0,           // Actual time spent training (counts against limit)
+            benchmark_time_ms: 0,          // Total time spent on benchmarks (does NOT count against limit)
+            is_benchmarking: false,        // Flag indicating benchmark in progress
+            current_benchmark_start: null, // When current benchmark started
+            last_training_timestamp: null  // Last time we were actively training
         };
 
         // Configuration
@@ -178,6 +184,7 @@ class ContinuousLearningLoop {
         const difficultyConfig = this.getDifficultyConfig(scale, level);
 
         // Reset stats but preserve/set difficulty
+        const now = Date.now();
         this.stats = {
             total_questions: 0,
             correct_answers: 0,
@@ -188,9 +195,15 @@ class ContinuousLearningLoop {
             current_scale: scale,
             difficulty_level: level,
             current_difficulty: difficultyConfig.description,
-            session_start: Date.now(),
+            session_start: now,
             session_duration_ms: 0,
-            benchmark_results: []
+            benchmark_results: [],
+            // Separate time tracking
+            training_time_ms: 0,
+            benchmark_time_ms: 0,
+            is_benchmarking: false,
+            current_benchmark_start: null,
+            last_training_timestamp: now  // Start tracking training time from now
         };
 
         logger.info('Starting continuous learning loop', {
@@ -227,16 +240,54 @@ class ContinuousLearningLoop {
      * Get current statistics
      */
     getStats() {
-        const runningDuration = this.isRunning
-            ? Date.now() - this.stats.session_start
+        const now = Date.now();
+        const totalElapsed = this.isRunning
+            ? now - this.stats.session_start
             : this.stats.session_duration_ms;
+
+        // Calculate current training time (add time since last timestamp if actively training)
+        let currentTrainingTime = this.stats.training_time_ms;
+        if (this.isRunning && !this.stats.is_benchmarking && this.stats.last_training_timestamp) {
+            currentTrainingTime += now - this.stats.last_training_timestamp;
+        }
+
+        // Calculate current benchmark time if in benchmark
+        let currentBenchmarkTime = this.stats.benchmark_time_ms;
+        if (this.stats.is_benchmarking && this.stats.current_benchmark_start) {
+            currentBenchmarkTime += now - this.stats.current_benchmark_start;
+        }
 
         const difficultyConfig = this.getDifficultyConfig(this.stats.current_scale, this.stats.difficulty_level);
 
+        // Calculate remaining training time and ETA
+        const trainingLimitMs = this.config.duration_minutes ? this.config.duration_minutes * 60 * 1000 : null;
+        const trainingTimeRemaining = trainingLimitMs ? Math.max(0, trainingLimitMs - currentTrainingTime) : null;
+
+        // Estimate completion: remaining training time + potential benchmark time
+        const avgBenchmarkTime = this.stats.benchmarks_generated > 0
+            ? this.stats.benchmark_time_ms / this.stats.benchmarks_generated
+            : 3 * 60 * 1000; // Default estimate: 3 minutes per benchmark
+        const estimatedCompletion = trainingTimeRemaining !== null
+            ? new Date(now + trainingTimeRemaining + avgBenchmarkTime).toISOString()
+            : null;
+
         return {
             ...this.stats,
-            session_duration_ms: runningDuration,
-            session_duration_readable: this._formatDuration(runningDuration),
+            // Total session time
+            session_duration_ms: totalElapsed,
+            session_duration_readable: this._formatDuration(totalElapsed),
+            // Separate training vs benchmark time
+            training_time_ms: currentTrainingTime,
+            training_time_readable: this._formatDuration(currentTrainingTime),
+            benchmark_time_ms: currentBenchmarkTime,
+            benchmark_time_readable: this._formatDuration(currentBenchmarkTime),
+            // Training time remaining (this is what counts against the limit)
+            training_time_remaining_ms: trainingTimeRemaining,
+            training_time_remaining_readable: trainingTimeRemaining !== null ? this._formatDuration(trainingTimeRemaining) : 'unlimited',
+            // Estimated completion
+            estimated_completion: estimatedCompletion,
+            // Status
+            status: this.stats.is_benchmarking ? 'benchmarking' : (this.isRunning ? 'training' : 'stopped'),
             overall_accuracy: this.stats.total_questions > 0
                 ? ((this.stats.correct_answers / this.stats.total_questions) * 100).toFixed(1) + '%'
                 : 'N/A',
@@ -255,11 +306,13 @@ class ContinuousLearningLoop {
 
     /**
      * Main learning loop
+     * Training time is tracked separately from benchmark time.
+     * Only training time counts against the duration limit.
      */
     async _runLoop(stopTime) {
         // Store original stop time for decision maker
         this.decisionState.original_stop_time = stopTime;
-        let currentStopTime = stopTime;
+        const trainingLimitMs = this.config.duration_minutes ? this.config.duration_minutes * 60 * 1000 : null;
 
         // Start self-driven learning
         selfDrivenLearning.start(this.userId, {
@@ -273,15 +326,24 @@ class ContinuousLearningLoop {
 
         while (this.isRunning && this.currentGeneration === loopGeneration) {
             const now = Date.now();
-            const elapsedSeconds = Math.floor((now - this.stats.session_start) / 1000);
 
-            // Check if we should stop (or extend)
-            if (currentStopTime && now >= currentStopTime) {
-                logger.info('⏰ Timer expired - calling decision maker', {
-                    elapsed_seconds: elapsedSeconds,
-                    currentStopTime: new Date(currentStopTime).toISOString(),
-                    now: new Date(now).toISOString()
+            // Update training time (only if not benchmarking)
+            if (!this.stats.is_benchmarking && this.stats.last_training_timestamp) {
+                const timeSinceLastUpdate = now - this.stats.last_training_timestamp;
+                this.stats.training_time_ms += timeSinceLastUpdate;
+            }
+            this.stats.last_training_timestamp = now;
+
+            // Check if TRAINING TIME has exceeded the limit (not total elapsed time)
+            if (trainingLimitMs && this.stats.training_time_ms >= trainingLimitMs) {
+                logger.info('⏰ Training time limit reached', {
+                    training_time_ms: this.stats.training_time_ms,
+                    training_time_readable: this._formatDuration(this.stats.training_time_ms),
+                    benchmark_time_ms: this.stats.benchmark_time_ms,
+                    total_session_time: this._formatDuration(now - this.stats.session_start),
+                    limit_minutes: this.config.duration_minutes
                 });
+
                 // Only act if we're still the current session
                 if (this.currentGeneration !== loopGeneration) {
                     logger.info('Old session loop detected - exiting without affecting current session');
@@ -292,16 +354,16 @@ class ContinuousLearningLoop {
                 const decision = await this._makeExtensionDecision();
 
                 if (decision.extend) {
-                    // Extend the session
-                    currentStopTime = Date.now() + (this.config.extension_minutes * 60 * 1000);
+                    // Extend the training time limit
+                    this.config.duration_minutes += this.config.extension_minutes;
                     this.decisionState.extensions_used++;
                     this.decisionState.extension_decisions.push(decision);
 
-                    logger.info('🧠 OGGY DECISION: Extending training session', {
+                    logger.info('🧠 OGGY DECISION: Extending training time', {
                         reason: decision.reason,
                         weaknesses: decision.weaknesses,
                         extensions_used: this.decisionState.extensions_used,
-                        new_end_time: new Date(currentStopTime).toISOString()
+                        new_training_limit_minutes: this.config.duration_minutes
                     });
                 } else {
                     logger.info('🧠 OGGY DECISION: Training complete', {
@@ -342,6 +404,7 @@ class ContinuousLearningLoop {
 
     /**
      * Check accuracy and run benchmark if threshold met
+     * Benchmark time does NOT count against the training time limit.
      */
     async _checkAndRunBenchmark() {
         const windowAccuracy = this.stats.current_window_correct / this.stats.current_window_questions;
@@ -353,8 +416,38 @@ class ContinuousLearningLoop {
         });
 
         if (windowAccuracy >= this.config.accuracy_threshold_for_benchmark) {
-            logger.info('Accuracy threshold met - generating benchmark', {
-                accuracy: (windowAccuracy * 100).toFixed(1) + '%'
+            // === PAUSE TRAINING TIME - ENTERING BENCHMARK MODE ===
+            const benchmarkStartTime = Date.now();
+
+            // Accumulate training time up to this point
+            if (this.stats.last_training_timestamp) {
+                this.stats.training_time_ms += benchmarkStartTime - this.stats.last_training_timestamp;
+            }
+
+            // Mark as benchmarking (this pauses training time tracking)
+            this.stats.is_benchmarking = true;
+            this.stats.current_benchmark_start = benchmarkStartTime;
+
+            // Estimate benchmark time based on previous benchmarks
+            const avgBenchmarkTime = this.stats.benchmarks_generated > 0
+                ? Math.round(this.stats.benchmark_time_ms / this.stats.benchmarks_generated)
+                : 3 * 60 * 1000; // Default: 3 minutes
+
+            // Calculate updated completion time
+            const trainingLimitMs = this.config.duration_minutes ? this.config.duration_minutes * 60 * 1000 : null;
+            const trainingTimeRemaining = trainingLimitMs ? Math.max(0, trainingLimitMs - this.stats.training_time_ms) : null;
+            const estimatedCompletion = trainingTimeRemaining !== null
+                ? new Date(benchmarkStartTime + avgBenchmarkTime + trainingTimeRemaining).toISOString()
+                : null;
+
+            logger.info('📊 OGGY ENTERING BENCHMARK MODE', {
+                accuracy: (windowAccuracy * 100).toFixed(1) + '%',
+                training_time_so_far: this._formatDuration(this.stats.training_time_ms),
+                training_time_remaining: trainingTimeRemaining !== null ? this._formatDuration(trainingTimeRemaining) : 'unlimited',
+                estimated_benchmark_duration: this._formatDuration(avgBenchmarkTime),
+                estimated_completion: estimatedCompletion,
+                benchmark_count: this.stats.benchmarks_generated + 1,
+                note: 'Benchmark time does NOT count against training time limit'
             });
 
             // Pause training during benchmark
@@ -398,6 +491,23 @@ class ContinuousLearningLoop {
             } catch (error) {
                 logger.error('Benchmark generation/run failed', { error: error.message });
             }
+
+            // === RESUME TRAINING TIME - EXITING BENCHMARK MODE ===
+            const benchmarkEndTime = Date.now();
+            const benchmarkDuration = benchmarkEndTime - this.stats.current_benchmark_start;
+
+            // Add this benchmark's time to total benchmark time
+            this.stats.benchmark_time_ms += benchmarkDuration;
+            this.stats.is_benchmarking = false;
+            this.stats.current_benchmark_start = null;
+            this.stats.last_training_timestamp = benchmarkEndTime; // Reset training timestamp
+
+            logger.info('📊 OGGY EXITING BENCHMARK MODE - RESUMING TRAINING', {
+                benchmark_duration: this._formatDuration(benchmarkDuration),
+                total_benchmark_time: this._formatDuration(this.stats.benchmark_time_ms),
+                training_time_so_far: this._formatDuration(this.stats.training_time_ms),
+                benchmarks_completed: this.stats.benchmarks_generated
+            });
 
             // Resume training
             selfDrivenLearning.start(this.userId, {
@@ -594,16 +704,19 @@ class ContinuousLearningLoop {
             return { extend: false, reason: 'Maximum extensions reached', weaknesses: [] };
         }
 
-        // TIME LIMIT CHECK - cannot extend beyond original duration_minutes
-        const elapsedMs = Date.now() - this.stats.session_start;
-        const maxDurationMs = this.config.duration_minutes * 60 * 1000;
-        if (elapsedMs >= maxDurationMs) {
-            logger.warn('🛑 TIME LIMIT REACHED - cannot extend beyond original duration', {
-                elapsed_minutes: (elapsedMs / 60000).toFixed(1),
+        // TIME LIMIT CHECK - use TRAINING TIME (not total elapsed) against the limit
+        // This ensures benchmark time doesn't count against the training time limit
+        const trainingTimeMs = this.stats.training_time_ms;
+        const maxTrainingTimeMs = this.config.duration_minutes * 60 * 1000;
+        if (trainingTimeMs >= maxTrainingTimeMs) {
+            logger.warn('🛑 TRAINING TIME LIMIT REACHED - cannot extend beyond original duration', {
+                training_time_minutes: (trainingTimeMs / 60000).toFixed(1),
                 duration_minutes: this.config.duration_minutes,
+                benchmark_time_minutes: (this.stats.benchmark_time_ms / 60000).toFixed(1),
+                total_session_minutes: ((Date.now() - this.stats.session_start) / 60000).toFixed(1),
                 extensions_used: this.decisionState.extensions_used
             });
-            return { extend: false, reason: `Time limit of ${this.config.duration_minutes} minutes reached`, weaknesses: [] };
+            return { extend: false, reason: `Training time limit of ${this.config.duration_minutes} minutes reached`, weaknesses: [] };
         }
 
         // Analyze benchmark results to identify weaknesses
@@ -731,10 +844,12 @@ class ContinuousLearningLoop {
 
     /**
      * Load scale and level from database or use provided values
+     * Also saves the initial state to ensure persistence
      */
     async _loadScaleAndLevel(userId, startingScale, startingLevel) {
         let scale = startingScale;
         let level = startingLevel;
+        let loadedFromDb = false;
 
         // If not explicitly provided, try to load from database
         if (scale === null || level === null) {
@@ -747,6 +862,7 @@ class ContinuousLearningLoop {
                 if (result.rows.length > 0) {
                     if (scale === null) scale = result.rows[0].scale;
                     if (level === null) level = result.rows[0].difficulty_level;
+                    loadedFromDb = true;
 
                     logger.info('Loaded scale and level from database', {
                         user_id: userId,
@@ -763,6 +879,18 @@ class ContinuousLearningLoop {
         // Ensure valid ranges with defaults
         scale = Math.max(1, Math.min(this.config.max_scale, scale || 1));
         level = Math.max(1, Math.min(5, level || 3));
+
+        // Always save the initial state to ensure it's persisted
+        // This handles cases where the row doesn't exist or explicit starting values were provided
+        if (!loadedFromDb || startingScale !== null || startingLevel !== null) {
+            await this._saveScaleAndLevel(userId, scale, level);
+            logger.info('Saved initial scale and level', {
+                user_id: userId,
+                scale: scale,
+                difficulty_level: level,
+                explicit_start: startingScale !== null || startingLevel !== null
+            });
+        }
 
         return { scale, level };
     }

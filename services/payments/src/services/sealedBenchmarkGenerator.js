@@ -635,14 +635,42 @@ Return only the JSON object.`;
 
         const completion = response.data.content[0].text.trim();
 
-        // Parse JSON from response
-        const jsonStr = completion.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-        const parsed = JSON.parse(jsonStr);
+        // Parse JSON from response - try multiple extraction methods
+        let parsed;
+        try {
+            // Method 1: Strip markdown code blocks
+            let jsonStr = completion.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            parsed = JSON.parse(jsonStr);
+        } catch (e1) {
+            try {
+                // Method 2: Find JSON object in the response using regex
+                const jsonMatch = completion.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                    parsed = JSON.parse(jsonMatch[0]);
+                } else {
+                    throw new Error('No JSON object found in response');
+                }
+            } catch (e2) {
+                // Log the raw response for debugging
+                logger.error('Failed to parse Claude response as JSON', {
+                    raw_response: completion.substring(0, 500),
+                    error1: e1.message,
+                    error2: e2.message
+                });
+                throw new Error(`JSON parse failed: ${e2.message}`);
+            }
+        }
+
+        // Validate required fields
+        if (!parsed.merchant || !parsed.category) {
+            logger.warn('Claude response missing required fields', { parsed });
+            throw new Error('Response missing required fields: merchant or category');
+        }
 
         return {
             merchant: parsed.merchant,
-            amount: parsed.amount,
-            description: parsed.description,
+            amount: parsed.amount || 0,
+            description: parsed.description || '',
             category: parsed.category,
             reasoning: parsed.reasoning || '',
             generator: 'claude',
