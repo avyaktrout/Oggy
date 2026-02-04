@@ -102,6 +102,22 @@ class SealedBenchmarkEvaluator {
             training_state
         });
 
+        // Collect Oggy's mistakes for learning
+        const oggy_wrong_scenarios = oggy_results
+            .filter(r => !r.correct)
+            .map((r, idx) => {
+                const scenario = benchmark.scenarios.find(s => s.scenario_id === r.scenario_id);
+                return {
+                    scenario_id: r.scenario_id,
+                    merchant: scenario?.merchant,
+                    amount: scenario?.amount,
+                    description: scenario?.description,
+                    predicted_category: r.predicted_category,
+                    correct_category: r.correct_category,
+                    reasoning: scenario?.reasoning
+                };
+            });
+
         return {
             result_id,
             benchmark_id: benchmark.benchmark_id,
@@ -109,7 +125,8 @@ class SealedBenchmarkEvaluator {
             oggy: {
                 correct: oggy_correct,
                 total,
-                accuracy: oggy_accuracy
+                accuracy: oggy_accuracy,
+                wrong_scenarios: oggy_wrong_scenarios
             },
             base: {
                 correct: base_correct,

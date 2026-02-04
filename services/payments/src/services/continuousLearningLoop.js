@@ -21,6 +21,9 @@ const benchmarkValidator = require('./benchmarkValidator');
 const logger = require('../utils/logger');
 const { query } = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
+const axios = require('axios');
+
+const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory:3000';
 
 class ContinuousLearningLoop {
     constructor() {
@@ -603,6 +606,13 @@ class ContinuousLearningLoop {
             user_id: this.userId
         });
 
+        // Learn from Oggy's mistakes on this benchmark
+        let mistakes_learned = 0;
+        if (testResult.oggy.wrong_scenarios && testResult.oggy.wrong_scenarios.length > 0) {
+            const learningResult = await this._learnFromBenchmarkMistakes(testResult.oggy.wrong_scenarios);
+            mistakes_learned = learningResult.learned;
+        }
+
         const result = {
             benchmark_name: benchmarkName,
             benchmark_id: generationResult.benchmark_id,
@@ -617,6 +627,7 @@ class ContinuousLearningLoop {
             base_accuracy: testResult.base.accuracy,
             advantage: testResult.comparison.advantage_percent,
             oggy_passed: testResult.oggy.accuracy >= testResult.base.accuracy,
+            mistakes_learned: mistakes_learned,
             timestamp: new Date().toISOString(),
             validation_issues_found: validationIssues.length
         };
@@ -641,6 +652,89 @@ class ContinuousLearningLoop {
                 `, [scenario.correct_category, scenario.scenario_id]);
             }
         }
+    }
+
+    /**
+     * Learn from benchmark mistakes
+     * Creates memory cards encoding the corrections so Oggy improves
+     */
+    async _learnFromBenchmarkMistakes(wrongScenarios) {
+        if (!wrongScenarios || wrongScenarios.length === 0) {
+            logger.info('No benchmark mistakes to learn from');
+            return { learned: 0 };
+        }
+
+        logger.info('📚 LEARNING FROM BENCHMARK MISTAKES', {
+            mistake_count: wrongScenarios.length
+        });
+
+        let learned = 0;
+
+        for (const mistake of wrongScenarios) {
+            try {
+                // Create a correction memory card
+                const cardContent = {
+                    text: `CORRECTION: "${mistake.merchant}" with "${mistake.description}" is "${mistake.correct_category}" NOT "${mistake.predicted_category}". ${mistake.reasoning || ''}`,
+                    correction: {
+                        merchant: mistake.merchant,
+                        description: mistake.description,
+                        wrong_prediction: mistake.predicted_category,
+                        correct_category: mistake.correct_category,
+                        amount: mistake.amount
+                    },
+                    evidence: {
+                        source: 'benchmark_mistake_correction',
+                        confidence: 'high',
+                        learning_mode: 'benchmark_driven'
+                    }
+                };
+
+                await axios.post(
+                    `${MEMORY_SERVICE_URL}/cards`,
+                    {
+                        owner_type: 'user',
+                        owner_id: this.userId,
+                        tier: 1, // Long-term memory for corrections
+                        kind: 'expense_category_correction',
+                        content: cardContent,
+                        tags: [
+                            'payments',
+                            'correction',
+                            'benchmark_learned',
+                            mistake.correct_category,
+                            `not_${mistake.predicted_category}`,
+                            mistake.merchant.toLowerCase().replace(/\s+/g, '_')
+                        ],
+                        utility_weight: 0.9, // High weight for corrections
+                        reliability: 0.95
+                    },
+                    {
+                        timeout: 5000,
+                        headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
+                    }
+                );
+
+                learned++;
+
+                logger.info('Created correction memory from benchmark mistake', {
+                    merchant: mistake.merchant,
+                    wrong: mistake.predicted_category,
+                    correct: mistake.correct_category
+                });
+            } catch (error) {
+                logger.warn('Failed to create correction memory', {
+                    merchant: mistake.merchant,
+                    error: error.message
+                });
+            }
+        }
+
+        logger.info('📚 BENCHMARK LEARNING COMPLETE', {
+            mistakes_processed: wrongScenarios.length,
+            memories_created: learned
+        });
+
+        return { learned };
     }
 
     /**

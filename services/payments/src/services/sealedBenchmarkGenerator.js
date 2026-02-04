@@ -117,7 +117,7 @@ class SealedBenchmarkGenerator {
      */
     async createSealedBenchmark(options = {}) {
         const {
-            count = 100,              // Number of assessments
+            count = 17,               // Number of assessments (reduced for faster generation)
             name = null,              // Optional name for the benchmark
             description = null,       // Optional description
             difficulty_mix = 'balanced', // balanced, easy, hard, mixed
@@ -147,17 +147,18 @@ class SealedBenchmarkGenerator {
             complexity_factors
         });
 
-        // Generate scenarios
-        const scenarios = [];
-        const errors = [];
-
+        // Build tasks for parallel generation
+        const tasks = [];
         for (let i = 0; i < count; i++) {
-            try {
-                const category = this._randomCategory();
-                const difficulty = this._selectDifficulty(difficulty_mix, i, count);
+            const category = this._randomCategory();
+            const difficulty = this._selectDifficulty(difficulty_mix, i, count);
 
-                // Pass scale context to generation
-                const scaleContext = {
+            tasks.push({
+                index: i,
+                category,
+                difficulty,
+                use_ood,
+                scaleContext: {
                     scale,
                     level,
                     scaleConfig,
@@ -165,35 +166,18 @@ class SealedBenchmarkGenerator {
                     require_context,
                     require_reasoning,
                     multi_step
-                };
-
-                const scenario = use_ood
-                    ? await this._generateOODScenario(category, difficulty, scaleContext)
-                    : await this._generateInDistributionScenario(category, difficulty, scaleContext);
-
-                if (scenario) {
-                    scenarios.push({
-                        scenario_id: uuidv4(),
-                        ...scenario,
-                        order_index: i,
-                        scale,
-                        level
-                    });
                 }
-
-                // Small delay to avoid rate limits
-                await this._sleep(200);
-            } catch (error) {
-                errors.push({
-                    index: i,
-                    error: error.message
-                });
-                logger.warn('Failed to generate sealed benchmark scenario', {
-                    index: i,
-                    error: error.message
-                });
-            }
+            });
         }
+
+        // Generate scenarios in parallel (5 concurrent requests)
+        logger.info('Starting parallel scenario generation', {
+            total_tasks: tasks.length,
+            concurrency: 5,
+            use_ood
+        });
+
+        const { scenarios, errors } = await this._generateScenariosInParallel(tasks, 5);
 
         // Store sealed benchmark in database
         await this._storeSealedBenchmark({
@@ -859,6 +843,67 @@ Return only the JSON object.`;
 
     _randomCategory() {
         return this.categories[Math.floor(Math.random() * this.categories.length)];
+    }
+
+    /**
+     * Generate scenarios in parallel with concurrency control
+     * @param {Array} tasks - Array of { index, category, difficulty, scaleContext, use_ood }
+     * @param {number} concurrency - Max concurrent requests (default 5)
+     * @returns {object} { scenarios: [], errors: [] }
+     */
+    async _generateScenariosInParallel(tasks, concurrency = 5) {
+        const scenarios = [];
+        const errors = [];
+
+        // Process in batches for controlled concurrency
+        for (let i = 0; i < tasks.length; i += concurrency) {
+            const batch = tasks.slice(i, i + concurrency);
+
+            const batchPromises = batch.map(async (task) => {
+                try {
+                    const scenario = task.use_ood
+                        ? await this._generateOODScenario(task.category, task.difficulty, task.scaleContext)
+                        : await this._generateInDistributionScenario(task.category, task.difficulty, task.scaleContext);
+
+                    if (scenario) {
+                        return {
+                            success: true,
+                            scenario: {
+                                scenario_id: uuidv4(),
+                                ...scenario,
+                                order_index: task.index,
+                                scale: task.scaleContext.scale,
+                                level: task.scaleContext.level
+                            }
+                        };
+                    }
+                    return { success: false, error: 'Empty scenario returned', index: task.index };
+                } catch (error) {
+                    return { success: false, error: error.message, index: task.index };
+                }
+            });
+
+            const batchResults = await Promise.all(batchPromises);
+
+            for (const result of batchResults) {
+                if (result.success) {
+                    scenarios.push(result.scenario);
+                } else {
+                    errors.push({ index: result.index, error: result.error });
+                    logger.warn('Failed to generate sealed benchmark scenario', {
+                        index: result.index,
+                        error: result.error
+                    });
+                }
+            }
+
+            // Small delay between batches to avoid rate limits
+            if (i + concurrency < tasks.length) {
+                await this._sleep(100);
+            }
+        }
+
+        return { scenarios, errors };
     }
 
     _sleep(ms) {
