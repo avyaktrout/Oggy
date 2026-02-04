@@ -36,6 +36,79 @@ class TessaAssessmentGenerator {
             'dining',
             'shopping'
         ];
+
+        // Scale complexity definitions - mirrors sealedBenchmarkGenerator for consistency
+        this.scaleComplexity = {
+            1: {
+                name: 'Foundation',
+                description: 'Basic payment categorization with clear indicators',
+                requirements: [
+                    'Single clear category indicator',
+                    'Common merchant names',
+                    'Standard transaction amounts'
+                ],
+                prompt_additions: ''
+            },
+            2: {
+                name: 'Intermediate',
+                description: 'Multi-factor scenarios requiring context analysis',
+                requirements: [
+                    'Category depends on context clues',
+                    'Amount-based category hints',
+                    'Time-sensitive categorization'
+                ],
+                prompt_additions: `
+SCALE 2 COMPLEXITY REQUIREMENTS:
+- The category should not be immediately obvious from merchant name alone
+- Include contextual details that are necessary to determine the correct category
+- The scenario should require reading the full description to categorize correctly`
+            },
+            3: {
+                name: 'Advanced',
+                description: 'Complex real-world payment patterns',
+                requirements: [
+                    'Multi-category potential',
+                    'Subscription services',
+                    'Business vs personal blur'
+                ],
+                prompt_additions: `
+SCALE 3 COMPLEXITY REQUIREMENTS:
+- Include realistic complexity (subscriptions, memberships, bundled services)
+- The scenario could initially suggest a different category but resolves correctly
+- Require understanding of context to distinguish similar categories
+- Include subtle business vs personal distinctions`
+            },
+            4: {
+                name: 'Expert',
+                description: 'Edge cases requiring deep contextual understanding',
+                requirements: [
+                    'Tax-relevant distinctions',
+                    'Unusual merchant types',
+                    'Compound transactions'
+                ],
+                prompt_additions: `
+SCALE 4 COMPLEXITY REQUIREMENTS:
+- Include edge case elements (unusual merchants, compound services)
+- Professional/personal overlap requiring careful analysis
+- The description should require expert-level understanding to categorize
+- Include scenarios where naive categorization would be incorrect`
+            },
+            5: {
+                name: 'Master',
+                description: 'Nuanced scenarios requiring deep analysis',
+                requirements: [
+                    'Genuinely nuanced categories',
+                    'Temporal context matters',
+                    'User intent inference'
+                ],
+                prompt_additions: `
+SCALE 5 COMPLEXITY REQUIREMENTS:
+- Create genuinely nuanced scenarios where category depends on subtle clues
+- The scenario should test deep understanding of category boundaries
+- Include scenarios where multiple categories seem plausible but one is correct
+- Require inference of user intent or transaction context`
+            }
+        };
     }
 
     /**
@@ -48,14 +121,30 @@ class TessaAssessmentGenerator {
             category = this._randomCategory(),
             difficultyTier = DIFFICULTY_TIERS.TIER_2_STANDARD,
             // Legacy support for old difficulty parameter
-            difficulty = null
+            difficulty = null,
+            // Scale system support
+            scale = null,
+            level = null
         } = options;
 
         // Convert old difficulty to tier if needed
         const tier = difficulty ? this._legacyDifficultyToTier(difficulty) : difficultyTier;
 
+        // Get scale context if provided
+        const scaleContext = scale ? {
+            scale,
+            level: level || 3,
+            scaleConfig: this.scaleComplexity[Math.min(scale, 5)] || this.scaleComplexity[5]
+        } : null;
+
         try {
-            const prompt = adaptiveDifficultyScaler.buildTessaPrompt(category, tier);
+            // Build prompt with scale context if available
+            let prompt;
+            if (scaleContext && scaleContext.scale >= 2) {
+                prompt = this._buildScaleAwarePrompt(category, tier, scaleContext);
+            } else {
+                prompt = adaptiveDifficultyScaler.buildTessaPrompt(category, tier);
+            }
 
             const scenario = await this.openaiCircuitBreaker.execute(async () => {
                 return await retryHandler.withRetry(
@@ -68,9 +157,14 @@ class TessaAssessmentGenerator {
                 );
             });
 
-            // Add tier information to scenario
+            // Add tier and scale information to scenario
             scenario.difficulty_tier = tier.name;
             scenario.tier_level = tier.tier_level;
+            if (scaleContext) {
+                scenario.scale = scaleContext.scale;
+                scenario.scale_level = scaleContext.level;
+                scenario.scale_name = scaleContext.scaleConfig.name;
+            }
 
             // Add to domain knowledge for future learning
             await this._addToDomainKnowledge(scenario, tier);
@@ -80,6 +174,8 @@ class TessaAssessmentGenerator {
                 merchant: scenario.merchant,
                 difficulty_tier: tier.name,
                 tier_level: tier.tier_level,
+                scale: scaleContext?.scale,
+                scale_name: scaleContext?.scaleConfig?.name,
                 baseline_scale: adaptiveDifficultyScaler.baselineDifficultyScale,
                 knowledge_id: scenario.knowledge_id
             });
@@ -92,18 +188,76 @@ class TessaAssessmentGenerator {
                 difficulty: tier.name,
                 difficultyTier: tier,
                 source: 'tessa_generated',
-                knowledge_id: scenario.knowledge_id
+                knowledge_id: scenario.knowledge_id,
+                scale: scaleContext?.scale,
+                scale_name: scaleContext?.scaleConfig?.name
             };
         } catch (error) {
             logger.logError(error, {
                 operation: 'generateNovelScenario',
                 category,
-                tier: tier.name
+                tier: tier.name,
+                scale: scaleContext?.scale
             });
 
             // Fallback: return null so self-learning can use existing domain knowledge
             return null;
         }
+    }
+
+    /**
+     * Build a scale-aware prompt for higher complexity scenarios
+     */
+    _buildScaleAwarePrompt(category, tier, scaleContext) {
+        const { scale, scaleConfig } = scaleContext;
+
+        const categoryDefinitions = {
+            'business_meal': 'Work-related dining: client meetings, team lunches, business dinners, networking events over food. MUST have explicit business/work context.',
+            'groceries': 'Food shopping at supermarkets/grocery stores for home cooking and household food supplies.',
+            'transportation': 'Travel and vehicle expenses: gas, rideshare, parking, car repairs, public transit.',
+            'utilities': 'Home services: electricity, water, internet, phone bills, gas utilities.',
+            'entertainment': 'Leisure activities: movies, concerts, streaming services, hobbies, sports events, gaming.',
+            'health': 'Medical and wellness: gym memberships, pharmacy, doctor visits, health supplements.',
+            'dining': 'Personal restaurant/cafe visits for pleasure (NOT work-related), casual meals with friends/family.',
+            'shopping': 'Retail purchases: clothing, electronics, household items, online shopping.'
+        };
+
+        return `You are Tessa, an expert at generating realistic expense categorization scenarios for training AI systems.
+
+## SCALE: S${scale} - ${scaleConfig.name}
+${scaleConfig.description}
+
+${scaleConfig.prompt_additions}
+
+## TASK
+Generate ONE realistic expense transaction for category: ${category}
+
+## Difficulty Tier: ${tier.name} (Level ${tier.tier_level}/5)
+${tier.description || ''}
+
+## Category Definition
+${category}: ${categoryDefinitions[category]}
+
+## CRITICAL RULES
+- For "dining": NEVER mention business, clients, meetings, colleagues, or work context
+- For "business_meal": ALWAYS explicitly mention clients, business meeting, work event, or professional context
+- The scenario must ultimately resolve to "${category}" when analyzed carefully
+- At S${scale}, the scenario should have the complexity described above
+
+## Requirements
+1. Create a realistic merchant name
+2. Generate a natural transaction description with appropriate complexity for S${scale}
+3. Use a realistic USD amount
+4. Include reasoning that explains the categorization
+
+Return ONLY valid JSON:
+{
+  "merchant": "Merchant Name",
+  "amount": 45.50,
+  "description": "Transaction description with S${scale} complexity",
+  "category": "${category}",
+  "reasoning": "Why this is ${category} - include key distinguishing factors"
+}`;
     }
 
     /**

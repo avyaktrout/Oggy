@@ -19,8 +19,10 @@ router.post('/start', async (req, res) => {
         const {
             user_id,
             duration_minutes = 5,
-            questions_per_benchmark = 100,
-            accuracy_threshold = 0.90,
+            questions_per_benchmark = 35,         // Training questions before benchmark check
+            accuracy_threshold = 0.80,            // 80% on training to trigger benchmark
+            benchmark_scenario_count = 70,        // Questions per benchmark
+            upgrade_threshold = 0.90,             // 90% on benchmark to advance level
             training_interval_ms = 5000,
             practice_count = 3,
             starting_difficulty = null,  // null = load from DB, or specify 1-5
@@ -36,7 +38,9 @@ router.post('/start', async (req, res) => {
             user_id,
             duration_minutes,
             starting_scale,
-            starting_difficulty
+            starting_difficulty,
+            benchmark_scenario_count,
+            upgrade_threshold
         });
 
         // Start the loop (this will run in the background)
@@ -44,6 +48,8 @@ router.post('/start', async (req, res) => {
             duration_minutes,
             questions_per_benchmark,
             accuracy_threshold,
+            benchmark_scenario_count,
+            upgrade_threshold,
             training_interval_ms,
             practice_count,
             starting_difficulty,
@@ -58,6 +64,8 @@ router.post('/start', async (req, res) => {
                 duration_minutes,
                 questions_per_benchmark,
                 accuracy_threshold,
+                benchmark_scenario_count,
+                upgrade_threshold,
                 starting_scale,
                 starting_difficulty
             }
@@ -91,11 +99,14 @@ router.post('/start-and-wait', async (req, res) => {
         const {
             user_id,
             duration_minutes = 5,
-            questions_per_benchmark = 100,
-            accuracy_threshold = 0.90,
+            questions_per_benchmark = 35,         // Training questions before benchmark check
+            accuracy_threshold = 0.80,            // 80% on training to trigger benchmark
+            benchmark_scenario_count = 70,        // Questions per benchmark
+            upgrade_threshold = 0.90,             // 90% on benchmark to advance level
             training_interval_ms = 5000,
             practice_count = 3,
-            starting_difficulty = null  // null = load from DB, or specify 1-5
+            starting_difficulty = null,  // null = load from DB, or specify 1-5
+            starting_scale = null        // null = load from DB, or specify 1-10
         } = req.body;
 
         if (!user_id) {
@@ -106,16 +117,22 @@ router.post('/start-and-wait', async (req, res) => {
             requestId: req.requestId,
             user_id,
             duration_minutes,
-            starting_difficulty
+            starting_scale,
+            starting_difficulty,
+            benchmark_scenario_count,
+            upgrade_threshold
         });
 
         const results = await continuousLearningLoop.start(user_id, {
             duration_minutes,
             questions_per_benchmark,
             accuracy_threshold,
+            benchmark_scenario_count,
+            upgrade_threshold,
             training_interval_ms,
             practice_count,
-            starting_difficulty
+            starting_difficulty,
+            starting_scale
         });
 
         res.json(results);

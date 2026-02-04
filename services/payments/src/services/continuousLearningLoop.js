@@ -43,10 +43,10 @@ class ContinuousLearningLoop {
 
         // Configuration
         this.config = {
-            questions_per_benchmark: 100,
-            accuracy_threshold_for_benchmark: 0.90,
-            both_models_threshold_for_upgrade: 0.80,  // Changed from 0.95 to 0.80
-            benchmark_scenario_count: 30,
+            questions_per_benchmark: 35,              // Training questions before benchmark check
+            accuracy_threshold_for_benchmark: 0.80,   // 80% accuracy on training to trigger benchmark
+            both_models_threshold_for_upgrade: 0.90,  // 90% accuracy on benchmark to advance level
+            benchmark_scenario_count: 70,             // Questions per benchmark
             training_interval_ms: 5000,
             practice_count_per_session: 3,
             max_difficulty_level: 5,
@@ -132,8 +132,10 @@ class ContinuousLearningLoop {
 
         const {
             duration_minutes = null,
-            questions_per_benchmark = 100,
-            accuracy_threshold = 0.90,
+            questions_per_benchmark = 35,             // Training questions before benchmark
+            accuracy_threshold = 0.80,                // 80% on training to trigger benchmark
+            benchmark_scenario_count = 70,            // Questions per benchmark
+            upgrade_threshold = 0.90,                 // 90% on benchmark to advance level
             training_interval_ms = 5000,
             practice_count = 3,
             starting_difficulty = null,  // null = load from DB, or use specified level
@@ -144,6 +146,8 @@ class ContinuousLearningLoop {
         this.isRunning = true;
         this.config.questions_per_benchmark = questions_per_benchmark;
         this.config.accuracy_threshold_for_benchmark = accuracy_threshold;
+        this.config.benchmark_scenario_count = benchmark_scenario_count;
+        this.config.both_models_threshold_for_upgrade = upgrade_threshold;
         this.config.training_interval_ms = training_interval_ms;
         this.config.practice_count_per_session = practice_count;
 

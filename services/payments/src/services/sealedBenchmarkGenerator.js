@@ -46,6 +46,68 @@ class SealedBenchmarkGenerator {
             'dining',
             'shopping'
         ];
+
+        // Scale complexity definitions - higher scales require more complex understanding
+        this.scaleComplexity = {
+            1: {
+                name: 'Foundation',
+                description: 'Basic payment categorization with clear indicators',
+                requirements: [
+                    'Single clear category indicator',
+                    'Common merchant names',
+                    'Standard transaction amounts',
+                    'Obvious category signals in description'
+                ],
+                example_scenarios: 'Starbucks coffee purchase, Amazon book order, Uber ride'
+            },
+            2: {
+                name: 'Intermediate',
+                description: 'Multi-factor scenarios requiring context analysis',
+                requirements: [
+                    'Category depends on context clues',
+                    'Amount-based category hints',
+                    'Time-sensitive categorization',
+                    'Merchant name alone is insufficient'
+                ],
+                example_scenarios: 'Restaurant receipt requiring dining vs business_meal distinction, store purchase needing groceries vs shopping analysis'
+            },
+            3: {
+                name: 'Advanced',
+                description: 'Complex real-world payment patterns',
+                requirements: [
+                    'Multi-category potential transactions',
+                    'Subscription service categorization',
+                    'Business vs personal expense blur',
+                    'International payment patterns',
+                    'Partial refunds and adjustments'
+                ],
+                example_scenarios: 'Costco membership (groceries vs shopping), WeWork payment (utilities vs business), international conference registration'
+            },
+            4: {
+                name: 'Expert',
+                description: 'Edge cases requiring deep contextual understanding',
+                requirements: [
+                    'Tax-relevant distinctions',
+                    'Regulatory-sensitive categories',
+                    'Unusual merchant types',
+                    'Compound transactions',
+                    'Reimbursement scenarios'
+                ],
+                example_scenarios: 'Medical spa service (health vs personal_care), home office equipment (shopping vs business), charity dinner auction'
+            },
+            5: {
+                name: 'Master',
+                description: 'Ambiguous scenarios with multiple valid interpretations',
+                requirements: [
+                    'Transactions with genuinely ambiguous categories',
+                    'Temporal context affecting category',
+                    'User intent inference required',
+                    'Chained transaction analysis',
+                    'Split-bill scenarios'
+                ],
+                example_scenarios: 'Birthday party at restaurant (dining vs entertainment), gym cafe purchase (health vs dining), airport lounge access'
+            }
+        };
     }
 
     /**
@@ -59,17 +121,30 @@ class SealedBenchmarkGenerator {
             name = null,              // Optional name for the benchmark
             description = null,       // Optional description
             difficulty_mix = 'balanced', // balanced, easy, hard, mixed
-            use_ood = true            // Use out-of-distribution (Claude) generation
+            use_ood = true,           // Use out-of-distribution (Claude) generation
+            scale = 1,                // Scale level S1-S10 (higher = more complex scenarios)
+            level = 3,                // Difficulty level within scale (1-5)
+            complexity_factors = [],  // Additional complexity requirements
+            require_context = false,  // Require contextual understanding
+            require_reasoning = false, // Require multi-step reasoning
+            multi_step = false        // Require chained analysis
         } = options;
 
         const benchmark_id = uuidv4();
         const benchmark_name = name || `sealed_benchmark_${Date.now()}`;
 
+        // Get scale complexity config
+        const scaleConfig = this.scaleComplexity[Math.min(scale, 5)] || this.scaleComplexity[5];
+
         logger.info('Creating sealed benchmark', {
             benchmark_id,
             benchmark_name,
             count,
-            use_ood
+            use_ood,
+            scale,
+            level,
+            scale_name: scaleConfig.name,
+            complexity_factors
         });
 
         // Generate scenarios
@@ -81,15 +156,28 @@ class SealedBenchmarkGenerator {
                 const category = this._randomCategory();
                 const difficulty = this._selectDifficulty(difficulty_mix, i, count);
 
+                // Pass scale context to generation
+                const scaleContext = {
+                    scale,
+                    level,
+                    scaleConfig,
+                    complexity_factors,
+                    require_context,
+                    require_reasoning,
+                    multi_step
+                };
+
                 const scenario = use_ood
-                    ? await this._generateOODScenario(category, difficulty)
-                    : await this._generateInDistributionScenario(category, difficulty);
+                    ? await this._generateOODScenario(category, difficulty, scaleContext)
+                    : await this._generateInDistributionScenario(category, difficulty, scaleContext);
 
                 if (scenario) {
                     scenarios.push({
                         scenario_id: uuidv4(),
                         ...scenario,
-                        order_index: i
+                        order_index: i,
+                        scale,
+                        level
                     });
                 }
 
@@ -140,8 +228,8 @@ class SealedBenchmarkGenerator {
      * Generate out-of-distribution scenario using Claude
      * This is different from Tessa's GPT-4o-mini generation patterns
      */
-    async _generateOODScenario(category, difficulty) {
-        const prompt = this._buildClaudePrompt(category, difficulty);
+    async _generateOODScenario(category, difficulty, scaleContext = null) {
+        const prompt = this._buildClaudePrompt(category, difficulty, scaleContext);
 
         return await this.claudeCircuitBreaker.execute(async () => {
             return await retryHandler.withRetry(
@@ -159,10 +247,10 @@ class SealedBenchmarkGenerator {
      * Generate in-distribution scenario (for control benchmarks)
      * Uses similar style to Tessa but not stored for training
      */
-    async _generateInDistributionScenario(category, difficulty) {
+    async _generateInDistributionScenario(category, difficulty, scaleContext = null) {
         // Use similar GPT prompt style as Tessa but mark as sealed
         // This is for control/comparison benchmarks
-        const prompt = this._buildGPTLikePrompt(category, difficulty);
+        const prompt = this._buildGPTLikePrompt(category, difficulty, scaleContext);
 
         return await this.openaiCircuitBreaker.execute(async () => {
             return await retryHandler.withRetry(
@@ -224,8 +312,9 @@ class SealedBenchmarkGenerator {
     /**
      * Build Claude prompt for OOD generation
      * Intentionally different style from Tessa's GPT prompts
+     * Now supports scale-aware complexity for progressive difficulty
      */
-    _buildClaudePrompt(category, difficulty) {
+    _buildClaudePrompt(category, difficulty, scaleContext = null) {
         const difficultyInstructions = {
             'easy': 'straightforward and unambiguous',
             'medium': 'moderately complex with some nuance',
@@ -233,8 +322,48 @@ class SealedBenchmarkGenerator {
             'very_hard': 'highly ambiguous requiring expert judgment'
         };
 
-        return `You are creating a test scenario for an AI expense categorization system.
+        // Build scale-specific complexity instructions
+        let scaleInstructions = '';
+        let complexityRequirements = '';
 
+        if (scaleContext && scaleContext.scale >= 2) {
+            const { scale, level, scaleConfig } = scaleContext;
+
+            scaleInstructions = `
+## SCALE COMPLEXITY: S${scale} L${level} (${scaleConfig.name})
+${scaleConfig.description}
+
+This scenario MUST incorporate the following complexity factors:
+${scaleConfig.requirements.map((r, i) => `${i + 1}. ${r}`).join('\n')}
+
+Example scenarios at this level: ${scaleConfig.example_scenarios}
+`;
+
+            // Add specific complexity requirements based on scale
+            if (scale >= 2) {
+                complexityRequirements += `
+- The category should NOT be immediately obvious from the merchant name alone
+- Include contextual details that are necessary to determine the correct category`;
+            }
+            if (scale >= 3) {
+                complexityRequirements += `
+- The scenario should have realistic complexity (subscriptions, memberships, services)
+- Include details that could initially suggest a different category but resolve to the correct one`;
+            }
+            if (scale >= 4) {
+                complexityRequirements += `
+- Include edge case elements (unusual merchants, compound services, professional/personal overlap)
+- The description should require careful analysis to categorize correctly`;
+            }
+            if (scale >= 5) {
+                complexityRequirements += `
+- Create a genuinely nuanced scenario where the category depends on subtle contextual clues
+- The scenario should test deep understanding of category boundaries`;
+            }
+        }
+
+        return `You are creating a test scenario for an AI expense categorization system.
+${scaleInstructions}
 Generate ONE realistic expense transaction for category: ${category}
 
 Difficulty level: ${difficulty} (${difficultyInstructions[difficulty]})
@@ -243,14 +372,15 @@ Requirements:
 - Create a realistic merchant name (can be fictional but plausible)
 - Generate a natural transaction description
 - Use a realistic USD amount
-- The transaction must CLEARLY and UNAMBIGUOUSLY belong to "${category}"
-- The description must make it obvious which category applies
+- The transaction must belong to "${category}" when analyzed correctly
+- The description should ultimately resolve to the correct category
+${complexityRequirements}
 
 CRITICAL RULES FOR CLARITY:
 - For "dining": NEVER mention business, clients, meetings, colleagues, or work. Use phrases like "birthday dinner", "date night", "catching up with friends", "weekend brunch"
 - For "business_meal": ALWAYS explicitly mention clients, business meeting, work event, networking, or professional context
-- AVOID scenarios that could reasonably fit multiple categories
-- The description should make the category obvious to any reader
+- At higher scales, the distinction may require careful reading, but the correct answer should still be determinable
+- The description should make the category determinable to a careful reader
 
 Category definitions:
 - business_meal: Work-related dining - MUST mention clients, business purpose, work meeting, or professional networking
@@ -266,16 +396,16 @@ Return ONLY valid JSON in this format:
 {
   "merchant": "Merchant Name",
   "amount": 45.50,
-  "description": "Transaction description that clearly indicates the category",
+  "description": "Transaction description that resolves to the category when analyzed",
   "category": "${category}",
-  "reasoning": "Brief explanation why this is ${category}"
+  "reasoning": "Brief explanation why this is ${category} and what context clues indicate this"
 }`;
     }
 
     /**
      * Build GPT-like prompt for in-distribution control benchmarks
      */
-    _buildGPTLikePrompt(category, difficulty) {
+    _buildGPTLikePrompt(category, difficulty, scaleContext = null) {
         const difficultyNotes = {
             'easy': 'Make it obvious and typical',
             'medium': 'Make it realistic and common',
@@ -283,12 +413,22 @@ Return ONLY valid JSON in this format:
             'very_hard': 'Make it highly ambiguous with multiple plausible categories'
         };
 
+        let scaleNote = '';
+        if (scaleContext && scaleContext.scale >= 2) {
+            const { scale, scaleConfig } = scaleContext;
+            scaleNote = `
+Scale: S${scale} (${scaleConfig.name})
+Complexity Requirements: ${scaleConfig.requirements.slice(0, 2).join(', ')}
+The scenario should reflect this complexity level.
+`;
+        }
+
         return `Generate a realistic expense categorization scenario.
 
 Target category: ${category}
 Difficulty: ${difficulty}
 Note: ${difficultyNotes[difficulty]}
-
+${scaleNote}
 Create a JSON object with:
 {
   "merchant": "realistic merchant name",
