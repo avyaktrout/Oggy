@@ -312,94 +312,259 @@ class SealedBenchmarkGenerator {
     /**
      * Build Claude prompt for OOD generation
      * Intentionally different style from Tessa's GPT prompts
-     * Now supports scale-aware complexity for progressive difficulty
+     * Designed to create CHALLENGING scenarios that test true understanding
      */
     _buildClaudePrompt(category, difficulty, scaleContext = null) {
+        // All difficulties are now harder - even "easy" requires thought
         const difficultyInstructions = {
-            'easy': 'straightforward and unambiguous',
-            'medium': 'moderately complex with some nuance',
-            'hard': 'challenging with ambiguity or edge cases',
-            'very_hard': 'highly ambiguous requiring expert judgment'
+            'easy': 'requires reading the full description to determine category',
+            'medium': 'has elements that could suggest multiple categories',
+            'hard': 'deliberately misleading surface details that resolve correctly on analysis',
+            'very_hard': 'genuinely tricky with subtle contextual clues being decisive'
         };
+
+        // Ambiguous category pairs that we want to emphasize
+        const ambiguousPairs = {
+            'dining': ['business_meal', 'entertainment', 'groceries'],
+            'business_meal': ['dining', 'entertainment'],
+            'groceries': ['shopping', 'dining'],
+            'shopping': ['groceries', 'entertainment', 'health'],
+            'entertainment': ['dining', 'shopping', 'health'],
+            'health': ['shopping', 'entertainment'],
+            'transportation': ['shopping', 'entertainment'],
+            'utilities': ['shopping', 'entertainment']
+        };
+
+        const confusableWith = ambiguousPairs[category] || [];
 
         // Build scale-specific complexity instructions
         let scaleInstructions = '';
-        let complexityRequirements = '';
-
-        if (scaleContext && scaleContext.scale >= 2) {
+        if (scaleContext) {
             const { scale, level, scaleConfig } = scaleContext;
-
             scaleInstructions = `
-## SCALE COMPLEXITY: S${scale} L${level} (${scaleConfig.name})
-${scaleConfig.description}
-
-This scenario MUST incorporate the following complexity factors:
-${scaleConfig.requirements.map((r, i) => `${i + 1}. ${r}`).join('\n')}
-
-Example scenarios at this level: ${scaleConfig.example_scenarios}
+## SCALE: S${scale} L${level} - ${scaleConfig.name}
+Complexity factors to incorporate: ${scaleConfig.requirements.slice(0, 3).join(', ')}
 `;
-
-            // Add specific complexity requirements based on scale
-            if (scale >= 2) {
-                complexityRequirements += `
-- The category should NOT be immediately obvious from the merchant name alone
-- Include contextual details that are necessary to determine the correct category`;
-            }
-            if (scale >= 3) {
-                complexityRequirements += `
-- The scenario should have realistic complexity (subscriptions, memberships, services)
-- Include details that could initially suggest a different category but resolve to the correct one`;
-            }
-            if (scale >= 4) {
-                complexityRequirements += `
-- Include edge case elements (unusual merchants, compound services, professional/personal overlap)
-- The description should require careful analysis to categorize correctly`;
-            }
-            if (scale >= 5) {
-                complexityRequirements += `
-- Create a genuinely nuanced scenario where the category depends on subtle contextual clues
-- The scenario should test deep understanding of category boundaries`;
-            }
         }
 
-        return `You are creating a test scenario for an AI expense categorization system.
+        return `Create AMBIGUOUS expense scenarios where MULTIPLE categories are plausible, but ${category} is correct BY CONVENTION.
 ${scaleInstructions}
-Generate ONE realistic expense transaction for category: ${category}
+Target category: ${category}
+Difficulty: ${difficulty} - ${difficultyInstructions[difficulty]}
 
-Difficulty level: ${difficulty} (${difficultyInstructions[difficulty]})
+## GOAL: GENUINE AMBIGUITY WITH A CONVENTIONAL ANSWER
 
-Requirements:
-- Create a realistic merchant name (can be fictional but plausible)
-- Generate a natural transaction description
-- Use a realistic USD amount
-- The transaction must belong to "${category}" when analyzed correctly
-- The description should ultimately resolve to the correct category
-${complexityRequirements}
+Create a scenario where BOTH ${category} AND ${confusableWith[0] || 'another category'} seem like reasonable answers, but ${category} is the CONVENTIONAL choice based on standard expense categorization rules.
 
-CRITICAL RULES FOR CLARITY:
-- For "dining": NEVER mention business, clients, meetings, colleagues, or work. Use phrases like "birthday dinner", "date night", "catching up with friends", "weekend brunch"
-- For "business_meal": ALWAYS explicitly mention clients, business meeting, work event, networking, or professional context
-- At higher scales, the distinction may require careful reading, but the correct answer should still be determinable
-- The description should make the category determinable to a careful reader
+### AMBIGUITY REQUIREMENTS:
 
-Category definitions:
-- business_meal: Work-related dining - MUST mention clients, business purpose, work meeting, or professional networking
-- groceries: Food shopping at supermarkets for home use
-- transportation: Travel expenses (gas, rideshare, parking, car-related)
-- utilities: Home services (electricity, water, internet, phone)
-- entertainment: Leisure activities (movies, concerts, streaming, hobbies)
-- health: Medical and wellness (gym, pharmacy, doctor visits)
-- dining: Personal restaurant/cafe visits - MUST be clearly personal/social (friends, family, dates), NO work context
-- shopping: Retail purchases (clothing, household items, online shopping)
+1. **INCLUDE SIGNALS FOR BOTH CATEGORIES**
+   - Add elements that suggest ${category}
+   - AND elements that suggest ${confusableWith[0] || 'another category'}
+   - The scenario should make a reader pause and think
 
-Return ONLY valid JSON in this format:
+2. **${category.toUpperCase()} WINS BY THE "PRIMARY PURPOSE" RULE**
+   - When in doubt, categorize by the PRIMARY purpose of the transaction
+   - Even if secondary activities are present, PRIMARY determines category
+   - Make ${category} the PRIMARY purpose (but don't make it obvious)
+
+3. **MERCHANT NAMES: Neutral and varied**
+   - Names should NOT favor either category
+   - Use unique names each time: Crossroads, Summit Place, Chen's Corner, etc.
+   - NEVER: ${this._getMerchantBannedWords(category)}
+
+### THE ${category.toUpperCase()} RULE:
+${this._getCategorySubtleties(category)}
+
+### THE DISTINCTION TO TEST:
+${this._getDistinctionRule(category, confusableWith[0])}
+
+### TRICKY SCENARIO PATTERNS - USE THESE:
+
+**${category === 'business_meal' ? 'USE THIS PATTERN:' : 'business_meal pattern:'}**
+"Coffee with Sam at Pine Street. Talked about his vacation, the weather, his dog. At the end he slipped me the contract revisions to review."
+TRICK: 95% personal, 5% business at the end = business_meal. Most AI says dining.
+
+**${category === 'dining' ? 'USE THIS PATTERN:' : 'dining pattern:'}**
+"Lunch with my project lead. She mentioned she's stressed about deadlines but we didn't discuss any work - just her upcoming wedding plans."
+TRICK: "project lead" screams business, but no business conducted = dining.
+
+**${category === 'groceries' ? 'USE THIS PATTERN:' : 'groceries pattern:'}**
+"Target trip. New bath towels, a lamp, cleaning supplies. Oh and chicken, rice, and veggies for meal prep this week."
+TRICK: More non-food items, but food for home prep is the deciding factor = groceries.
+
+**${category === 'shopping' ? 'USE THIS PATTERN:' : 'shopping pattern:'}**
+"Went to get milk and bread but they had PlayStation 5 in stock finally. Grabbed that plus the usual groceries."
+TRICK: Went for groceries but main purchase was electronics = shopping.
+
+**${category === 'transportation' ? 'USE THIS PATTERN:' : 'transportation pattern:'}**
+"Stopped at QuickMart. Monster energy, chips, magazine, gum. Filled up too since I was already there."
+TRICK: Lots of purchases mentioned first, fuel almost incidental = transportation.
+
+**${category === 'entertainment' ? 'USE THIS PATTERN:' : 'entertainment pattern:'}**
+"Dinner and a show at City Hall venue. The prix fixe menu was $85. Amazing jazz performance."
+TRICK: Expensive dinner is prominent, but show is primary purpose = entertainment.
+
+**${category === 'health' ? 'USE THIS PATTERN:' : 'health pattern:'}**
+"Dropped by the wellness store. Protein powder, vitamins, new running shoes. Also picked up my prescription refill."
+TRICK: Lots of retail wellness items, but prescription = health.
+
+**${category === 'utilities' ? 'USE THIS PATTERN:' : 'utilities pattern:'}**
+"Set up the new streaming package through Verizon. It includes live TV, faster internet, and the sports tier."
+TRICK: Sounds like entertainment, but bundled with internet = utilities.
+
+### DIFFICULTY CALIBRATION - TARGET: 70% ACCURACY FOR GENERIC AI
+
+The scenario should be hard enough that a generic AI model would get it WRONG 30% of the time.
+
+**MAKE IT HARDER BY:**
+1. Use language that STRONGLY suggests ${confusableWith[0]}
+2. Put the ${category} signal at the very END, almost as an afterthought
+3. Make the ${confusableWith[0]} signals more numerous and prominent
+4. The ${category} signal should be just ONE brief phrase that tips the balance
+
+**EXAMPLE OF 70% DIFFICULTY:**
+For business_meal: "Grabbed lunch with Alex at Pine Street. Talked about the game, his kids, the traffic. Oh, and he gave me the contract draft to look over."
+(99% personal chat, 1% business = business_meal, but most AI would say dining)
+
+### RETURN JSON:
+
 {
-  "merchant": "Merchant Name",
-  "amount": 45.50,
-  "description": "Transaction description that resolves to the category when analyzed",
+  "merchant": "Unique neutral name",
+  "amount": number,
+  "description": "2-3 sentences with signals for BOTH categories, but ${category} is primary",
   "category": "${category}",
-  "reasoning": "Brief explanation why this is ${category} and what context clues indicate this"
+  "reasoning": "Why ${category} wins as the PRIMARY purpose despite the ${confusableWith[0]} signals"
 }`;
+    }
+
+    /**
+     * Get subtle category definitions that highlight edge cases
+     */
+    _getCategorySubtleties(category) {
+        const subtleties = {
+            'business_meal': `A meal where BUSINESS IS CONDUCTED - not just eating near work or with coworkers.
+MUST HAVE: discussion of work matters, deals, projects, budgets, client relationships, formal meetings.
+NOT business_meal: casual lunch with a coworker talking about personal life, eating at a work cafeteria.
+CRITICAL: The meal's PRIMARY PURPOSE must be business, not incidental work chat.`,
+
+            'dining': `Personal eating out - restaurants, cafes, takeout for non-work purposes.
+MUST HAVE: personal context (friends, family, solo, date, celebration) OR absence of any work context.
+NOT dining: any meal where business is conducted, even if it feels casual.
+CRITICAL: If work topics come up but aren't the PURPOSE, it's still dining. If business is conducted, it's business_meal.`,
+
+            'groceries': `Buying food/ingredients for home preparation.
+MUST HAVE: purchasing food items to cook/consume at home, weekly shopping, stocking up.
+NOT groceries: buying a prepared meal to eat now (dining), buying non-food items (shopping).
+CRITICAL: Focus on WHAT is being purchased (food for home) not WHERE (grocery stores sell non-food too).`,
+
+            'shopping': `Purchasing non-food retail goods.
+MUST HAVE: clothing, electronics, home goods, household items, online orders for products.
+NOT shopping: food purchases (groceries/dining), entertainment subscriptions, services.
+CRITICAL: Physical or digital PRODUCTS that aren't food.`,
+
+            'entertainment': `Leisure activities, experiences, and entertainment services.
+MUST HAVE: movies, concerts, events, streaming subscriptions, games, hobbies, recreational activities.
+NOT entertainment: purchasing hobby equipment (shopping), eating at entertainment venues without the entertainment.
+CRITICAL: Paying for an EXPERIENCE or entertainment service, not a product.`,
+
+            'health': `Medical, wellness, and fitness expenses.
+MUST HAVE: medical services, prescriptions, gym/fitness memberships, therapy, health treatments.
+NOT health: buying general supplements at a store (shopping), eating healthy food (groceries/dining).
+CRITICAL: Medical services, fitness memberships, or prescribed treatments.`,
+
+            'transportation': `Vehicle and travel expenses.
+MUST HAVE: fuel, parking, rideshare, public transit, vehicle maintenance, tolls.
+NOT transportation: buying snacks at a gas station (if no fuel), buying car accessories (shopping).
+CRITICAL: The PRIMARY purpose is travel/vehicle operation, not incidental purchases.`,
+
+            'utilities': `Home service bills and payments.
+MUST HAVE: electricity, water, internet, phone, gas utility, trash services.
+NOT utilities: buying equipment for utilities (shopping), paying for mobile apps (entertainment).
+CRITICAL: Recurring home service payments.`
+        };
+
+        return subtleties[category] || `Standard ${category} transaction with clear indicators.`;
+    }
+
+    /**
+     * Get banned phrases that make categorization too obvious
+     */
+    _getBannedPhrases(category) {
+        const banned = {
+            'business_meal': 'client, meeting, conference, proposal, business lunch, networking event, work dinner, colleague lunch',
+            'dining': 'restaurant, dinner, lunch out, brunch, cafe meal, eating out',
+            'groceries': 'grocery store, supermarket, food shopping, weekly groceries, produce section',
+            'shopping': 'bought clothes, purchased items, retail store, shopping mall, ordered online',
+            'entertainment': 'movie theater, concert tickets, streaming subscription, video games, amusement park',
+            'health': 'doctor visit, pharmacy, medical appointment, gym membership, clinic',
+            'transportation': 'gas station, filled up tank, uber ride, parking meter, toll road, transit pass',
+            'utilities': 'electric bill, water bill, internet service, phone plan, utility payment'
+        };
+        return banned[category] || 'obvious category indicators';
+    }
+
+    /**
+     * Get the key distinction rule between this category and its confusable pair
+     */
+    _getDistinctionRule(category, confusableWith) {
+        const rules = {
+            'business_meal': {
+                'dining': 'business_meal = business is CONDUCTED (deals, planning, work assignments). dining = just eating with people, even coworkers, with NO business conducted.',
+                'entertainment': 'business_meal = eating + business. entertainment = activities/experiences without business.'
+            },
+            'dining': {
+                'business_meal': 'dining = personal meal with NO business conducted. Even mentioning work stress is still dining. business_meal = actual work discussion/decisions.',
+                'entertainment': 'dining = eating is the main event. entertainment = activity (movie, concert) is primary.',
+                'groceries': 'dining = eating prepared food NOW at a venue. groceries = buying food to prepare AT HOME.'
+            },
+            'groceries': {
+                'shopping': 'groceries = PRIMARY purchase is food for home prep. shopping = PRIMARY purchase is non-food items.',
+                'dining': 'groceries = buying ingredients for home cooking. dining = buying prepared food to eat now.'
+            },
+            'shopping': {
+                'groceries': 'shopping = PRIMARY purchase is non-food retail (clothes, electronics, home goods). Even at a grocery store, if main item is non-food = shopping.',
+                'entertainment': 'shopping = buying PRODUCTS. entertainment = paying for EXPERIENCES/services.',
+                'health': 'shopping = general retail items. health = medical services, prescriptions, or fitness memberships.'
+            },
+            'entertainment': {
+                'dining': 'entertainment = activity/experience is primary (concert, movie, streaming). dining = food is the main event.',
+                'shopping': 'entertainment = paying for experiences/subscriptions. shopping = paying for products.',
+                'health': 'entertainment = recreational activities. health = wellness services or medical.'
+            },
+            'health': {
+                'shopping': 'health = medical services, prescriptions, professional treatments. shopping = buying products even if wellness-related (unless prescription).',
+                'entertainment': 'health = medical/wellness services. entertainment = recreational activities.'
+            },
+            'transportation': {
+                'shopping': 'transportation = fuel/parking/transit is PRIMARY purpose. shopping = buying products is primary (even at a gas station).',
+                'entertainment': 'transportation = getting somewhere. entertainment = the activity at the destination.'
+            },
+            'utilities': {
+                'shopping': 'utilities = recurring home service bills (electric, water, internet). shopping = one-time product purchases.',
+                'entertainment': 'utilities = home services. entertainment = streaming/gaming subscriptions (entertainment, not utility).'
+            }
+        };
+
+        const categoryRules = rules[category] || {};
+        return categoryRules[confusableWith] || `${category} has specific characteristics that distinguish it from ${confusableWith}.`;
+    }
+
+    /**
+     * Get banned words for merchant names that reveal the category
+     */
+    _getMerchantBannedWords(category) {
+        const banned = {
+            'business_meal': 'Boardroom, Corporate, Executive, Business, Conference, Office, Professional',
+            'dining': 'Restaurant, Diner, Cafe, Bistro, Grill, Kitchen, Eatery, Food',
+            'groceries': 'Grocery, Market, Supermarket, Foods, Fresh, Produce, Mart',
+            'shopping': 'Mall, Outlet, Shop, Store, Retail, Goods, Depot',
+            'entertainment': 'Theater, Cinema, Games, Fun, Entertainment, Play, Arcade',
+            'health': 'Health, Medical, Clinic, Wellness, Fitness, Gym, Pharmacy, Care',
+            'transportation': 'Gas, Fuel, Auto, Car, Transit, Transport, Parking, Station',
+            'utilities': 'Electric, Power, Energy, Water, Utility, Service, Telecom'
+        };
+        return banned[category] || 'obvious category words';
     }
 
     /**
