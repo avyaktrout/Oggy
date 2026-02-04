@@ -26,6 +26,7 @@ class ContinuousLearningLoop {
     constructor() {
         this.isRunning = false;
         this.userId = null;
+        this.sessionGeneration = 0;  // Prevents old async loops from affecting new sessions
         this.stats = {
             total_questions: 0,
             correct_answers: 0,
@@ -50,7 +51,21 @@ class ContinuousLearningLoop {
             training_interval_ms: 5000,
             practice_count_per_session: 3,
             max_difficulty_level: 5,
-            max_scale: 10  // Allow up to S10
+            max_scale: 10,  // Allow up to S10
+            // Decision maker settings
+            allow_extension: true,                    // Allow Oggy to extend training
+            extension_minutes: 3,                     // Minutes to extend per decision (within original duration)
+            max_extensions: 3,                        // Maximum number of extensions (within original duration)
+            weakness_threshold: 0.75,                 // Below this = weakness needing work
+            advantage_target: 5.0                     // Target advantage over base (%)
+        };
+
+        // Decision maker state
+        this.decisionState = {
+            extensions_used: 0,
+            weaknesses_identified: [],
+            extension_decisions: [],
+            original_stop_time: null
         };
 
         // Base difficulty progression (within each scale)
@@ -142,14 +157,19 @@ class ContinuousLearningLoop {
             starting_scale = null        // null = load from DB, or use specified scale
         } = options;
 
+        // Increment session generation - any old async loops will see this and stop
+        const myGeneration = ++this.sessionGeneration;
+
         this.userId = userId;
         this.isRunning = true;
+        this.currentGeneration = myGeneration;  // Store for this session
         this.config.questions_per_benchmark = questions_per_benchmark;
         this.config.accuracy_threshold_for_benchmark = accuracy_threshold;
         this.config.benchmark_scenario_count = benchmark_scenario_count;
         this.config.both_models_threshold_for_upgrade = upgrade_threshold;
         this.config.training_interval_ms = training_interval_ms;
         this.config.practice_count_per_session = practice_count;
+        this.config.duration_minutes = duration_minutes;  // Store for time limit enforcement
 
         // Load or set scale and difficulty level
         let { scale, level } = await this._loadScaleAndLevel(userId, starting_scale, starting_difficulty);
@@ -237,6 +257,10 @@ class ContinuousLearningLoop {
      * Main learning loop
      */
     async _runLoop(stopTime) {
+        // Store original stop time for decision maker
+        this.decisionState.original_stop_time = stopTime;
+        let currentStopTime = stopTime;
+
         // Start self-driven learning
         selfDrivenLearning.start(this.userId, {
             interval: this.config.training_interval_ms,
@@ -244,12 +268,49 @@ class ContinuousLearningLoop {
             enabled: true
         });
 
-        while (this.isRunning) {
-            // Check if we should stop
-            if (stopTime && Date.now() >= stopTime) {
-                logger.info('Continuous learning loop reached duration limit');
-                this.stop();
-                break;
+        // Capture generation for this loop instance
+        const loopGeneration = this.currentGeneration;
+
+        while (this.isRunning && this.currentGeneration === loopGeneration) {
+            const now = Date.now();
+            const elapsedSeconds = Math.floor((now - this.stats.session_start) / 1000);
+
+            // Check if we should stop (or extend)
+            if (currentStopTime && now >= currentStopTime) {
+                logger.info('⏰ Timer expired - calling decision maker', {
+                    elapsed_seconds: elapsedSeconds,
+                    currentStopTime: new Date(currentStopTime).toISOString(),
+                    now: new Date(now).toISOString()
+                });
+                // Only act if we're still the current session
+                if (this.currentGeneration !== loopGeneration) {
+                    logger.info('Old session loop detected - exiting without affecting current session');
+                    break;
+                }
+
+                // Run decision maker to see if we should extend
+                const decision = await this._makeExtensionDecision();
+
+                if (decision.extend) {
+                    // Extend the session
+                    currentStopTime = Date.now() + (this.config.extension_minutes * 60 * 1000);
+                    this.decisionState.extensions_used++;
+                    this.decisionState.extension_decisions.push(decision);
+
+                    logger.info('🧠 OGGY DECISION: Extending training session', {
+                        reason: decision.reason,
+                        weaknesses: decision.weaknesses,
+                        extensions_used: this.decisionState.extensions_used,
+                        new_end_time: new Date(currentStopTime).toISOString()
+                    });
+                } else {
+                    logger.info('🧠 OGGY DECISION: Training complete', {
+                        reason: decision.reason,
+                        final_stats: this.getStats()
+                    });
+                    this.stop();
+                    break;
+                }
             }
 
             // Wait for training progress
@@ -300,8 +361,18 @@ class ContinuousLearningLoop {
             selfDrivenLearning.stop();
 
             try {
+                // Capture current generation before async benchmark
+                const benchmarkGeneration = this.currentGeneration;
+
                 // Generate a new benchmark at current difficulty
                 const benchmarkResult = await this._generateAndRunBenchmark();
+
+                // Check if we're still the current session before updating stats
+                if (this.currentGeneration !== benchmarkGeneration) {
+                    logger.info('Session changed during benchmark - discarding results');
+                    return;  // Don't affect the new session's stats
+                }
+
                 this.stats.benchmark_results.push(benchmarkResult);
                 this.stats.benchmarks_generated++;
 
@@ -505,6 +576,157 @@ class ContinuousLearningLoop {
             scale_name: difficultyConfig.scale_name,
             user_id: this.userId
         });
+    }
+
+    /**
+     * 🧠 OGGY DECISION MAKER
+     * Analyzes current performance and decides whether to extend training
+     * Returns: { extend: boolean, reason: string, weaknesses: array }
+     */
+    async _makeExtensionDecision() {
+        // Check if extensions are allowed
+        if (!this.config.allow_extension) {
+            return { extend: false, reason: 'Extensions disabled', weaknesses: [] };
+        }
+
+        // Check if we've used max extensions
+        if (this.decisionState.extensions_used >= this.config.max_extensions) {
+            return { extend: false, reason: 'Maximum extensions reached', weaknesses: [] };
+        }
+
+        // TIME LIMIT CHECK - cannot extend beyond original duration_minutes
+        const elapsedMs = Date.now() - this.stats.session_start;
+        const maxDurationMs = this.config.duration_minutes * 60 * 1000;
+        if (elapsedMs >= maxDurationMs) {
+            logger.warn('🛑 TIME LIMIT REACHED - cannot extend beyond original duration', {
+                elapsed_minutes: (elapsedMs / 60000).toFixed(1),
+                duration_minutes: this.config.duration_minutes,
+                extensions_used: this.decisionState.extensions_used
+            });
+            return { extend: false, reason: `Time limit of ${this.config.duration_minutes} minutes reached`, weaknesses: [] };
+        }
+
+        // Analyze benchmark results to identify weaknesses
+        const analysis = this._analyzePerformance();
+
+        // Decision criteria:
+        // 1. If no benchmarks yet, extend to get at least one
+        // 2. If Oggy has negative advantage, extend to improve
+        // 3. If there are category weaknesses, extend to address them
+        // 4. If training accuracy is below threshold, extend
+
+        let shouldExtend = false;
+        let reasons = [];
+
+        // Criterion 1: Need at least one benchmark
+        if (this.stats.benchmarks_generated === 0) {
+            shouldExtend = true;
+            reasons.push('No benchmarks completed yet - need evaluation data');
+        }
+
+        // Criterion 2: Oggy underperforming vs Base
+        if (analysis.avg_advantage < 0) {
+            shouldExtend = true;
+            reasons.push(`Oggy underperforming Base by ${Math.abs(analysis.avg_advantage).toFixed(1)}%`);
+        }
+
+        // Criterion 3: Category-specific weaknesses
+        if (analysis.weaknesses.length > 0) {
+            shouldExtend = true;
+            reasons.push(`Weaknesses in: ${analysis.weaknesses.join(', ')}`);
+        }
+
+        // Criterion 4: Recent benchmark performance below target
+        if (analysis.recent_accuracy < this.config.weakness_threshold) {
+            shouldExtend = true;
+            reasons.push(`Recent accuracy ${(analysis.recent_accuracy * 100).toFixed(1)}% below ${(this.config.weakness_threshold * 100)}% target`);
+        }
+
+        // If Oggy is doing well, no need to extend
+        if (analysis.avg_advantage >= this.config.advantage_target && analysis.weaknesses.length === 0) {
+            return {
+                extend: false,
+                reason: `Target achieved: ${analysis.avg_advantage.toFixed(1)}% advantage, no weaknesses`,
+                weaknesses: []
+            };
+        }
+
+        // Store weaknesses for targeted training
+        this.decisionState.weaknesses_identified = analysis.weaknesses;
+
+        return {
+            extend: shouldExtend,
+            reason: reasons.join('; ') || 'Training complete - targets met',
+            weaknesses: analysis.weaknesses,
+            analysis: analysis
+        };
+    }
+
+    /**
+     * Analyze performance across all benchmarks
+     */
+    _analyzePerformance() {
+        const results = this.stats.benchmark_results;
+
+        if (results.length === 0) {
+            return {
+                avg_oggy: 0,
+                avg_base: 0,
+                avg_advantage: 0,
+                weaknesses: [],
+                recent_accuracy: 0,
+                trends: []
+            };
+        }
+
+        // Calculate averages
+        const totalOggy = results.reduce((sum, r) => sum + r.oggy_accuracy, 0);
+        const totalBase = results.reduce((sum, r) => sum + r.base_accuracy, 0);
+        const avgOggy = totalOggy / results.length;
+        const avgBase = totalBase / results.length;
+        const avgAdvantage = results.reduce((sum, r) => sum + r.advantage, 0) / results.length;
+
+        // Recent performance (last benchmark)
+        const recentResult = results[results.length - 1];
+        const recentAccuracy = recentResult.oggy_accuracy;
+
+        // Identify weaknesses based on where Oggy underperformed
+        const weaknesses = [];
+
+        // Check if Oggy lost to Base in recent benchmarks
+        const recentLosses = results.slice(-3).filter(r => r.oggy_accuracy < r.base_accuracy);
+        if (recentLosses.length >= 2) {
+            weaknesses.push('consistency (lost to Base multiple times)');
+        }
+
+        // Check for declining performance
+        if (results.length >= 2) {
+            const lastTwo = results.slice(-2);
+            if (lastTwo[1].oggy_accuracy < lastTwo[0].oggy_accuracy - 0.05) {
+                weaknesses.push('declining accuracy trend');
+            }
+        }
+
+        // Check for low absolute accuracy
+        if (recentAccuracy < 0.70) {
+            weaknesses.push('low overall accuracy');
+        }
+
+        // Check for validation issues (indicates labeling problems)
+        const avgValidationIssues = results.reduce((sum, r) => sum + (r.validation_issues_found || 0), 0) / results.length;
+        if (avgValidationIssues > 10) {
+            weaknesses.push('high validation issues (ambiguous scenarios)');
+        }
+
+        return {
+            avg_oggy: avgOggy,
+            avg_base: avgBase,
+            avg_advantage: avgAdvantage,
+            weaknesses: weaknesses,
+            recent_accuracy: recentAccuracy,
+            benchmark_count: results.length,
+            recent_advantage: recentResult.advantage
+        };
     }
 
     /**
