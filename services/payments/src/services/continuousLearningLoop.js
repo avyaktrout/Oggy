@@ -18,6 +18,8 @@ const selfDrivenLearning = require('./selfDrivenLearning');
 const sealedBenchmarkEvaluator = require('./sealedBenchmarkEvaluator');
 const sealedBenchmarkGenerator = require('./sealedBenchmarkGenerator');
 const benchmarkValidator = require('./benchmarkValidator');
+const sessionCleanupManager = require('./sessionCleanupManager');
+const serviceHealthManager = require('./serviceHealthManager');
 const logger = require('../utils/logger');
 const { query } = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
@@ -180,6 +182,19 @@ class ContinuousLearningLoop {
         this.config.practice_count_per_session = practice_count;
         this.config.duration_minutes = duration_minutes;  // Store for time limit enforcement
 
+        // Prepare session - reset circuit breakers and run health checks
+        const readiness = await sessionCleanupManager.prepareNewSession(userId);
+        if (!readiness.healthy) {
+            logger.warn('Starting with degraded services', {
+                unhealthy: readiness.unhealthyServices,
+                circuitBreakersReset: readiness.circuitBreakersReset
+            });
+        } else {
+            logger.info('Session prepared - all services healthy', {
+                circuitBreakersReset: readiness.circuitBreakersReset
+            });
+        }
+
         // Load or set scale and difficulty level
         let { scale, level } = await this._loadScaleAndLevel(userId, starting_scale, starting_difficulty);
 
@@ -232,10 +247,18 @@ class ContinuousLearningLoop {
     /**
      * Stop the learning loop
      */
-    stop() {
+    async stop() {
         this.isRunning = false;
         this.stats.session_duration_ms = Date.now() - this.stats.session_start;
         selfDrivenLearning.stop();
+
+        // Cleanup session - log completion and clear transient state
+        try {
+            await sessionCleanupManager.cleanupSession(this.userId, this.getStats());
+        } catch (error) {
+            logger.warn('Session cleanup failed', { error: error.message });
+        }
+
         logger.info('Continuous learning loop stopped', this.getStats());
     }
 
@@ -457,6 +480,16 @@ class ContinuousLearningLoop {
             selfDrivenLearning.stop();
 
             try {
+                // Pre-benchmark health check - ensure memory service is available
+                const ready = await serviceHealthManager.ensureReadyForBenchmark();
+                if (!ready.memoryService) {
+                    logger.warn('Memory service unhealthy before benchmark - resetting circuit breakers', {
+                        memoryStatus: ready.memoryService,
+                        openBreakers: ready.openCircuitBreakers
+                    });
+                    await serviceHealthManager.resetHealthyCircuitBreakers();
+                }
+
                 // Capture current generation before async benchmark
                 const benchmarkGeneration = this.currentGeneration;
 

@@ -238,7 +238,7 @@ class SealedBenchmarkEvaluator {
             const memoryResult = await query(`
                 SELECT COUNT(*) as count
                 FROM memory_cards
-                WHERE user_id = $1
+                WHERE owner_type = 'user' AND owner_id = $1
             `, [user_id]);
 
             return {

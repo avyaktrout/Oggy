@@ -10,7 +10,7 @@ const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const { query } = require('../utils/db');
 const logger = require('../utils/logger');
-const CircuitBreaker = require('../utils/circuitBreaker');
+const circuitBreakerRegistry = require('../utils/circuitBreakerRegistry');
 const retryHandler = require('../utils/retry');
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -24,14 +24,13 @@ const OPENAI_MODEL = 'gpt-4o-mini';
  */
 class SealedBenchmarkGenerator {
     constructor() {
-        this.claudeCircuitBreaker = new CircuitBreaker({
-            name: 'sealed-benchmark-claude',
+        // Use registry to get shared circuit breaker instances
+        this.claudeCircuitBreaker = circuitBreakerRegistry.getOrCreate('sealed-benchmark-claude', {
             failureThreshold: 3,
             timeout: 30000
         });
 
-        this.openaiCircuitBreaker = new CircuitBreaker({
-            name: 'sealed-benchmark-openai',
+        this.openaiCircuitBreaker = circuitBreakerRegistry.getOrCreate('sealed-benchmark-openai', {
             failureThreshold: 3,
             timeout: 30000
         });

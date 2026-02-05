@@ -614,6 +614,8 @@ class SelfDrivenLearning {
                                     practice_result: correct ? 'correct' : 'incorrect'
                                 },
                                 intent: {
+                                    event_type: 'user_feedback',
+                                    feedback: correct ? 'confirmed' : 'corrected',
                                     learning_mode: 'self_driven',
                                     timestamp: new Date().toISOString()
                                 }

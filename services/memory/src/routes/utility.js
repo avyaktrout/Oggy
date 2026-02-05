@@ -227,7 +227,9 @@ module.exports = (pool, redisClient) => {
       // Apply patch (simple version for Week 1)
       const utility_delta = (patch || {}).utility_delta || 0;
       const new_utility_weight = before_state.utility_weight + utility_delta;
-      const new_version = before_state.version + 1;
+      // Parse version as integer to avoid string concatenation bug
+      // (pg driver returns BIGINT as string, and "1" + 1 = "11" in JS)
+      const new_version = parseInt(before_state.version, 10) + 1;
 
       // Update card
       const updateResult = await client.query(

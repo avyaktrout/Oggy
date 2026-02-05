@@ -10,7 +10,7 @@ const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const { query } = require('../utils/db');
 const logger = require('../utils/logger');
-const CircuitBreaker = require('../utils/circuitBreaker');
+const circuitBreakerRegistry = require('../utils/circuitBreakerRegistry');
 const retryHandler = require('../utils/retry');
 const { adaptiveDifficultyScaler, DIFFICULTY_TIERS } = require('./adaptiveDifficultyScaler');
 
@@ -19,8 +19,8 @@ const OPENAI_MODEL = 'gpt-4o-mini';
 
 class TessaAssessmentGenerator {
     constructor() {
-        this.openaiCircuitBreaker = new CircuitBreaker({
-            name: 'tessa-openai',
+        // Use registry to get shared circuit breaker instance
+        this.openaiCircuitBreaker = circuitBreakerRegistry.getOrCreate('tessa-openai', {
             failureThreshold: 3,
             timeout: 30000
         });

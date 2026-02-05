@@ -1,6 +1,11 @@
 /**
  * Circuit Breaker
  * Prevents cascading failures by stopping requests to failing services
+ *
+ * Features:
+ * - Auto-registers with CircuitBreakerRegistry for central management
+ * - Three states: CLOSED (normal), OPEN (failing), HALF_OPEN (testing)
+ * - Configurable failure threshold and timeout
  */
 
 const logger = require('./logger');
@@ -16,6 +21,12 @@ class CircuitBreaker {
         this.failureCount = 0;
         this.successCount = 0;
         this.nextAttempt = Date.now();
+
+        // Auto-register with registry (unless explicitly skipped to avoid circular dependency)
+        if (!options._skipRegistry) {
+            const registry = require('./circuitBreakerRegistry');
+            registry.register(this.name, this);
+        }
     }
 
     async execute(fn) {
@@ -78,12 +89,44 @@ class CircuitBreaker {
         };
     }
 
+    /**
+     * Get full state including configuration
+     * @returns {object} Complete state and config
+     */
+    getFullState() {
+        return {
+            name: this.name,
+            state: this.state,
+            failureCount: this.failureCount,
+            successCount: this.successCount,
+            nextAttempt: this.nextAttempt,
+            nextAttemptIn: this.state === 'OPEN'
+                ? Math.max(0, this.nextAttempt - Date.now())
+                : null,
+            config: {
+                failureThreshold: this.failureThreshold,
+                successThreshold: this.successThreshold,
+                timeout: this.timeout
+            }
+        };
+    }
+
     reset() {
         this.state = 'CLOSED';
         this.failureCount = 0;
         this.successCount = 0;
         this.nextAttempt = Date.now();
         logger.info(`Circuit breaker ${this.name} manually reset to CLOSED`);
+    }
+
+    /**
+     * Force close without logging (for session cleanup)
+     */
+    forceClose() {
+        this.state = 'CLOSED';
+        this.failureCount = 0;
+        this.successCount = 0;
+        this.nextAttempt = Date.now();
     }
 }
 

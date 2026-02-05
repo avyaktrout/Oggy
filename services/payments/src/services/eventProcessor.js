@@ -11,16 +11,15 @@ const { getEventTypeConfig, hasValidEvidence } = require('../utils/eventTypes');
 const axios = require('axios');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
-const CircuitBreaker = require('../utils/circuitBreaker');
+const circuitBreakerRegistry = require('../utils/circuitBreakerRegistry');
 const retryHandler = require('../utils/retry');
 
 const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory:3000';
 
 class AppEventProcessor {
     constructor() {
-        // Circuit breaker for memory service calls
-        this.memoryCircuitBreaker = new CircuitBreaker({
-            name: 'memory-service-events',
+        // Use registry to get shared circuit breaker instance
+        this.memoryCircuitBreaker = circuitBreakerRegistry.getOrCreate('memory-service-events', {
             failureThreshold: 5,
             timeout: 60000
         });

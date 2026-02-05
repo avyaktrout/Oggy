@@ -24,6 +24,7 @@ const memoryPruningRouter = require('./routes/memoryPruning');
 const trainingRouter = require('./routes/training');
 const benchmarkDrivenLearningRouter = require('./routes/benchmarkDrivenLearning');
 const continuousLearningRouter = require('./routes/continuousLearning');
+const serviceHealthRouter = require('./routes/serviceHealth');
 
 const auditChecker = require('./utils/auditChecker');
 
@@ -223,6 +224,9 @@ app.use('/v0/benchmark-learning', benchmarkDrivenLearningRouter);
 
 // Continuous learning routes (long-running self-driven learning with auto-benchmark)
 app.use('/v0/continuous-learning', continuousLearningRouter);
+
+// Service health and circuit breaker management routes
+app.use('/v0/service-health', serviceHealthRouter);
 
 // Event processing endpoint (for manual trigger or webhook)
 app.post('/v0/process-events', async (req, res) => {

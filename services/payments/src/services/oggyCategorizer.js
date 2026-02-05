@@ -8,7 +8,7 @@
 const axios = require('axios');
 const logger = require('../utils/logger');
 const retryHandler = require('../utils/retry');
-const CircuitBreaker = require('../utils/circuitBreaker');
+const circuitBreakerRegistry = require('../utils/circuitBreakerRegistry');
 const { costGovernor } = require('../middleware/costGovernor');
 const categoryRulesManager = require('./categoryRulesManager');
 
@@ -18,14 +18,13 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
 class OggyCategorizer {
     constructor() {
-        this.memoryCircuitBreaker = new CircuitBreaker({
-            name: 'memory-service',
+        // Use registry to get shared circuit breaker instances
+        this.memoryCircuitBreaker = circuitBreakerRegistry.getOrCreate('memory-service', {
             failureThreshold: 5,
             timeout: 60000
         });
 
-        this.openaiCircuitBreaker = new CircuitBreaker({
-            name: 'openai-api',
+        this.openaiCircuitBreaker = circuitBreakerRegistry.getOrCreate('openai-api', {
             failureThreshold: 3,
             timeout: 30000
         });

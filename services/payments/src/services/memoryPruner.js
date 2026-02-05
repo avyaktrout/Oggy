@@ -352,7 +352,386 @@ class MemoryPruner {
     }
 }
 
-// Singleton instance
-const memoryPruner = new MemoryPruner();
+/**
+ * Data Pruning Manager
+ * Prunes old data from database tables to prevent unbounded growth
+ *
+ * Tables managed:
+ * - retrieval_traces: Audit trail of memory retrievals
+ * - app_events: Practice and training events
+ * - sealed_benchmark_results: Historical benchmark results
+ * - memory_audit_events: Card modification history
+ */
+class DataPruningManager {
+    constructor() {
+        this.pruneConfig = {
+            retrieval_traces: { maxAgeDays: 14, batchSize: 1000 },
+            app_events: { maxAgeDays: 7, batchSize: 500 },
+            sealed_benchmark_results: { maxAgeDays: 30, batchSize: 100 },
+            memory_audit_events: { maxAgeDays: 14, batchSize: 1000 }
+        };
+    }
 
-module.exports = memoryPruner;
+    /**
+     * Get row counts for all prunable tables
+     * @returns {object} Row counts and estimates
+     */
+    async getDatabaseStats() {
+        const stats = {};
+
+        try {
+            // retrieval_traces (in memory database)
+            const traces = await query(`
+                SELECT COUNT(*) as count,
+                       MIN(ts) as oldest,
+                       MAX(ts) as newest
+                FROM retrieval_traces
+            `);
+            stats.retrieval_traces = {
+                count: parseInt(traces.rows[0]?.count || 0),
+                oldest: traces.rows[0]?.oldest,
+                newest: traces.rows[0]?.newest
+            };
+        } catch (e) {
+            stats.retrieval_traces = { count: 0, error: e.message };
+        }
+
+        try {
+            // app_events
+            const events = await query(`
+                SELECT COUNT(*) as count,
+                       MIN(ts) as oldest,
+                       MAX(ts) as newest
+                FROM app_events
+            `);
+            stats.app_events = {
+                count: parseInt(events.rows[0]?.count || 0),
+                oldest: events.rows[0]?.oldest,
+                newest: events.rows[0]?.newest
+            };
+        } catch (e) {
+            stats.app_events = { count: 0, error: e.message };
+        }
+
+        try {
+            // sealed_benchmark_results
+            const benchmarks = await query(`
+                SELECT COUNT(*) as count,
+                       MIN(tested_at) as oldest,
+                       MAX(tested_at) as newest
+                FROM sealed_benchmark_results
+            `);
+            stats.sealed_benchmark_results = {
+                count: parseInt(benchmarks.rows[0]?.count || 0),
+                oldest: benchmarks.rows[0]?.oldest,
+                newest: benchmarks.rows[0]?.newest
+            };
+        } catch (e) {
+            stats.sealed_benchmark_results = { count: 0, error: e.message };
+        }
+
+        try {
+            // memory_audit_events
+            const audits = await query(`
+                SELECT COUNT(*) as count,
+                       MIN(ts) as oldest,
+                       MAX(ts) as newest
+                FROM memory_audit_events
+            `);
+            stats.memory_audit_events = {
+                count: parseInt(audits.rows[0]?.count || 0),
+                oldest: audits.rows[0]?.oldest,
+                newest: audits.rows[0]?.newest
+            };
+        } catch (e) {
+            stats.memory_audit_events = { count: 0, error: e.message };
+        }
+
+        stats.timestamp = new Date().toISOString();
+        return stats;
+    }
+
+    /**
+     * Prune old retrieval traces
+     * @param {boolean} dryRun - If true, only report what would be deleted
+     * @returns {object} Prune results
+     */
+    async pruneRetrievalTraces(dryRun = true) {
+        const config = this.pruneConfig.retrieval_traces;
+        const cutoffDate = new Date(Date.now() - config.maxAgeDays * 24 * 60 * 60 * 1000);
+
+        try {
+            // Count rows to prune
+            const countResult = await query(`
+                SELECT COUNT(*) as count
+                FROM retrieval_traces
+                WHERE ts < $1
+            `, [cutoffDate]);
+
+            const toDelete = parseInt(countResult.rows[0]?.count || 0);
+
+            if (dryRun) {
+                return {
+                    table: 'retrieval_traces',
+                    dryRun: true,
+                    wouldDelete: toDelete,
+                    cutoffDate: cutoffDate.toISOString()
+                };
+            }
+
+            // Delete in batches
+            let deleted = 0;
+            while (deleted < toDelete) {
+                const result = await query(`
+                    DELETE FROM retrieval_traces
+                    WHERE trace_id IN (
+                        SELECT trace_id FROM retrieval_traces
+                        WHERE ts < $1
+                        LIMIT $2
+                    )
+                `, [cutoffDate, config.batchSize]);
+
+                deleted += result.rowCount || 0;
+
+                if (result.rowCount === 0) break;
+            }
+
+            logger.info('Pruned retrieval_traces', { deleted, cutoffDate });
+            return { table: 'retrieval_traces', deleted, cutoffDate: cutoffDate.toISOString() };
+        } catch (error) {
+            logger.error('Failed to prune retrieval_traces', { error: error.message });
+            return { table: 'retrieval_traces', error: error.message };
+        }
+    }
+
+    /**
+     * Prune old app events
+     * @param {boolean} dryRun - If true, only report what would be deleted
+     * @returns {object} Prune results
+     */
+    async pruneAppEvents(dryRun = true) {
+        const config = this.pruneConfig.app_events;
+        const cutoffDate = new Date(Date.now() - config.maxAgeDays * 24 * 60 * 60 * 1000);
+
+        try {
+            // Count processed events to prune
+            const countResult = await query(`
+                SELECT COUNT(*) as count
+                FROM app_events
+                WHERE ts < $1
+                  AND (processed_for_domain_knowledge = true OR processed_for_memory_substrate = true)
+            `, [cutoffDate]);
+
+            const toDelete = parseInt(countResult.rows[0]?.count || 0);
+
+            if (dryRun) {
+                return {
+                    table: 'app_events',
+                    dryRun: true,
+                    wouldDelete: toDelete,
+                    cutoffDate: cutoffDate.toISOString()
+                };
+            }
+
+            // Delete in batches
+            let deleted = 0;
+            while (deleted < toDelete) {
+                const result = await query(`
+                    DELETE FROM app_events
+                    WHERE event_id IN (
+                        SELECT event_id FROM app_events
+                        WHERE ts < $1
+                          AND (processed_for_domain_knowledge = true OR processed_for_memory_substrate = true)
+                        LIMIT $2
+                    )
+                `, [cutoffDate, config.batchSize]);
+
+                deleted += result.rowCount || 0;
+
+                if (result.rowCount === 0) break;
+            }
+
+            logger.info('Pruned app_events', { deleted, cutoffDate });
+            return { table: 'app_events', deleted, cutoffDate: cutoffDate.toISOString() };
+        } catch (error) {
+            logger.error('Failed to prune app_events', { error: error.message });
+            return { table: 'app_events', error: error.message };
+        }
+    }
+
+    /**
+     * Prune old benchmark results
+     * @param {boolean} dryRun - If true, only report what would be deleted
+     * @returns {object} Prune results
+     */
+    async pruneBenchmarkResults(dryRun = true) {
+        const config = this.pruneConfig.sealed_benchmark_results;
+        const cutoffDate = new Date(Date.now() - config.maxAgeDays * 24 * 60 * 60 * 1000);
+
+        try {
+            // Count rows to prune
+            const countResult = await query(`
+                SELECT COUNT(*) as count
+                FROM sealed_benchmark_results
+                WHERE tested_at < $1
+            `, [cutoffDate]);
+
+            const toDelete = parseInt(countResult.rows[0]?.count || 0);
+
+            if (dryRun) {
+                return {
+                    table: 'sealed_benchmark_results',
+                    dryRun: true,
+                    wouldDelete: toDelete,
+                    cutoffDate: cutoffDate.toISOString()
+                };
+            }
+
+            // Delete in batches
+            let deleted = 0;
+            while (deleted < toDelete) {
+                const result = await query(`
+                    DELETE FROM sealed_benchmark_results
+                    WHERE result_id IN (
+                        SELECT result_id FROM sealed_benchmark_results
+                        WHERE tested_at < $1
+                        LIMIT $2
+                    )
+                `, [cutoffDate, config.batchSize]);
+
+                deleted += result.rowCount || 0;
+
+                if (result.rowCount === 0) break;
+            }
+
+            logger.info('Pruned sealed_benchmark_results', { deleted, cutoffDate });
+            return { table: 'sealed_benchmark_results', deleted, cutoffDate: cutoffDate.toISOString() };
+        } catch (error) {
+            logger.error('Failed to prune sealed_benchmark_results', { error: error.message });
+            return { table: 'sealed_benchmark_results', error: error.message };
+        }
+    }
+
+    /**
+     * Prune old memory audit events
+     * @param {boolean} dryRun - If true, only report what would be deleted
+     * @returns {object} Prune results
+     */
+    async pruneMemoryAuditEvents(dryRun = true) {
+        const config = this.pruneConfig.memory_audit_events;
+        const cutoffDate = new Date(Date.now() - config.maxAgeDays * 24 * 60 * 60 * 1000);
+
+        try {
+            // Count rows to prune
+            const countResult = await query(`
+                SELECT COUNT(*) as count
+                FROM memory_audit_events
+                WHERE ts < $1
+            `, [cutoffDate]);
+
+            const toDelete = parseInt(countResult.rows[0]?.count || 0);
+
+            if (dryRun) {
+                return {
+                    table: 'memory_audit_events',
+                    dryRun: true,
+                    wouldDelete: toDelete,
+                    cutoffDate: cutoffDate.toISOString()
+                };
+            }
+
+            // Delete in batches
+            let deleted = 0;
+            while (deleted < toDelete) {
+                const result = await query(`
+                    DELETE FROM memory_audit_events
+                    WHERE event_id IN (
+                        SELECT event_id FROM memory_audit_events
+                        WHERE ts < $1
+                        LIMIT $2
+                    )
+                `, [cutoffDate, config.batchSize]);
+
+                deleted += result.rowCount || 0;
+
+                if (result.rowCount === 0) break;
+            }
+
+            logger.info('Pruned memory_audit_events', { deleted, cutoffDate });
+            return { table: 'memory_audit_events', deleted, cutoffDate: cutoffDate.toISOString() };
+        } catch (error) {
+            logger.error('Failed to prune memory_audit_events', { error: error.message });
+            return { table: 'memory_audit_events', error: error.message };
+        }
+    }
+
+    /**
+     * Run full prune on all tables
+     * @param {object} options - Prune options
+     * @returns {object} Combined prune results
+     */
+    async pruneAll(options = {}) {
+        const { dryRun = true } = options;
+
+        logger.info('Starting full data prune', { dryRun });
+
+        const results = {
+            dryRun,
+            tables: {},
+            totalDeleted: 0,
+            timestamp: new Date().toISOString()
+        };
+
+        // Prune each table
+        results.tables.retrieval_traces = await this.pruneRetrievalTraces(dryRun);
+        results.tables.app_events = await this.pruneAppEvents(dryRun);
+        results.tables.sealed_benchmark_results = await this.pruneBenchmarkResults(dryRun);
+        results.tables.memory_audit_events = await this.pruneMemoryAuditEvents(dryRun);
+
+        // Calculate totals
+        if (dryRun) {
+            results.totalWouldDelete = Object.values(results.tables)
+                .reduce((sum, t) => sum + (t.wouldDelete || 0), 0);
+        } else {
+            results.totalDeleted = Object.values(results.tables)
+                .reduce((sum, t) => sum + (t.deleted || 0), 0);
+        }
+
+        logger.info('Full data prune complete', results);
+
+        return results;
+    }
+
+    /**
+     * Update prune configuration
+     * @param {string} table - Table name
+     * @param {object} config - New configuration
+     */
+    updateConfig(table, config) {
+        if (this.pruneConfig[table]) {
+            this.pruneConfig[table] = { ...this.pruneConfig[table], ...config };
+            logger.info('Updated prune config', { table, config: this.pruneConfig[table] });
+        }
+    }
+
+    /**
+     * Get current prune configuration
+     * @returns {object} Current configuration
+     */
+    getConfig() {
+        return { ...this.pruneConfig };
+    }
+}
+
+// Singleton instances
+const memoryPruner = new MemoryPruner();
+const dataPruningManager = new DataPruningManager();
+
+module.exports = {
+    memoryPruner,
+    dataPruningManager,
+    // For backwards compatibility
+    analyzeMemoryUtility: (userId) => memoryPruner.analyzeMemoryUtility(userId),
+    pruneMemory: (userId, options) => memoryPruner.pruneMemory(userId, options),
+    enableAutoPruning: (userId, options) => memoryPruner.enableAutoPruning(userId, options)
+};
