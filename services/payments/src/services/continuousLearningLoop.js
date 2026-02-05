@@ -688,6 +688,49 @@ class ContinuousLearningLoop {
     }
 
     /**
+     * Validate that the reasoning supports the correct category
+     * Returns true if reasoning is consistent, false if contradictory
+     */
+    _isReasoningConsistent(reasoning, correctCategory, wrongPrediction) {
+        if (!reasoning) return true; // No reasoning to validate
+
+        const reasoningLower = reasoning.toLowerCase();
+
+        // Phrases that indicate what category "should" be or "wins"
+        const supportsPhrases = [
+            `${correctCategory} is correct`,
+            `${correctCategory} takes precedence`,
+            `categorized as ${correctCategory}`,
+            `${correctCategory} wins`,
+            `should be ${correctCategory}`,
+            `correctly categorized as ${correctCategory}`,
+            `this is a ${correctCategory} expense`,
+            `primary purpose.*${correctCategory}`
+        ];
+
+        // Check if reasoning actually supports the WRONG category instead
+        const contradictsCorrect = [
+            `${wrongPrediction} takes precedence`,
+            `${wrongPrediction} is correct`,
+            `should be ${wrongPrediction}`,
+            `categorized as ${wrongPrediction}`,
+            `${wrongPrediction} wins`,
+            `this is a ${wrongPrediction} expense`,
+            `primary purpose.*${wrongPrediction}`
+        ];
+
+        // If reasoning explicitly supports the wrong prediction, it's contradictory
+        for (const phrase of contradictsCorrect) {
+            const regex = new RegExp(phrase.replace('.*', '.*'), 'i');
+            if (regex.test(reasoningLower)) {
+                return false; // Reasoning contradicts the correct category
+            }
+        }
+
+        return true; // No contradiction detected
+    }
+
+    /**
      * Learn from benchmark mistakes
      * Creates memory cards encoding the corrections so Oggy improves
      */
@@ -702,12 +745,36 @@ class ContinuousLearningLoop {
         });
 
         let learned = 0;
+        let skippedContradictory = 0;
 
         for (const mistake of wrongScenarios) {
             try {
-                // Create a correction memory card
+                // Validate reasoning consistency before learning
+                const isConsistent = this._isReasoningConsistent(
+                    mistake.reasoning,
+                    mistake.correct_category,
+                    mistake.predicted_category
+                );
+
+                if (!isConsistent) {
+                    logger.warn('⚠️ Skipping contradictory correction', {
+                        merchant: mistake.merchant,
+                        stated_correct: mistake.correct_category,
+                        reasoning_suggests: mistake.predicted_category,
+                        reasoning: mistake.reasoning?.substring(0, 100)
+                    });
+                    skippedContradictory++;
+                    continue; // Don't learn from contradictory corrections
+                }
+                // Create a correction memory card with type for proper formatting
                 const cardContent = {
+                    type: 'BENCHMARK_CORRECTION',  // Used by oggyCategorizer._formatMemoryCard
                     text: `CORRECTION: "${mistake.merchant}" with "${mistake.description}" is "${mistake.correct_category}" NOT "${mistake.predicted_category}". ${mistake.reasoning || ''}`,
+                    description: mistake.description,
+                    merchant: mistake.merchant,
+                    correct_category: mistake.correct_category,
+                    wrong_prediction: mistake.predicted_category,
+                    key_distinction: mistake.reasoning || '',
                     correction: {
                         merchant: mistake.merchant,
                         description: mistake.description,
@@ -732,6 +799,7 @@ class ContinuousLearningLoop {
                         content: cardContent,
                         tags: [
                             'payments',
+                            'categorization',  // CRITICAL: Must include this for retrieval during categorization
                             'correction',
                             'benchmark_learned',
                             mistake.correct_category,
@@ -764,10 +832,11 @@ class ContinuousLearningLoop {
 
         logger.info('📚 BENCHMARK LEARNING COMPLETE', {
             mistakes_processed: wrongScenarios.length,
-            memories_created: learned
+            memories_created: learned,
+            skipped_contradictory: skippedContradictory
         });
 
-        return { learned };
+        return { learned, skipped: skippedContradictory };
     }
 
     /**

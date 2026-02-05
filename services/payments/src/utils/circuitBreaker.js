@@ -22,11 +22,41 @@ class CircuitBreaker {
         this.successCount = 0;
         this.nextAttempt = Date.now();
 
+        // Custom function to determine if an error should count as a circuit breaker failure
+        // By default, 4xx errors are NOT counted as failures (they're client errors, not service failures)
+        this.isFailure = options.isFailure || CircuitBreaker.defaultIsFailure;
+
         // Auto-register with registry (unless explicitly skipped to avoid circular dependency)
         if (!options._skipRegistry) {
             const registry = require('./circuitBreakerRegistry');
             registry.register(this.name, this);
         }
+    }
+
+    /**
+     * Default failure detection: 4xx errors are NOT service failures
+     * Only 5xx errors and network errors count as failures
+     */
+    static defaultIsFailure(error) {
+        // Network errors are failures
+        if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
+            return true;
+        }
+
+        // If it's an HTTP response error, check status code
+        if (error.response && error.response.status) {
+            // 4xx errors are client errors, NOT service failures - don't count
+            if (error.response.status >= 400 && error.response.status < 500) {
+                return false;
+            }
+            // 5xx errors are service failures - count them
+            if (error.response.status >= 500) {
+                return true;
+            }
+        }
+
+        // Other errors (no response, unknown) count as failures
+        return true;
     }
 
     async execute(fn) {
@@ -47,7 +77,16 @@ class CircuitBreaker {
             this._onSuccess();
             return result;
         } catch (error) {
-            this._onFailure();
+            // Only count as failure if isFailure returns true
+            // 4xx errors are client errors and don't indicate service problems
+            if (this.isFailure(error)) {
+                this._onFailure();
+            } else {
+                logger.debug(`Circuit breaker ${this.name} ignoring non-failure error (4xx client error)`, {
+                    status: error.response?.status,
+                    message: error.message
+                });
+            }
             throw error;
         }
     }
