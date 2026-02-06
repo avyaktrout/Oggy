@@ -193,11 +193,11 @@ class BenchmarkValidator {
 
         const flags = [];
 
-        // Check dining vs business_meal
+        // Check dining vs business_meal (require 2+ keywords to reduce false positives)
         if (correct_category === 'dining') {
             const businessKeywords = ['client', 'meeting', 'team', 'conference', 'work', 'project', 'business', 'networking', 'professional'];
             const foundBusinessWords = businessKeywords.filter(kw => descLower.includes(kw));
-            if (foundBusinessWords.length > 0) {
+            if (foundBusinessWords.length >= 2) {
                 flags.push({
                     type: 'potential_mislabel',
                     message: `Dining scenario contains business keywords: ${foundBusinessWords.join(', ')}`,
@@ -209,7 +209,7 @@ class BenchmarkValidator {
         if (correct_category === 'business_meal') {
             const personalKeywords = ['friend', 'family', 'date', 'anniversary', 'birthday', 'personal', 'catching up'];
             const foundPersonalWords = personalKeywords.filter(kw => descLower.includes(kw));
-            if (foundPersonalWords.length > 0) {
+            if (foundPersonalWords.length >= 2) {
                 flags.push({
                     type: 'potential_mislabel',
                     message: `Business meal scenario contains personal keywords: ${foundPersonalWords.join(', ')}`,
@@ -218,11 +218,11 @@ class BenchmarkValidator {
             }
         }
 
-        // Check groceries vs shopping
+        // Check groceries vs shopping (require 2+ keywords)
         if (correct_category === 'groceries') {
             const shoppingKeywords = ['clothing', 'electronics', 'home goods', 'personal care', 'accessories'];
             const foundShoppingWords = shoppingKeywords.filter(kw => descLower.includes(kw));
-            if (foundShoppingWords.length > 0) {
+            if (foundShoppingWords.length >= 2) {
                 flags.push({
                     type: 'potential_mislabel',
                     message: `Groceries scenario mentions non-food items: ${foundShoppingWords.join(', ')}`,
@@ -234,7 +234,7 @@ class BenchmarkValidator {
         if (correct_category === 'shopping') {
             const groceryKeywords = ['grocery', 'groceries', 'food', 'produce', 'vegetables', 'fruits', 'dairy', 'bread'];
             const foundGroceryWords = groceryKeywords.filter(kw => descLower.includes(kw));
-            if (foundGroceryWords.length > 0 && !descLower.includes('non-food')) {
+            if (foundGroceryWords.length >= 2 && !descLower.includes('non-food')) {
                 flags.push({
                     type: 'potential_mislabel',
                     message: `Shopping scenario mentions food/grocery items: ${foundGroceryWords.join(', ')}`,
@@ -301,42 +301,9 @@ class BenchmarkValidator {
             };
         }
 
-        // Fallback: pick the first explicit category mention
-        for (const category of categories) {
-            const token = category.replace('_', ' ');
-            const regex = new RegExp(`\\b${token}\\b`, 'i');
-            if (regex.test(text)) {
-                return {
-                    category,
-                    confidence: 0.9,
-                    reason: 'explicit_category_mention'
-                };
-            }
-        }
-
-        // Keyword-based inference (reasoning hints without explicit category names)
-        const keywordHints = [
-            { category: 'health', keywords: ['prescription', 'pharmacy', 'medication', 'doctor', 'clinic'] },
-            { category: 'transportation', keywords: ['gas', 'fuel', 'refuel', 'tank', 'rideshare', 'uber', 'lyft', 'parking'] },
-            { category: 'utilities', keywords: ['internet', 'cable', 'electric', 'electricity', 'water bill', 'phone bill'] },
-            { category: 'entertainment', keywords: ['concert', 'performance', 'show', 'venue', 'tickets'] },
-            { category: 'groceries', keywords: ['produce', 'grocery', 'groceries', 'meal prep', 'supermarket'] },
-            { category: 'shopping', keywords: ['clothing', 'electronics', 'home goods', 'retail', 'lamp', 'vacuum'] },
-            { category: 'business_meal', keywords: ['client', 'budget', 'proposal', 'meeting', 'project', 'presentation'] },
-            { category: 'dining', keywords: ['lunch', 'dinner', 'restaurant', 'cafe', 'meal'] }
-        ];
-
-        for (const hint of keywordHints) {
-            const found = hint.keywords.find(kw => text.includes(kw));
-            if (found) {
-                return {
-                    category: hint.category,
-                    confidence: 0.9,
-                    reason: `keyword:${found}`
-                };
-            }
-        }
-
+        // No strong pattern match found - do NOT use loose fallbacks
+        // (e.g., "first category mention" or keyword-based inference)
+        // as they incorrectly flip labels more often than they fix them
         return null;
     }
 

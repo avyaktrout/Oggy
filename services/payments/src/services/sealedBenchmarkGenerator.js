@@ -266,7 +266,7 @@ class SealedBenchmarkGenerator {
                     }
                 ],
                 temperature: 0.9,
-                max_tokens: 300
+                max_tokens: 600
             },
             {
                 headers: {
@@ -279,7 +279,13 @@ class SealedBenchmarkGenerator {
 
         const content = response.data.choices[0].message.content.trim();
         const jsonStr = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-        const parsed = JSON.parse(jsonStr);
+        let parsed;
+        try {
+            parsed = JSON.parse(jsonStr);
+        } catch (e) {
+            parsed = this._repairAndParseJson(content);
+            if (!parsed) throw e;
+        }
 
         return {
             merchant: parsed.merchant,
@@ -597,7 +603,7 @@ Return only the JSON object.`;
             'https://api.anthropic.com/v1/messages',
             {
                 model: ANTHROPIC_MODEL,
-                max_tokens: 500,
+                max_tokens: 1024,
                 temperature: 0.8, // Moderate creativity
                 messages: [
                     {
@@ -634,13 +640,18 @@ Return only the JSON object.`;
                     throw new Error('No JSON object found in response');
                 }
             } catch (e2) {
-                // Log the raw response for debugging
-                logger.error('Failed to parse Claude response as JSON', {
-                    raw_response: completion.substring(0, 500),
-                    error1: e1.message,
-                    error2: e2.message
-                });
-                throw new Error(`JSON parse failed: ${e2.message}`);
+                try {
+                    // Method 3: Repair common JSON issues (unescaped quotes, truncation)
+                    parsed = this._repairAndParseJson(completion);
+                    if (!parsed) throw new Error('Repair returned null');
+                } catch (e3) {
+                    logger.error('Failed to parse Claude response as JSON', {
+                        raw_response: completion.substring(0, 500),
+                        error1: e1.message,
+                        error2: e2.message
+                    });
+                    throw new Error(`JSON parse failed: ${e2.message}`);
+                }
             }
         }
 
@@ -659,6 +670,74 @@ Return only the JSON object.`;
             generator: 'claude',
             model: ANTHROPIC_MODEL
         };
+    }
+
+    /**
+     * Repair malformed JSON from LLM output.
+     * Handles: unescaped inner quotes, truncated responses.
+     */
+    _repairAndParseJson(text) {
+        const startIdx = text.indexOf('{');
+        if (startIdx === -1) return null;
+        let jsonStr = text.substring(startIdx);
+
+        // Fix unescaped quotes inside string values
+        const chars = [...jsonStr];
+        const result = [];
+        let inString = false;
+        let escaped = false;
+
+        for (let i = 0; i < chars.length; i++) {
+            if (escaped) {
+                result.push(chars[i]);
+                escaped = false;
+                continue;
+            }
+            if (chars[i] === '\\') {
+                result.push(chars[i]);
+                escaped = true;
+                continue;
+            }
+            if (chars[i] === '"') {
+                if (!inString) {
+                    inString = true;
+                    result.push('"');
+                } else {
+                    // Is this the end of the string or an inner quote?
+                    let j = i + 1;
+                    while (j < chars.length && ' \t\n\r'.includes(chars[j])) j++;
+                    const next = j < chars.length ? chars[j] : '';
+                    if (next === ':' || next === ',' || next === '}' || next === ']' || next === '') {
+                        inString = false;
+                        result.push('"');
+                    } else {
+                        result.push('\\"');
+                    }
+                }
+            } else {
+                result.push(chars[i]);
+            }
+        }
+
+        let fixed = result.join('');
+
+        // Close truncated JSON
+        if (inString) fixed += '"';
+        let braces = 0;
+        let inStr = false;
+        let esc = false;
+        for (const ch of fixed) {
+            if (esc) { esc = false; continue; }
+            if (ch === '\\') { esc = true; continue; }
+            if (ch === '"') { inStr = !inStr; continue; }
+            if (!inStr) {
+                if (ch === '{') braces++;
+                if (ch === '}') braces--;
+            }
+        }
+        while (braces > 0) { fixed += '}'; braces--; }
+
+        return JSON.parse(fixed);
     }
 
     /**

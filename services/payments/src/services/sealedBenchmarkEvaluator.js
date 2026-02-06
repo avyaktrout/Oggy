@@ -7,6 +7,7 @@
  */
 
 const { v4: uuidv4 } = require('uuid');
+const axios = require('axios');
 const { query } = require('../utils/db');
 const logger = require('../utils/logger');
 const OggyCategorizer = require('./oggyCategorizer');
@@ -43,6 +44,9 @@ class SealedBenchmarkEvaluator {
         // Capture training state at test time
         const training_state = await this._captureTrainingState(user_id);
 
+        // Wait for rate limits to clear before starting benchmark
+        const preCooldownMs = await this._waitForRateLimitCooldown();
+
         // Test Base first and measure duration to set time limit for Oggy
         const base_results = [];
         const baseStartTime = Date.now();
@@ -51,10 +55,17 @@ class SealedBenchmarkEvaluator {
             base_results.push(result);
         }
         const baseDurationMs = Date.now() - baseStartTime;
-        const safetyMarginMs = Math.max(250, Math.floor(baseDurationMs * 0.02));
-        const oggyTimeLimitMs = Math.max(0, baseDurationMs - safetyMarginMs);
 
-        // Test Oggy with a hard time limit equal to base duration
+        // Cooldown between Base and Oggy - Base depletes the rate limit bucket
+        const interCooldownMs = await this._waitForRateLimitCooldown(60000);
+
+        // Give Oggy generous time: base duration + 100% buffer + inter-cooldown
+        // Oggy faces MORE rate limiting than Base because Base depletes the bucket first,
+        // and even after the inter-cooldown, Oggy generates its own 429s during 40 calls
+        const safetyMarginMs = Math.max(60000, Math.floor(baseDurationMs * 1.0));
+        const oggyTimeLimitMs = baseDurationMs + safetyMarginMs + interCooldownMs;
+
+        // Test Oggy with generous time limit to avoid rate-limit-induced timeouts
         const oggy_results = [];
         const oggyStartTime = Date.now();
         let oggyTimedOut = false;
@@ -144,7 +155,9 @@ class SealedBenchmarkEvaluator {
             oggy_results,
             base_results,
             timing: {
+                pre_cooldown_ms: preCooldownMs,
                 base_duration_ms: baseDurationMs,
+                inter_cooldown_ms: interCooldownMs,
                 oggy_duration_ms: oggyDurationMs,
                 oggy_time_limit_ms: oggyTimeLimitMs,
                 safety_margin_ms: safetyMarginMs,
@@ -164,7 +177,9 @@ class SealedBenchmarkEvaluator {
             base_accuracy,
             advantage_percent,
             timing: {
+                pre_cooldown_ms: preCooldownMs,
                 base_duration_ms: baseDurationMs,
+                inter_cooldown_ms: interCooldownMs,
                 oggy_duration_ms: oggyDurationMs,
                 oggy_time_limit_ms: oggyTimeLimitMs,
                 safety_margin_ms: safetyMarginMs,
@@ -225,7 +240,9 @@ class SealedBenchmarkEvaluator {
             },
             training_state,
             timing: {
+                pre_cooldown_ms: preCooldownMs,
                 base_duration_ms: baseDurationMs,
+                inter_cooldown_ms: interCooldownMs,
                 oggy_duration_ms: oggyDurationMs,
                 oggy_time_limit_ms: oggyTimeLimitMs,
                 safety_margin_ms: safetyMarginMs,
@@ -284,7 +301,7 @@ class SealedBenchmarkEvaluator {
                 amount: scenario.amount,
                 description: scenario.description,
                 transaction_date: new Date().toISOString().split('T')[0]
-            }, { benchmark_mode: true, memory_mode: 'benchmark', speed_mode: 'normal' });
+            }, { benchmark_mode: true, memory_mode: 'none', speed_mode: 'normal' });
 
             const correct = suggestion.suggested_category === scenario.correct_category;
 
@@ -516,7 +533,9 @@ ${benchmark.description ? `Description: ${benchmark.description}\n` : ''}
 Type: ${benchmark.use_ood ? 'Out-of-Distribution (Claude)' : 'In-Distribution (GPT-style)'}
 Difficulty: ${benchmark.difficulty_mix}
 Total Scenarios: ${total}
+Pre-Benchmark Cooldown: ${(data.timing?.pre_cooldown_ms || 0) / 1000}s
 Base Duration: ${(data.timing?.base_duration_ms || 0) / 1000}s
+Inter-Test Cooldown: ${(data.timing?.inter_cooldown_ms || 0) / 1000}s
 Oggy Duration: ${(data.timing?.oggy_duration_ms || 0) / 1000}s
 Oggy Timed Out: ${data.timing?.oggy_timed_out ? 'YES' : 'NO'}
 
@@ -628,6 +647,73 @@ Baseline Scale:       ${training_state.baseline_scale}/100 (${training_state.sca
                 ? `Performance improved by ${improvement.advantage_change.toFixed(1)}% over ${improvement.tests_count} tests`
                 : `No significant improvement detected over ${improvement.tests_count} tests`
         };
+    }
+
+    /**
+     * Probe OpenAI API and wait until rate limits have cleared.
+     * Prevents rate-limit-depleted benchmarks from producing unfair results.
+     * @param {number} maxWaitMs - Maximum time to wait for cooldown (default 2 min)
+     * @returns {number} Total cooldown time in ms
+     */
+    async _waitForRateLimitCooldown(maxWaitMs = 120000) {
+        const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+        if (!OPENAI_API_KEY) return 0;
+
+        const startTime = Date.now();
+        let attempt = 0;
+        const baseDelay = 5000;
+        const maxDelay = 30000;
+        const CONSECUTIVE_SUCCESSES_NEEDED = 3; // Verify bucket has real capacity
+
+        while (Date.now() - startTime < maxWaitMs) {
+            try {
+                // Send multiple consecutive probes to verify rate limit bucket has capacity
+                let consecutiveSuccesses = 0;
+                for (let i = 0; i < CONSECUTIVE_SUCCESSES_NEEDED; i++) {
+                    await axios.post('https://api.openai.com/v1/chat/completions', {
+                        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+                        messages: [{ role: 'user', content: 'hi' }],
+                        max_tokens: 1
+                    }, {
+                        headers: {
+                            'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                            'Content-Type': 'application/json'
+                        },
+                        timeout: 10000
+                    });
+                    consecutiveSuccesses++;
+                }
+
+                if (attempt > 0) {
+                    logger.info('Rate limit cooldown complete', {
+                        cooldown_ms: Date.now() - startTime,
+                        attempts: attempt + 1,
+                        probes_passed: consecutiveSuccesses
+                    });
+                }
+                return Date.now() - startTime;
+            } catch (error) {
+                if (error.response && error.response.status === 429) {
+                    attempt++;
+                    const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), maxDelay);
+                    logger.info('Rate limit detected before benchmark, cooling down', {
+                        attempt,
+                        delay_ms: delay,
+                        elapsed_ms: Date.now() - startTime
+                    });
+                    await new Promise(r => setTimeout(r, delay));
+                } else {
+                    // Non-rate-limit error - proceed with benchmark
+                    return Date.now() - startTime;
+                }
+            }
+        }
+
+        logger.warn('Rate limit cooldown timed out, proceeding with benchmark', {
+            max_wait_ms: maxWaitMs,
+            attempts: attempt
+        });
+        return Date.now() - startTime;
     }
 }
 

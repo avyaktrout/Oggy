@@ -9,6 +9,7 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 const retryHandler = require('../utils/retry');
 const circuitBreakerRegistry = require('../utils/circuitBreakerRegistry');
+const correctionValidator = require('../utils/correctionValidator');
 const { costGovernor } = require('../middleware/costGovernor');
 const categoryRulesManager = require('./categoryRulesManager');
 
@@ -393,7 +394,10 @@ Respond in JSON format (no markdown, just raw JSON):
     _formatMemoryCard(content) {
         // Handle correction memories - format them as clear rules
         if (content.type === 'BENCHMARK_CORRECTION') {
-            return `RULE: "${content.description}" should be "${content.correct_category}" (NOT ${content.wrong_prediction}). ${content.key_distinction || ''}`;
+            const distinction = correctionValidator.sanitizeKeyDistinction(
+                content.key_distinction || '', content.correct_category
+            );
+            return `RULE: "${content.description}" should be "${content.correct_category}" (NOT ${content.wrong_prediction}).${distinction ? ' ' + distinction : ''}`;
         }
 
         // Handle pattern memories

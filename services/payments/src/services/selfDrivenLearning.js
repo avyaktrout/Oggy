@@ -150,70 +150,81 @@ class SelfDrivenLearning {
      * Run a single learning session
      */
     async runLearningSession() {
-        const sessionId = uuidv4();
-        const startTime = Date.now();
-
-        logger.info('Starting self-driven learning session', {
-            sessionId,
-            userId: this.userId,
-            practice_count: this.practiceCount
-        });
-
-        let sessionCorrect = 0;
-        let sessionIncorrect = 0;
-        let sessionErrors = 0;
-
-        for (let i = 0; i < this.practiceCount; i++) {
-            try {
-                const result = await this.practiceSingleExpense();
-
-                if (result.correct) {
-                    sessionCorrect++;
-                    this.stats.correct++;
-                } else {
-                    sessionIncorrect++;
-                    this.stats.incorrect++;
-                }
-                this.stats.total_attempts++;
-
-                logger.debug('Practice attempt completed', {
-                    sessionId,
-                    attempt: i + 1,
-                    correct: result.correct,
-                    expected: result.expectedCategory,
-                    predicted: result.predictedCategory
-                });
-
-                // Small delay between attempts to avoid hammering APIs
-                await this._sleep(1000);
-            } catch (error) {
-                sessionErrors++;
-                logger.logError(error, {
-                    operation: 'practiceSingleExpense',
-                    sessionId,
-                    attempt: i + 1
-                });
-            }
+        // Prevent overlapping sessions - skip if previous session is still running
+        if (this._sessionInProgress) {
+            logger.debug('Skipping learning session - previous session still in progress');
+            return;
         }
+        this._sessionInProgress = true;
 
-        this.stats.sessions++;
-        const duration = Date.now() - startTime;
-        const accuracy = sessionCorrect / (sessionCorrect + sessionIncorrect) * 100;
+        try {
+            const sessionId = uuidv4();
+            const startTime = Date.now();
 
-        logger.info('Self-driven learning session completed', {
-            sessionId,
-            userId: this.userId,
-            duration_ms: duration,
-            correct: sessionCorrect,
-            incorrect: sessionIncorrect,
-            errors: sessionErrors,
-            accuracy: accuracy.toFixed(1) + '%',
-            lifetime_stats: {
-                total_attempts: this.stats.total_attempts,
-                overall_accuracy: (this.stats.correct / this.stats.total_attempts * 100).toFixed(1) + '%',
-                sessions: this.stats.sessions
+            logger.info('Starting self-driven learning session', {
+                sessionId,
+                userId: this.userId,
+                practice_count: this.practiceCount
+            });
+
+            let sessionCorrect = 0;
+            let sessionIncorrect = 0;
+            let sessionErrors = 0;
+
+            for (let i = 0; i < this.practiceCount; i++) {
+                try {
+                    const result = await this.practiceSingleExpense();
+
+                    if (result.correct) {
+                        sessionCorrect++;
+                        this.stats.correct++;
+                    } else {
+                        sessionIncorrect++;
+                        this.stats.incorrect++;
+                    }
+                    this.stats.total_attempts++;
+
+                    logger.debug('Practice attempt completed', {
+                        sessionId,
+                        attempt: i + 1,
+                        correct: result.correct,
+                        expected: result.expectedCategory,
+                        predicted: result.predictedCategory
+                    });
+
+                    // Small delay between attempts to avoid hammering APIs
+                    await this._sleep(1000);
+                } catch (error) {
+                    sessionErrors++;
+                    logger.logError(error, {
+                        operation: 'practiceSingleExpense',
+                        sessionId,
+                        attempt: i + 1
+                    });
+                }
             }
-        });
+
+            this.stats.sessions++;
+            const duration = Date.now() - startTime;
+            const accuracy = sessionCorrect / (sessionCorrect + sessionIncorrect) * 100;
+
+            logger.info('Self-driven learning session completed', {
+                sessionId,
+                userId: this.userId,
+                duration_ms: duration,
+                correct: sessionCorrect,
+                incorrect: sessionIncorrect,
+                errors: sessionErrors,
+                accuracy: accuracy.toFixed(1) + '%',
+                lifetime_stats: {
+                    total_attempts: this.stats.total_attempts,
+                    overall_accuracy: (this.stats.correct / this.stats.total_attempts * 100).toFixed(1) + '%',
+                    sessions: this.stats.sessions
+                }
+            });
+        } finally {
+            this._sessionInProgress = false;
+        }
     }
 
     /**

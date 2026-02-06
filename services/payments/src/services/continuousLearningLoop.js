@@ -24,6 +24,7 @@ const categoryRulesManager = require('./categoryRulesManager');
 const tessaAssessmentGenerator = require('./tessaAssessmentGenerator');
 const { adaptiveDifficultyScaler } = require('./adaptiveDifficultyScaler');
 const logger = require('../utils/logger');
+const correctionValidator = require('../utils/correctionValidator');
 const { query } = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
@@ -49,9 +50,10 @@ class ContinuousLearningLoop {
             session_start: null,
             session_duration_ms: 0,
             benchmark_results: [],
-            // Separate time tracking: training time vs benchmark time
+            // Separate time tracking: training time vs benchmark time vs maintenance time
             training_time_ms: 0,           // Actual time spent training (counts against limit)
             benchmark_time_ms: 0,          // Total time spent on benchmarks (does NOT count against limit)
+            maintenance_time_ms: 0,        // Rate limit cooldown time (does NOT count against limit)
             is_benchmarking: false,        // Flag indicating benchmark in progress
             current_benchmark_start: null, // When current benchmark started
             last_training_timestamp: null  // Last time we were actively training
@@ -59,14 +61,14 @@ class ContinuousLearningLoop {
 
         // Configuration
         this.config = {
-            questions_per_benchmark: 35,              // Training questions before benchmark check
-            optional_benchmark_questions: 35,         // Soft threshold to consider benchmark
-            hard_benchmark_questions: 55,             // Hard cap to force benchmark if accuracy meets threshold
+            questions_per_benchmark: 25,              // Training questions before benchmark check
+            optional_benchmark_questions: 25,         // Soft threshold to consider benchmark
+            hard_benchmark_questions: 40,             // Hard cap to force benchmark if accuracy meets threshold
             accuracy_threshold_for_benchmark: 0.80,   // 80% accuracy on training to trigger benchmark
             both_models_threshold_for_upgrade: 0.90,  // 90% accuracy on benchmark to advance level
             benchmark_scenario_count: 40,             // Questions per benchmark
-            training_interval_ms: 5000,
-            practice_count_per_session: 3,
+            training_interval_ms: 10000,              // 10s between sessions (overlap guard prevents pile-up)
+            practice_count_per_session: 3,             // 3 exercises per session (~9 API calls/session)
             max_difficulty_level: 5,
             max_scale: 10,  // Allow up to S10
             // Decision maker settings
@@ -165,13 +167,13 @@ class ContinuousLearningLoop {
 
         const {
             duration_minutes = null,
-            questions_per_benchmark = 35,             // Training questions before benchmark
-            optional_benchmark_questions = 35,        // Soft threshold for optional benchmark
-            hard_benchmark_questions = 55,            // Hard cap for forced benchmark
+            questions_per_benchmark = 25,             // Training questions before benchmark
+            optional_benchmark_questions = 25,        // Soft threshold for optional benchmark
+            hard_benchmark_questions = 40,            // Hard cap for forced benchmark
             accuracy_threshold = 0.80,                // 80% on training to trigger benchmark
             benchmark_scenario_count = 40,            // Questions per benchmark
             upgrade_threshold = 0.90,                 // 90% on benchmark to advance level
-            training_interval_ms = 5000,
+            training_interval_ms = 10000,
             practice_count = 3,
             starting_difficulty = null,  // null = load from DB, or use specified level
             starting_scale = null        // null = load from DB, or use specified scale
@@ -231,10 +233,26 @@ class ContinuousLearningLoop {
             // Separate time tracking
             training_time_ms: 0,
             benchmark_time_ms: 0,
+            maintenance_time_ms: 0,        // Rate limit cooldown, health checks, etc.
             is_benchmarking: false,
             current_benchmark_start: null,
             last_training_timestamp: now  // Start tracking training time from now
         };
+
+        // Wait for rate limits to clear before training begins
+        // This prevents stale 429s from a previous session from poisoning accuracy
+        logger.info('Checking rate limit status before training...');
+        const maintenanceStart = Date.now();
+        const cooldownMs = await sealedBenchmarkEvaluator._waitForRateLimitCooldown(120000);
+        if (cooldownMs > 1000) {
+            this.stats.maintenance_time_ms += cooldownMs;
+            // Reset training timestamp to after cooldown (don't count cooldown as training)
+            this.stats.last_training_timestamp = Date.now();
+            logger.info('Pre-training rate limit cooldown completed', {
+                cooldown_ms: cooldownMs,
+                maintenance_time_ms: this.stats.maintenance_time_ms
+            });
+        }
 
         logger.info('Starting continuous learning loop', {
             userId,
@@ -244,7 +262,8 @@ class ContinuousLearningLoop {
             starting_scale: scale,
             starting_difficulty: level,
             scale_name: difficultyConfig.scale_name,
-            complexity_factors: difficultyConfig.complexity_factors
+            complexity_factors: difficultyConfig.complexity_factors,
+            maintenance_time_ms: this.stats.maintenance_time_ms
         });
 
         // Set up stop timer if duration specified
@@ -314,11 +333,13 @@ class ContinuousLearningLoop {
             // Total session time
             session_duration_ms: totalElapsed,
             session_duration_readable: this._formatDuration(totalElapsed),
-            // Separate training vs benchmark time
+            // Separate training vs benchmark vs maintenance time
             training_time_ms: currentTrainingTime,
             training_time_readable: this._formatDuration(currentTrainingTime),
             benchmark_time_ms: currentBenchmarkTime,
             benchmark_time_readable: this._formatDuration(currentBenchmarkTime),
+            maintenance_time_ms: this.stats.maintenance_time_ms,
+            maintenance_time_readable: this._formatDuration(this.stats.maintenance_time_ms),
             // Training time remaining (this is what counts against the limit)
             training_time_remaining_ms: trainingTimeRemaining,
             training_time_remaining_readable: trainingTimeRemaining !== null ? this._formatDuration(trainingTimeRemaining) : 'unlimited',
@@ -710,14 +731,19 @@ class ContinuousLearningLoop {
                 issues: validationIssues.slice(0, 3)
             });
 
-            // Run full validation and fix
-            const validated = await benchmarkValidator.validateAndFixScenarios(benchmark.scenarios);
+            // Only validate flagged scenarios (not ALL scenarios) to avoid over-correction
+            const flaggedIds = new Set(validationIssues.map(v => v.scenario_id));
+            const flaggedScenarios = benchmark.scenarios.filter(s => flaggedIds.has(s.scenario_id));
+            const validated = await benchmarkValidator.validateAndFixScenarios(flaggedScenarios);
 
-            // Update scenarios in database if fixes were made
-            const fixedCount = validated.filter(s => s.auto_corrected).length;
-            if (fixedCount > 0) {
-                logger.info('Auto-corrected benchmark scenarios', { fixed_count: fixedCount });
-                await this._updateBenchmarkScenarios(benchmark.benchmark_id, validated);
+            // Update only the corrected scenarios in database
+            const corrected = validated.filter(s => s.auto_corrected);
+            if (corrected.length > 0) {
+                logger.info('Auto-corrected benchmark scenarios', {
+                    flagged: flaggedScenarios.length,
+                    fixed_count: corrected.length
+                });
+                await this._updateBenchmarkScenarios(benchmark.benchmark_id, corrected);
             }
         }
 
@@ -786,42 +812,7 @@ class ContinuousLearningLoop {
      * Returns true if reasoning is consistent, false if contradictory
      */
     _isReasoningConsistent(reasoning, correctCategory, wrongPrediction) {
-        if (!reasoning) return true; // No reasoning to validate
-
-        const reasoningLower = reasoning.toLowerCase();
-
-        // Phrases that indicate what category "should" be or "wins"
-        const supportsPhrases = [
-            `${correctCategory} is correct`,
-            `${correctCategory} takes precedence`,
-            `categorized as ${correctCategory}`,
-            `${correctCategory} wins`,
-            `should be ${correctCategory}`,
-            `correctly categorized as ${correctCategory}`,
-            `this is a ${correctCategory} expense`,
-            `primary purpose.*${correctCategory}`
-        ];
-
-        // Check if reasoning actually supports the WRONG category instead
-        const contradictsCorrect = [
-            `${wrongPrediction} takes precedence`,
-            `${wrongPrediction} is correct`,
-            `should be ${wrongPrediction}`,
-            `categorized as ${wrongPrediction}`,
-            `${wrongPrediction} wins`,
-            `this is a ${wrongPrediction} expense`,
-            `primary purpose.*${wrongPrediction}`
-        ];
-
-        // If reasoning explicitly supports the wrong prediction, it's contradictory
-        for (const phrase of contradictsCorrect) {
-            const regex = new RegExp(phrase.replace('.*', '.*'), 'i');
-            if (regex.test(reasoningLower)) {
-                return false; // Reasoning contradicts the correct category
-            }
-        }
-
-        return true; // No contradiction detected
+        return correctionValidator.isReasoningConsistent(reasoning, correctCategory);
     }
 
     /**
@@ -903,14 +894,15 @@ class ContinuousLearningLoop {
                     }
                 }
                 // Create a correction memory card with type for proper formatting
+                const safeDistinction = correctionValidator.sanitizeKeyDistinction(mistake.reasoning || '', mistake.correct_category);
                 const cardContent = {
                     type: 'BENCHMARK_CORRECTION',  // Used by oggyCategorizer._formatMemoryCard
-                    text: `CORRECTION: "${mistake.merchant}" with "${mistake.description}" is "${mistake.correct_category}" NOT "${mistake.predicted_category}". ${mistake.reasoning || ''}`,
+                    text: `CORRECTION: "${mistake.merchant}" with "${mistake.description}" is "${mistake.correct_category}" NOT "${mistake.predicted_category}".${safeDistinction ? ' ' + safeDistinction : ''}`,
                     description: mistake.description,
                     merchant: mistake.merchant,
                     correct_category: mistake.correct_category,
                     wrong_prediction: mistake.predicted_category,
-                    key_distinction: mistake.reasoning || '',
+                    key_distinction: safeDistinction,
                     correction: {
                         merchant: mistake.merchant,
                         description: mistake.description,
@@ -1073,10 +1065,15 @@ class ContinuousLearningLoop {
                 const actual = confusionContext.actual_category || scenario.correctCategory;
                 const predicted = confusionContext.confused_with || 'unknown';
 
+                // Sanitize distinction_hint before using it in any memory cards
+                const safeHint = correctionValidator.sanitizeKeyDistinction(
+                    scenario.distinction_hint || '', scenario.correctCategory
+                );
+
                 // Create a high-signal pattern memory card
                 const cardContent = {
                     type: 'PATTERN',
-                    text: `CONFUSION TRAINING: "${scenario.merchant}" with "${scenario.description}" is "${scenario.correctCategory}" (not "${predicted}"). ${scenario.distinction_hint || ''}`,
+                    text: `CONFUSION TRAINING: "${scenario.merchant}" with "${scenario.description}" is "${scenario.correctCategory}" (not "${predicted}").${safeHint ? ' ' + safeHint : ''}`,
                     pattern: {
                         merchant: scenario.merchant,
                         category: scenario.correctCategory,
@@ -1120,12 +1117,12 @@ class ContinuousLearningLoop {
                 if (predicted && predicted !== 'unknown') {
                     const correctionContent = {
                         type: 'BENCHMARK_CORRECTION',
-                        text: `CORRECTION: "${scenario.merchant}" with "${scenario.description}" is "${scenario.correctCategory}" NOT "${predicted}". ${scenario.distinction_hint || ''}`,
+                        text: `CORRECTION: "${scenario.merchant}" with "${scenario.description}" is "${scenario.correctCategory}" NOT "${predicted}".${safeHint ? ' ' + safeHint : ''}`,
                         description: scenario.description,
                         merchant: scenario.merchant,
                         correct_category: scenario.correctCategory,
                         wrong_prediction: predicted,
-                        key_distinction: scenario.distinction_hint || '',
+                        key_distinction: safeHint,
                         correction: {
                             merchant: scenario.merchant,
                             description: scenario.description,
@@ -1169,7 +1166,7 @@ class ContinuousLearningLoop {
                     memoriesCreated++;
                 }
 
-                const hint = scenario.distinction_hint || scenario.reasoning || '';
+                const hint = safeHint || correctionValidator.sanitizeKeyDistinction(scenario.reasoning || '', scenario.correctCategory);
                 if (actual && predicted && hint) {
                     const ruleId = await categoryRulesManager.createDistinctionRule({
                         actual,
