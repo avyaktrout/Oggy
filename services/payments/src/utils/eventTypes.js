@@ -117,6 +117,17 @@ const APP_EVENT_TYPES = {
         },
         entity_type: 'practice',
         action: 'self_learn'
+    },
+
+    // =====================================================
+    // System/training events (no processing needed)
+    // =====================================================
+    DIFFICULTY_SCALE_ADJUSTED: {
+        description: 'Difficulty scale was adjusted during training',
+        feeds_domain_knowledge: false,
+        feeds_memory_substrate: false,
+        entity_type: 'training',
+        action: 'adjust'
     }
 };
 

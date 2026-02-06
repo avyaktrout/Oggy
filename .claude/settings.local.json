@@ -5,7 +5,9 @@
       "Bash(docker restart:*)",
       "Bash(docker logs:*)",
       "Bash(docker compose up:*)",
-      "Bash(docker exec:*)"
+      "Bash(docker exec:*)",
+      "Bash(findstr:*)",
+      "Bash(ping:*)"
     ]
   }
 }

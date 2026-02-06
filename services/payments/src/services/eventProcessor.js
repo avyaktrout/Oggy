@@ -527,9 +527,9 @@ class AppEventProcessor {
         await query(
             `UPDATE app_events
              SET processing_errors = jsonb_build_object(
-                 'error_type', $2,
-                 'error_message', $3,
-                 'timestamp', now()
+                 'error_type', $2::text,
+                 'error_message', $3::text,
+                 'timestamp', now()::text
              )
              WHERE event_id = $1`,
             [event_id, errorType, errorMessage]
