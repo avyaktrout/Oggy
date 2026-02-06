@@ -66,6 +66,80 @@ class AdaptiveDifficultyScaler {
     }
 
     /**
+     * Load baseline scale for a user from persistent state
+     */
+    async loadBaselineScale(userId) {
+        if (!userId) {
+            return this.baselineDifficultyScale;
+        }
+
+        try {
+            await this._ensureStateTable();
+            const result = await query(`
+                SELECT baseline_scale
+                FROM continuous_learning_state
+                WHERE user_id = $1
+            `, [userId]);
+
+            if (result.rows.length > 0 && result.rows[0].baseline_scale !== null) {
+                const loaded = parseInt(result.rows[0].baseline_scale, 10);
+                this.setBaselineScale(loaded);
+            }
+        } catch (error) {
+            logger.debug('Failed to load baseline scale', { user_id: userId, error: error.message });
+        }
+
+        return this.baselineDifficultyScale;
+    }
+
+    /**
+     * Set baseline scale with clamping
+     */
+    setBaselineScale(value) {
+        const clamped = Math.max(0, Math.min(100, value));
+        this.baselineDifficultyScale = clamped;
+    }
+
+    /**
+     * Get current baseline scale
+     */
+    getBaselineScale() {
+        return this.baselineDifficultyScale;
+    }
+
+    /**
+     * Bump baseline scale for benchmark-driven upgrades
+     */
+    async bumpBaselineScale(userId, options = {}) {
+        const {
+            amount = 10,
+            reason = 'benchmark'
+        } = options;
+
+        const oldScale = this.baselineDifficultyScale;
+        const newScale = Math.max(0, Math.min(100, oldScale + amount));
+
+        if (newScale === oldScale) {
+            return this.baselineDifficultyScale;
+        }
+
+        this.baselineDifficultyScale = newScale;
+
+        if (userId) {
+            await this._saveBaselineScale(userId, newScale);
+        }
+
+        logger.info('Baseline difficulty scale increased', {
+            user_id: userId,
+            old_scale: oldScale,
+            new_scale: newScale,
+            reason
+        });
+
+        return this.baselineDifficultyScale;
+    }
+
+    /**
      * Get current difficulty tier based on Oggy's recent performance
      * Returns appropriate tier that will challenge but not frustrate
      */
@@ -295,6 +369,7 @@ Return ONLY a JSON object:
             // Record scaling event
             if (userId) {
                 await this._recordScalingEvent(userId, 'scale_up', oldScale, this.baselineDifficultyScale, longTermAccuracy);
+                await this._saveBaselineScale(userId, this.baselineDifficultyScale);
             }
 
             // Clear window to measure new baseline
@@ -316,6 +391,7 @@ Return ONLY a JSON object:
             // Record scaling event
             if (userId) {
                 await this._recordScalingEvent(userId, 'scale_down', oldScale, this.baselineDifficultyScale, longTermAccuracy);
+                await this._saveBaselineScale(userId, this.baselineDifficultyScale);
             }
 
             // Clear window to measure new baseline
@@ -334,6 +410,7 @@ Return ONLY a JSON object:
                     user_id,
                     event_type,
                     entity_type,
+                    action,
                     event_data,
                     processed_for_domain_knowledge,
                     processed_for_memory_substrate
@@ -341,7 +418,8 @@ Return ONLY a JSON object:
                     gen_random_uuid(),
                     $1,
                     'DIFFICULTY_SCALE_ADJUSTED',
-                    'learning',
+                    'pattern',
+                    'update',
                     $2,
                     FALSE,
                     FALSE
@@ -358,6 +436,51 @@ Return ONLY a JSON object:
             ]);
         } catch (error) {
             logger.warn('Failed to record scaling event', { error: error.message });
+        }
+    }
+
+    async _saveBaselineScale(userId, baselineScale) {
+        try {
+            await this._ensureStateTable();
+            await query(`
+                INSERT INTO continuous_learning_state (user_id, scale, difficulty_level, baseline_scale, updated_at)
+                VALUES ($1, 1, 3, $2, NOW())
+                ON CONFLICT (user_id)
+                DO UPDATE SET baseline_scale = $2, updated_at = NOW()
+            `, [userId, baselineScale]);
+        } catch (error) {
+            logger.debug('Failed to save baseline scale', { user_id: userId, error: error.message });
+        }
+    }
+
+    async _ensureStateTable() {
+        try {
+            await query(`
+                CREATE TABLE IF NOT EXISTS continuous_learning_state (
+                    user_id VARCHAR(255) PRIMARY KEY,
+                    scale INTEGER DEFAULT 1,
+                    difficulty_level INTEGER DEFAULT 3,
+                    baseline_scale INTEGER DEFAULT 50,
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            `);
+
+            await query(`
+                ALTER TABLE continuous_learning_state
+                ADD COLUMN IF NOT EXISTS scale INTEGER DEFAULT 1
+            `);
+
+            await query(`
+                ALTER TABLE continuous_learning_state
+                ADD COLUMN IF NOT EXISTS difficulty_level INTEGER DEFAULT 3
+            `);
+
+            await query(`
+                ALTER TABLE continuous_learning_state
+                ADD COLUMN IF NOT EXISTS baseline_scale INTEGER DEFAULT 50
+            `);
+        } catch (error) {
+            logger.debug('Failed to ensure continuous_learning_state table', { error: error.message });
         }
     }
 

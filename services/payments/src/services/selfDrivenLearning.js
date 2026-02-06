@@ -40,6 +40,9 @@ class SelfDrivenLearning {
         this.categoryWeights = null; // null = balanced, object = targeted
         this.focusCategories = []; // Categories to focus on
         this.confusionPatterns = []; // Confusion patterns to target
+        this.confusionTargetRate = 0.30; // Default % of confusion-targeted assessments
+        this._baselineLoadPromise = null;
+        this._baselineLoadedFor = null;
     }
 
     /**
@@ -48,14 +51,18 @@ class SelfDrivenLearning {
      * @param {array} focusCategories - Categories to focus on
      * @param {array} confusionPatterns - Confusion patterns to target (e.g., [{actual: 'groceries', predicted: 'dining', ...}])
      */
-    setTargetedLearning(categoryWeights, focusCategories = [], confusionPatterns = []) {
+    setTargetedLearning(categoryWeights, focusCategories = [], confusionPatterns = [], options = {}) {
         this.categoryWeights = categoryWeights;
         this.focusCategories = focusCategories;
         this.confusionPatterns = confusionPatterns;
+        if (typeof options.confusionTargetRate === 'number') {
+            this.confusionTargetRate = Math.max(0, Math.min(1, options.confusionTargetRate));
+        }
         logger.info('Targeted learning configured', {
             focusCategories,
             confusionPatterns: confusionPatterns.map(p => `${p.actual}→${p.predicted}`),
-            weights: categoryWeights
+            weights: categoryWeights,
+            confusionTargetRate: this.confusionTargetRate
         });
     }
 
@@ -66,6 +73,7 @@ class SelfDrivenLearning {
         this.categoryWeights = null;
         this.focusCategories = [];
         this.confusionPatterns = [];
+        this.confusionTargetRate = 0.30;
         logger.info('Targeted learning cleared - returning to balanced training');
     }
 
@@ -236,6 +244,8 @@ class SelfDrivenLearning {
         const predictedCategory = suggestion.suggested_category;
         const trace_id = suggestion.trace_id;
         const correct = predictedCategory === correctCategory;
+        const meta = suggestion._meta || {};
+        const learningAllowed = meta.learning_allowed !== false;
 
         logger.debug('Oggy practice attempt', {
             merchant,
@@ -246,40 +256,51 @@ class SelfDrivenLearning {
             trace_id
         });
 
-        // Step 3: Update memory based on correctness
-        if (trace_id) {
-            await this._updateMemoryFromPractice(trace_id, correct, {
+        // Step 3/4: Apply learning writes only if gate allows
+        if (!learningAllowed) {
+            logger.warn('Learning write blocked (gate open)', {
                 merchant,
-                correctCategory,
-                predictedCategory
+                expected: correctCategory,
+                predicted: predictedCategory,
+                breaker_states: meta.breaker_states || {},
+                used_fallback: meta.used_fallback || false
             });
         } else {
-            // No memory was used, create new memory card from this learning
-            await this._createMemoryFromPractice(correct, {
-                merchant,
-                amount,
-                description,
-                correctCategory,
-                predictedCategory
-            });
-        }
+            // Step 3: Update memory based on correctness
+            if (trace_id) {
+                await this._updateMemoryFromPractice(trace_id, correct, {
+                    merchant,
+                    correctCategory,
+                    predictedCategory
+                });
+            } else {
+                // No memory was used, create new memory card from this learning
+                await this._createMemoryFromPractice(correct, {
+                    merchant,
+                    amount,
+                    description,
+                    correctCategory,
+                    predictedCategory
+                });
+            }
 
-        // Step 4: If correct, add to domain knowledge (expand knowledge base)
-        if (correct) {
-            await this._expandDomainKnowledge({
-                merchant,
-                amount,
-                description,
-                category: correctCategory,
-                trace_id,
-                confidence: suggestion.confidence,
-                source: assessment.source || 'practice'
-            });
+            // Step 4: If correct, add to domain knowledge (expand knowledge base)
+            if (correct) {
+                await this._expandDomainKnowledge({
+                    merchant,
+                    amount,
+                    description,
+                    category: correctCategory,
+                    trace_id,
+                    confidence: suggestion.confidence,
+                    source: assessment.source || 'practice'
+                });
 
-            // Step 4.5: If this was a confusion-targeted scenario and we got it right,
-            // create a category distinction rule that will be injected into ALL future prompts
-            if (assessment.confusion_context) {
-                await this._createCategoryDistinctionRule(assessment, suggestion.reasoning);
+                // Step 4.5: If this was a confusion-targeted scenario and we got it right,
+                // create a category distinction rule that will be injected into ALL future prompts
+                if (assessment.confusion_context) {
+                    await this._createCategoryDistinctionRule(assessment, suggestion.reasoning);
+                }
             }
         }
 
@@ -292,7 +313,11 @@ class SelfDrivenLearning {
             predicted_category: predictedCategory,
             correct,
             trace_id,
-            confidence: suggestion.confidence
+            confidence: suggestion.confidence,
+            learning_gate_open: meta.learning_gate_open || false,
+            breaker_states: meta.breaker_states || {},
+            used_fallback: meta.used_fallback || false,
+            memory_retrieval_failed: meta.memory_retrieval_failed || false
         });
 
         // Step 6: Track recent accuracy for adaptive difficulty
@@ -344,10 +369,12 @@ class SelfDrivenLearning {
      * Uses adaptive 5-tier difficulty system that scales with Oggy's performance
      */
     async _generateAssessment() {
+        await this._ensureBaselineLoaded();
+
         const rand = Math.random();
 
-        // 30% chance to generate confusion-targeted scenario if patterns exist
-        if (this.confusionPatterns.length > 0 && rand < 0.30) {
+        // Confusion-targeted scenario if patterns exist
+        if (this.confusionPatterns.length > 0 && rand < this.confusionTargetRate) {
             try {
                 const scenario = await this._generateConfusionTargetedAssessment();
                 if (scenario) {
@@ -403,6 +430,21 @@ class SelfDrivenLearning {
 
         // Existing domain knowledge (OR fallback if Tessa fails)
         return await this._generateFromDomainKnowledge(targetCategory);
+    }
+
+    async _ensureBaselineLoaded() {
+        if (!this.userId) {
+            return;
+        }
+
+        if (this._baselineLoadedFor !== this.userId) {
+            this._baselineLoadedFor = this.userId;
+            this._baselineLoadPromise = adaptiveDifficultyScaler.loadBaselineScale(this.userId);
+        }
+
+        if (this._baselineLoadPromise) {
+            await this._baselineLoadPromise;
+        }
     }
 
     /**
@@ -663,6 +705,7 @@ class SelfDrivenLearning {
             const { merchant, amount, description, correctCategory } = expenseData;
 
             const cardContent = {
+                type: 'PATTERN',
                 text: `Merchant "${merchant}" with description "${description}" should be categorized as "${correctCategory}". Amount: $${amount}. (Learned autonomously)`,
                 pattern: {
                     merchant,
@@ -764,8 +807,8 @@ Oggy correctly categorized this during autonomous practice and added it to domai
                 'self_learned_patterns',
                 content_text,
                 JSON.stringify(content_structured),
-                'oggy_self_learning',
-                `self_practice:${trace_id}`,
+                'app_event',
+                `self_practice:${trace_id || 'no_trace'}`,
                 'shareable',
                 2,
                 JSON.stringify(['categorization', 'self_learned', category, 'oggy']),
@@ -833,14 +876,15 @@ Oggy correctly categorized this during autonomous practice and added it to domai
         try {
             await query(`
                 INSERT INTO app_events (
-                    event_id, user_id, event_type, entity_type, event_data,
+                    event_id, user_id, event_type, entity_type, action, event_data,
                     processed_for_domain_knowledge, processed_for_memory_substrate
-                ) VALUES ($1, $2, $3, $4, $5, TRUE, TRUE)
+                ) VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE)
             `, [
                 uuidv4(),
                 this.userId,
                 'OGGY_SELF_PRACTICE',
-                'practice', // entity_type is required by schema
+                'pattern',
+                'categorize',
                 JSON.stringify({
                     ...practiceData,
                     learning_mode: 'self_driven',

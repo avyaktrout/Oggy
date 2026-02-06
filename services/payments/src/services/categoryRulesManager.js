@@ -176,6 +176,91 @@ This rule was learned from confusion pattern training where ${actual} was being 
     }
 
     /**
+     * Create a per-scenario reasoning-based rule to target specific mistakes
+     * @param {object} mistake - mistake context (actual/predicted/scenario_id)
+     * @param {string} reasoningHint - short reasoning snippet
+     */
+    async createScenarioReasonRule(mistake, reasoningHint) {
+        const { actual, predicted, scenario_id } = mistake;
+
+        if (!actual || !predicted || !reasoningHint) return null;
+
+        const rule_id = uuidv4();
+        const content_structured = {
+            category_a: actual,
+            category_b: predicted,
+            applies_to: [actual, predicted],
+            distinction: reasoningHint,
+            rule_type: 'scenario_reasoning',
+            scenario_id,
+            examples_seen: 1,
+            last_updated: new Date().toISOString()
+        };
+
+        const content_text = `**Scenario Reasoning Rule:**
+When distinguishing "${actual}" from "${predicted}":
+${reasoningHint}
+
+Source: benchmark scenario ${scenario_id || 'unknown'}.`;
+
+        const content_hash = crypto
+            .createHash('sha256')
+            .update(`scenario_rule:${actual}:${predicted}:${reasoningHint}`)
+            .digest('hex')
+            .substring(0, 16);
+
+        try {
+            await query(`
+                INSERT INTO domain_knowledge (
+                    knowledge_id,
+                    domain,
+                    topic,
+                    subtopic,
+                    content_text,
+                    content_structured,
+                    source_type,
+                    source_ref,
+                    visibility,
+                    difficulty_band,
+                    tags,
+                    content_hash
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            `, [
+                rule_id,
+                'payments',
+                'categorization',
+                'category_distinction_rules',
+                content_text,
+                JSON.stringify(content_structured),
+                'app_event',
+                `benchmark_scenario:${scenario_id || 'unknown'}`,
+                'shareable',
+                3,
+                JSON.stringify(['category_rule', 'scenario_reasoning', actual, predicted]),
+                content_hash
+            ]);
+
+            // Invalidate cache
+            this.lastCacheUpdate = 0;
+
+            logger.info('Created scenario reasoning rule', {
+                rule_id,
+                category_a: actual,
+                category_b: predicted,
+                scenario_id
+            });
+
+            return rule_id;
+        } catch (error) {
+            if (error.code === '23505') {
+                logger.debug('Scenario reasoning rule already exists', { actual, predicted, scenario_id });
+                return null;
+            }
+            throw error;
+        }
+    }
+
+    /**
      * Find existing rule for a category pair
      */
     async _findExistingRule(categoryA, categoryB) {

@@ -35,8 +35,12 @@ class OggyCategorizer {
      * @param {Object} expenseData - Expense details
      * @returns {Promise<Object>} Suggestion with trace_id for learning feedback
      */
-    async suggestCategory(userId, expenseData) {
+    async suggestCategory(userId, expenseData, options = {}) {
         const startTime = Date.now();
+        const degraded_reasons = [];
+        let used_fallback = false;
+        let memory_retrieval_failed = false;
+        const { benchmark_mode = false, memory_mode = 'benchmark', speed_mode = 'normal' } = options;
 
         try {
             // Check budget before making expensive API calls
@@ -50,12 +54,27 @@ class OggyCategorizer {
             let memoryCards = [];
             let trace_id = null;
 
+            const retrievalTopK = speed_mode === 'very_fast'
+                ? 0
+                : (speed_mode === 'fast'
+                    ? (benchmark_mode ? 2 : 1)
+                    : (benchmark_mode ? 5 : 5));
+            const retrievalTagFilter = benchmark_mode
+                ? (memory_mode === 'full'
+                    ? ['payments', 'categorization']
+                    : ['benchmark_learned', 'correction', 'payments', 'categorization'])
+                : ['payments', 'categorization'];
             try {
-                retrieval = await this.memoryCircuitBreaker.execute(() =>
-                    this._retrieveMemory(userId, query)
-                );
-                trace_id = retrieval.trace_id;
-                memoryCards = retrieval.selected || [];
+                if (retrievalTopK > 0 && memory_mode !== 'none') {
+                    retrieval = await this.memoryCircuitBreaker.execute(() =>
+                        this._retrieveMemory(userId, query, retrievalTopK, retrievalTagFilter)
+                    );
+                    trace_id = retrieval.trace_id;
+                    memoryCards = retrieval.selected || [];
+                    if (benchmark_mode && memoryCards.length > retrievalTopK) {
+                        memoryCards = memoryCards.slice(0, retrievalTopK);
+                    }
+                }
 
                 logger.info('Memory retrieval successful', {
                     userId,
@@ -64,8 +83,10 @@ class OggyCategorizer {
                 });
             } catch (error) {
                 if (error.circuitBreakerOpen) {
+                    degraded_reasons.push('memory_circuit_open');
                     logger.warn('Memory service circuit breaker open, using fallback');
                 } else {
+                    memory_retrieval_failed = true;
                     logger.warn('Memory retrieval failed, continuing without memory', {
                         error: error.message
                     });
@@ -91,11 +112,14 @@ class OggyCategorizer {
             }
 
             // Step 3: Build prompt with memory context AND category rules
-            const prompt = this._buildCategorizationPrompt(expenseData, memoryCards, categoryRules);
+            const prompt = this._buildCategorizationPrompt(expenseData, memoryCards, categoryRules, {
+                benchmark_mode,
+                speed_mode
+            });
 
             // Step 4: Call OpenAI (with circuit breaker and cost tracking)
             const suggestion = await this.openaiCircuitBreaker.execute(() =>
-                this._callOpenAI(prompt)
+                this._callOpenAI(prompt, { benchmark_mode, speed_mode })
             );
 
             // Record actual token usage (estimate from response)
@@ -105,6 +129,18 @@ class OggyCategorizer {
             const latency = Date.now() - startTime;
             logger.logMetric('categorization_latency', latency, 'ms');
 
+            const breaker_states = {
+                memory: this.memoryCircuitBreaker.getState(),
+                openai: this.openaiCircuitBreaker.getState()
+            };
+
+            const breaker_not_closed =
+                breaker_states.memory.state !== 'CLOSED' ||
+                breaker_states.openai.state !== 'CLOSED';
+
+            const learning_gate_open = breaker_not_closed || used_fallback;
+            const learning_allowed = !learning_gate_open;
+
             // Step 5: Return suggestion with trace_id for feedback loop
             return {
                 suggested_category: suggestion.category,
@@ -112,7 +148,18 @@ class OggyCategorizer {
                 reasoning: suggestion.reasoning,
                 trace_id,  // CRITICAL: for memory update when user gives feedback
                 alternatives: suggestion.alternatives || [],
-                latency_ms: latency
+                latency_ms: latency,
+                _meta: {
+                    learning_allowed,
+                    learning_gate_open,
+                    breaker_states,
+                    used_fallback,
+                    memory_retrieval_failed,
+                    degraded_reasons,
+                    benchmark_mode,
+                    memory_mode,
+                    speed_mode
+                }
             };
         } catch (error) {
             logger.logError(error, {
@@ -123,7 +170,36 @@ class OggyCategorizer {
 
             // Fallback to simple rule-based categorization
             logger.info('Using fallback categorization');
-            return this._fallbackCategorization(expenseData);
+            used_fallback = true;
+            degraded_reasons.push('fallback_categorization');
+
+            const breaker_states = {
+                memory: this.memoryCircuitBreaker.getState(),
+                openai: this.openaiCircuitBreaker.getState()
+            };
+
+            const breaker_not_closed =
+                breaker_states.memory.state !== 'CLOSED' ||
+                breaker_states.openai.state !== 'CLOSED';
+
+            const learning_gate_open = breaker_not_closed || used_fallback;
+            const learning_allowed = !learning_gate_open;
+
+            const fallback = this._fallbackCategorization(expenseData);
+            return {
+                ...fallback,
+                _meta: {
+                    learning_allowed,
+                    learning_gate_open,
+                    breaker_states,
+                    used_fallback,
+                    memory_retrieval_failed,
+                    degraded_reasons,
+                    benchmark_mode,
+                    memory_mode,
+                    speed_mode
+                }
+            };
         }
     }
 
@@ -138,7 +214,7 @@ class OggyCategorizer {
     /**
      * Retrieve memory cards from memory service (with retry logic)
      */
-    async _retrieveMemory(userId, query) {
+    async _retrieveMemory(userId, query, topK = 5, tagFilter = ['payments', 'categorization']) {
         return await retryHandler.withRetry(
             async () => {
                 const response = await axios.post(`${MEMORY_SERVICE_URL}/retrieve`, {
@@ -146,9 +222,9 @@ class OggyCategorizer {
                     owner_type: 'user',
                     owner_id: userId,
                     query,
-                    top_k: 5,
+                    top_k: topK,
                     tier_scope: [1, 2, 3],  // working, short, long-term
-                    tag_filter: ['payments', 'categorization'],
+                    tag_filter: tagFilter,
                     include_scores: true
                 }, {
                     timeout: 5000,
@@ -171,19 +247,39 @@ class OggyCategorizer {
     /**
      * Build categorization prompt with memory context and category rules
      */
-    _buildCategorizationPrompt(expenseData, memoryCards, categoryRules = []) {
+    _buildCategorizationPrompt(expenseData, memoryCards, categoryRules = [], options = {}) {
         const { merchant, description, amount, transaction_date } = expenseData;
+        const { benchmark_mode = false, speed_mode = 'normal' } = options;
 
         // Extract relevant patterns from memory, formatting correction memories specially
-        const contextStr = memoryCards.length > 0
+        let contextStr = memoryCards.length > 0
             ? memoryCards.map((card, idx) => {
                 const content = card.content || {};
                 return `${idx + 1}. ${this._formatMemoryCard(content)}`;
             }).join('\n')
             : 'No previous patterns available.';
 
-        // Format learned category distinction rules (ALWAYS APPLIED)
-        const rulesStr = categoryRulesManager.formatRulesForPrompt(categoryRules);
+        const maxContext = speed_mode === 'very_fast' ? 150 : (speed_mode === 'fast' ? 300 : (benchmark_mode ? 800 : 2000));
+        if (contextStr.length > maxContext) {
+            contextStr = contextStr.slice(0, maxContext) + '...';
+        }
+
+        // Priority confusion rules (always inject unless very_fast)
+        let rulesStr = '';
+        if (speed_mode !== 'very_fast') {
+            const priorityRules = [
+                'business_meal vs dining: If business tasks (client, budget, project, proposal, meeting decisions) occur, choose business_meal; otherwise choose dining.',
+                'shopping vs other: If specific retail goods are purchased (clothing, electronics, home goods), choose shopping; use other only when no category fits.',
+                'health vs other: If a prescription, pharmacy visit, or medical service is mentioned, choose health; use other only when no category fits.'
+            ];
+            const priorityBlock = `# PRIORITY CONFUSION RULES\n` +
+                priorityRules.map((r, i) => `${i + 1}. ${r}`).join('\n') +
+                `\n\nIMPORTANT: Apply these PRIORITY rules before any other guidance.\n`;
+
+            const rulesForPrompt = benchmark_mode ? categoryRules.slice(0, 6) : categoryRules;
+            const learnedBlock = categoryRulesManager.formatRulesForPrompt(rulesForPrompt);
+            rulesStr = `${priorityBlock}${learnedBlock}`;
+        }
 
         return `You are a financial categorization assistant helping to categorize expenses.
 
@@ -199,6 +295,7 @@ ${rulesStr}
 ${contextStr}
 
 IMPORTANT: If any RULE or DISTINCTION above matches this expense, you MUST apply it.
+IMPORTANT: Avoid using "other" if there are clear signals for any specific category. Use "other" only when none of the categories reasonably fit.
 
 # Available Categories
 - dining: Personal restaurant/cafe visits for pleasure, casual meals out, coffee shops (NOT work-related)
@@ -232,7 +329,8 @@ Respond in JSON format (no markdown, just raw JSON):
     /**
      * Call OpenAI API for categorization (with retry logic)
      */
-    async _callOpenAI(prompt) {
+    async _callOpenAI(prompt, options = {}) {
+        const { benchmark_mode = false, speed_mode = 'normal' } = options;
         if (!OPENAI_API_KEY) {
             throw new Error('OPENAI_API_KEY not configured');
         }
@@ -248,7 +346,7 @@ Respond in JSON format (no markdown, just raw JSON):
                             { role: 'user', content: prompt }
                         ],
                         temperature: 0.3,
-                        max_tokens: 300
+                        max_tokens: speed_mode === 'very_fast' ? 80 : (speed_mode === 'fast' ? 120 : (benchmark_mode ? 200 : 300))
                     },
                     {
                         headers: {

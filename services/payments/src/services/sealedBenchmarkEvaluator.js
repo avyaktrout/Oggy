@@ -13,6 +13,8 @@ const OggyCategorizer = require('./oggyCategorizer');
 const sealedBenchmarkGenerator = require('./sealedBenchmarkGenerator');
 const { adaptiveDifficultyScaler } = require('./adaptiveDifficultyScaler');
 
+const BENCHMARK_UPGRADE_THRESHOLD = parseFloat(process.env.BENCHMARK_UPGRADE_THRESHOLD || '0.90');
+
 class SealedBenchmarkEvaluator {
     constructor() {
         this.oggyCategorizer = new OggyCategorizer();
@@ -33,24 +35,84 @@ class SealedBenchmarkEvaluator {
             user_id
         });
 
+        await adaptiveDifficultyScaler.loadBaselineScale(user_id);
+
         // Get sealed benchmark
         const benchmark = await sealedBenchmarkGenerator.getSealedBenchmark(benchmark_identifier);
 
         // Capture training state at test time
         const training_state = await this._captureTrainingState(user_id);
 
-        // Test Oggy on all scenarios
-        const oggy_results = [];
-        for (const scenario of benchmark.scenarios) {
-            const result = await this._testOggyOnScenario(user_id, scenario);
-            oggy_results.push(result);
-        }
-
-        // Test Base on all scenarios
+        // Test Base first and measure duration to set time limit for Oggy
         const base_results = [];
+        const baseStartTime = Date.now();
         for (const scenario of benchmark.scenarios) {
             const result = await this._testBaseOnScenario(scenario);
             base_results.push(result);
+        }
+        const baseDurationMs = Date.now() - baseStartTime;
+        const safetyMarginMs = Math.max(250, Math.floor(baseDurationMs * 0.02));
+        const oggyTimeLimitMs = Math.max(0, baseDurationMs - safetyMarginMs);
+
+        // Test Oggy with a hard time limit equal to base duration
+        const oggy_results = [];
+        const oggyStartTime = Date.now();
+        let oggyTimedOut = false;
+        const targetPerItem = oggyTimeLimitMs / benchmark.scenarios.length;
+        let memoryMode = 'benchmark';
+        let speedMode = 'normal';
+        for (const scenario of benchmark.scenarios) {
+            const elapsed = Date.now() - oggyStartTime;
+            if (elapsed > oggyTimeLimitMs) {
+                oggyTimedOut = true;
+                break;
+            }
+            const idx = oggy_results.length;
+            const avgPerItem = idx > 0 ? (elapsed / idx) : targetPerItem;
+            const remaining = benchmark.scenarios.length - idx;
+            const projected = elapsed + (avgPerItem * remaining);
+
+            // Adaptive mode selection:
+            // - If ahead of schedule, allow full memory
+            // - If falling behind, switch to fast mode
+            // - If very late, switch to very fast mode (minimal prompt)
+            if (avgPerItem < targetPerItem * 0.75 && projected < oggyTimeLimitMs * 0.8) {
+                memoryMode = 'full';
+                speedMode = 'normal';
+            } else if (
+                elapsed > oggyTimeLimitMs * 0.9 ||
+                avgPerItem > targetPerItem * 1.2 ||
+                projected > oggyTimeLimitMs * 0.95
+            ) {
+                memoryMode = 'none';
+                speedMode = 'very_fast';
+            } else if (avgPerItem > targetPerItem * 1.05 || projected > oggyTimeLimitMs * 0.9) {
+                memoryMode = 'benchmark';
+                speedMode = 'fast';
+            } else {
+                memoryMode = 'benchmark';
+                speedMode = 'normal';
+            }
+
+            const result = await this._testOggyOnScenario(user_id, scenario, {
+                memory_mode: memoryMode,
+                speed_mode: speedMode
+            });
+            oggy_results.push(result);
+        }
+
+        // If Oggy timed out, mark remaining scenarios as incorrect
+        if (oggyTimedOut && oggy_results.length < benchmark.scenarios.length) {
+            for (let i = oggy_results.length; i < benchmark.scenarios.length; i++) {
+                const scenario = benchmark.scenarios[i];
+                oggy_results.push({
+                    scenario_id: scenario.scenario_id,
+                    predicted_category: 'TIMEOUT',
+                    correct_category: scenario.correct_category,
+                    correct: false,
+                    error: 'OGGY_TIMEOUT'
+                });
+            }
         }
 
         // Calculate statistics
@@ -65,6 +127,8 @@ class SealedBenchmarkEvaluator {
             ? ((oggy_accuracy / base_accuracy - 1) * 100)
             : 0;
 
+        const oggyDurationMs = Date.now() - oggyStartTime;
+
         // Store results
         const result_id = await this._storeResults({
             benchmark_id: benchmark.benchmark_id,
@@ -78,15 +142,35 @@ class SealedBenchmarkEvaluator {
             advantage_percent,
             training_state,
             oggy_results,
-            base_results
+            base_results,
+            timing: {
+                base_duration_ms: baseDurationMs,
+                oggy_duration_ms: oggyDurationMs,
+                oggy_time_limit_ms: oggyTimeLimitMs,
+                safety_margin_ms: safetyMarginMs,
+                oggy_timed_out: oggyTimedOut
+            }
         });
+
+        const upgradeResult = await this._maybeAdvanceDifficultyFromBenchmark(
+            user_id,
+            oggy_accuracy
+        );
 
         logger.info('Sealed benchmark test complete', {
             result_id,
             benchmark_id: benchmark.benchmark_id,
             oggy_accuracy,
             base_accuracy,
-            advantage_percent
+            advantage_percent,
+            timing: {
+                base_duration_ms: baseDurationMs,
+                oggy_duration_ms: oggyDurationMs,
+                oggy_time_limit_ms: oggyTimeLimitMs,
+                safety_margin_ms: safetyMarginMs,
+                oggy_timed_out: oggyTimedOut
+            },
+            upgrade: upgradeResult
         });
 
         // Generate report
@@ -140,6 +224,14 @@ class SealedBenchmarkEvaluator {
                          oggy_accuracy < base_accuracy ? 'BASE_BETTER' : 'TIE'
             },
             training_state,
+            timing: {
+                base_duration_ms: baseDurationMs,
+                oggy_duration_ms: oggyDurationMs,
+                oggy_time_limit_ms: oggyTimeLimitMs,
+                safety_margin_ms: safetyMarginMs,
+                oggy_timed_out: oggyTimedOut
+            },
+            upgrade: upgradeResult,
             report
         };
     }
@@ -147,14 +239,14 @@ class SealedBenchmarkEvaluator {
     /**
      * Test Oggy on a single scenario
      */
-    async _testOggyOnScenario(user_id, scenario) {
+    async _testOggyOnScenario(user_id, scenario, options = {}) {
         try {
             const suggestion = await this.oggyCategorizer.suggestCategory(user_id, {
                 merchant: scenario.merchant,
                 amount: scenario.amount,
                 description: scenario.description,
                 transaction_date: new Date().toISOString().split('T')[0]
-            });
+            }, { benchmark_mode: true, ...options });
 
             const correct = suggestion.suggested_category === scenario.correct_category;
 
@@ -192,7 +284,7 @@ class SealedBenchmarkEvaluator {
                 amount: scenario.amount,
                 description: scenario.description,
                 transaction_date: new Date().toISOString().split('T')[0]
-            });
+            }, { benchmark_mode: true, memory_mode: 'benchmark', speed_mode: 'normal' });
 
             const correct = suggestion.suggested_category === scenario.correct_category;
 
@@ -257,6 +349,105 @@ class SealedBenchmarkEvaluator {
         }
     }
 
+    async _maybeAdvanceDifficultyFromBenchmark(userId, oggyAccuracy) {
+        if (!userId) {
+            return { upgraded: false, reason: 'missing_user_id' };
+        }
+
+        if (oggyAccuracy < BENCHMARK_UPGRADE_THRESHOLD) {
+            return { upgraded: false, reason: 'threshold_not_met' };
+        }
+
+        const { scale, level } = await this._loadScaleAndLevel(userId);
+        const next = this._computeNextScaleLevel(scale, level);
+
+        if (!next.advanced) {
+            return { upgraded: false, reason: 'at_max', scale, level };
+        }
+
+        await this._saveScaleAndLevel(userId, next.scale, next.level);
+        await adaptiveDifficultyScaler.bumpBaselineScale(userId, { reason: 'benchmark' });
+
+        return {
+            upgraded: true,
+            old_scale: scale,
+            old_level: level,
+            new_scale: next.scale,
+            new_level: next.level
+        };
+    }
+
+    _computeNextScaleLevel(scale, level) {
+        if (level < 5) {
+            return { scale, level: level + 1, advanced: true };
+        }
+
+        if (scale < 10) {
+            return { scale: scale + 1, level: 1, advanced: true };
+        }
+
+        return { scale, level, advanced: false };
+    }
+
+    async _loadScaleAndLevel(userId) {
+        await this._ensureStateTable();
+        const result = await query(`
+            SELECT scale, difficulty_level
+            FROM continuous_learning_state
+            WHERE user_id = $1
+        `, [userId]);
+
+        if (result.rows.length > 0) {
+            return {
+                scale: result.rows[0].scale || 1,
+                level: result.rows[0].difficulty_level || 3
+            };
+        }
+
+        await this._saveScaleAndLevel(userId, 1, 3);
+        return { scale: 1, level: 3 };
+    }
+
+    async _saveScaleAndLevel(userId, scale, level) {
+        await query(`
+            INSERT INTO continuous_learning_state (user_id, scale, difficulty_level, updated_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (user_id)
+            DO UPDATE SET scale = $2, difficulty_level = $3, updated_at = NOW()
+        `, [userId, scale, level]);
+    }
+
+    async _ensureStateTable() {
+        try {
+            await query(`
+                CREATE TABLE IF NOT EXISTS continuous_learning_state (
+                    user_id VARCHAR(255) PRIMARY KEY,
+                    scale INTEGER DEFAULT 1,
+                    difficulty_level INTEGER DEFAULT 3,
+                    baseline_scale INTEGER DEFAULT 50,
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            `);
+
+            await query(`
+                ALTER TABLE continuous_learning_state
+                ADD COLUMN IF NOT EXISTS scale INTEGER DEFAULT 1
+            `);
+
+            await query(`
+                ALTER TABLE continuous_learning_state
+                ADD COLUMN IF NOT EXISTS difficulty_level INTEGER DEFAULT 3
+            `);
+
+            await query(`
+                ALTER TABLE continuous_learning_state
+                ADD COLUMN IF NOT EXISTS baseline_scale INTEGER DEFAULT 50
+            `);
+        } catch (error) {
+            logger.debug('Failed to ensure continuous_learning_state table', { error: error.message });
+        }
+    }
+
     /**
      * Store test results in database
      */
@@ -292,7 +483,8 @@ class SealedBenchmarkEvaluator {
             JSON.stringify(data.training_state),
             JSON.stringify({
                 oggy: data.oggy_results,
-                base: data.base_results
+                base: data.base_results,
+                timing: data.timing || {}
             })
         ]);
 
@@ -324,6 +516,9 @@ ${benchmark.description ? `Description: ${benchmark.description}\n` : ''}
 Type: ${benchmark.use_ood ? 'Out-of-Distribution (Claude)' : 'In-Distribution (GPT-style)'}
 Difficulty: ${benchmark.difficulty_mix}
 Total Scenarios: ${total}
+Base Duration: ${(data.timing?.base_duration_ms || 0) / 1000}s
+Oggy Duration: ${(data.timing?.oggy_duration_ms || 0) / 1000}s
+Oggy Timed Out: ${data.timing?.oggy_timed_out ? 'YES' : 'NO'}
 
 RESULTS:
 ------------------------------------------------------------

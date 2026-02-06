@@ -20,6 +20,9 @@ const sealedBenchmarkGenerator = require('./sealedBenchmarkGenerator');
 const benchmarkValidator = require('./benchmarkValidator');
 const sessionCleanupManager = require('./sessionCleanupManager');
 const serviceHealthManager = require('./serviceHealthManager');
+const categoryRulesManager = require('./categoryRulesManager');
+const tessaAssessmentGenerator = require('./tessaAssessmentGenerator');
+const { adaptiveDifficultyScaler } = require('./adaptiveDifficultyScaler');
 const logger = require('../utils/logger');
 const { query } = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
@@ -39,6 +42,7 @@ class ContinuousLearningLoop {
             current_window_correct: 0,
             benchmarks_generated: 0,
             benchmarks_passed: 0,
+            benchmark_underperform_streak: 0,
             current_scale: 1,        // S1, S2, S3... (higher = more complex)
             difficulty_level: 1,      // 1-5 within each scale
             current_difficulty: 'S1 L1 - Easy',
@@ -56,9 +60,11 @@ class ContinuousLearningLoop {
         // Configuration
         this.config = {
             questions_per_benchmark: 35,              // Training questions before benchmark check
+            optional_benchmark_questions: 35,         // Soft threshold to consider benchmark
+            hard_benchmark_questions: 55,             // Hard cap to force benchmark if accuracy meets threshold
             accuracy_threshold_for_benchmark: 0.80,   // 80% accuracy on training to trigger benchmark
             both_models_threshold_for_upgrade: 0.90,  // 90% accuracy on benchmark to advance level
-            benchmark_scenario_count: 70,             // Questions per benchmark
+            benchmark_scenario_count: 40,             // Questions per benchmark
             training_interval_ms: 5000,
             practice_count_per_session: 3,
             max_difficulty_level: 5,
@@ -76,7 +82,8 @@ class ContinuousLearningLoop {
             extensions_used: 0,
             weaknesses_identified: [],
             extension_decisions: [],
-            original_stop_time: null
+            original_stop_time: null,
+            optional_benchmark_declined: false
         };
 
         // Base difficulty progression (within each scale)
@@ -159,8 +166,10 @@ class ContinuousLearningLoop {
         const {
             duration_minutes = null,
             questions_per_benchmark = 35,             // Training questions before benchmark
+            optional_benchmark_questions = 35,        // Soft threshold for optional benchmark
+            hard_benchmark_questions = 55,            // Hard cap for forced benchmark
             accuracy_threshold = 0.80,                // 80% on training to trigger benchmark
-            benchmark_scenario_count = 70,            // Questions per benchmark
+            benchmark_scenario_count = 40,            // Questions per benchmark
             upgrade_threshold = 0.90,                 // 90% on benchmark to advance level
             training_interval_ms = 5000,
             practice_count = 3,
@@ -175,6 +184,8 @@ class ContinuousLearningLoop {
         this.isRunning = true;
         this.currentGeneration = myGeneration;  // Store for this session
         this.config.questions_per_benchmark = questions_per_benchmark;
+        this.config.optional_benchmark_questions = optional_benchmark_questions;
+        this.config.hard_benchmark_questions = hard_benchmark_questions;
         this.config.accuracy_threshold_for_benchmark = accuracy_threshold;
         this.config.benchmark_scenario_count = benchmark_scenario_count;
         this.config.both_models_threshold_for_upgrade = upgrade_threshold;
@@ -210,6 +221,7 @@ class ContinuousLearningLoop {
             current_window_correct: 0,
             benchmarks_generated: 0,
             benchmarks_passed: 0,
+            benchmark_underperform_streak: 0,
             current_scale: scale,
             difficulty_level: level,
             current_difficulty: difficultyConfig.description,
@@ -320,7 +332,7 @@ class ContinuousLearningLoop {
             current_window_accuracy: this.stats.current_window_questions > 0
                 ? ((this.stats.current_window_correct / this.stats.current_window_questions) * 100).toFixed(1) + '%'
                 : 'N/A',
-            questions_until_next_benchmark: this.config.questions_per_benchmark - this.stats.current_window_questions,
+            questions_until_next_benchmark: this.config.hard_benchmark_questions - this.stats.current_window_questions,
             is_running: this.isRunning,
             // Scale information
             scale_name: difficultyConfig.scale_name,
@@ -420,10 +432,7 @@ class ContinuousLearningLoop {
                 this.stats.current_window_questions += newQuestions;
                 this.stats.current_window_correct += Math.max(0, newCorrect);
 
-                // Check if we've hit the benchmark threshold
-                if (this.stats.current_window_questions >= this.config.questions_per_benchmark) {
-                    await this._checkAndRunBenchmark();
-                }
+                await this._maybeTriggerBenchmark();
             }
         }
     }
@@ -432,7 +441,8 @@ class ContinuousLearningLoop {
      * Check accuracy and run benchmark if threshold met
      * Benchmark time does NOT count against the training time limit.
      */
-    async _checkAndRunBenchmark() {
+    async _checkAndRunBenchmark(options = {}) {
+        const { force = false, reason = 'threshold' } = options;
         const windowAccuracy = this.stats.current_window_correct / this.stats.current_window_questions;
 
         logger.info('Checking benchmark eligibility', {
@@ -473,6 +483,8 @@ class ContinuousLearningLoop {
                 estimated_benchmark_duration: this._formatDuration(avgBenchmarkTime),
                 estimated_completion: estimatedCompletion,
                 benchmark_count: this.stats.benchmarks_generated + 1,
+                trigger_reason: reason,
+                forced: force,
                 note: 'Benchmark time does NOT count against training time limit'
             });
 
@@ -505,11 +517,9 @@ class ContinuousLearningLoop {
                 this.stats.benchmark_results.push(benchmarkResult);
                 this.stats.benchmarks_generated++;
 
-                // Check if both models scored >= 80% (threshold for upgrade)
-                if (benchmarkResult.oggy_accuracy >= this.config.both_models_threshold_for_upgrade &&
-                    benchmarkResult.base_accuracy >= this.config.both_models_threshold_for_upgrade) {
-
-                    logger.info('Both models exceeded 80% threshold - advancing difficulty', {
+                // Check if Oggy scored >= threshold (upgrade gate)
+                if (benchmarkResult.oggy_accuracy >= this.config.both_models_threshold_for_upgrade) {
+                    logger.info('Oggy exceeded benchmark threshold - advancing difficulty', {
                         oggy: (benchmarkResult.oggy_accuracy * 100).toFixed(1) + '%',
                         base: (benchmarkResult.base_accuracy * 100).toFixed(1) + '%',
                         current_scale: this.stats.current_scale,
@@ -517,12 +527,14 @@ class ContinuousLearningLoop {
                     });
 
                     await this._advanceDifficulty();
+                    await adaptiveDifficultyScaler.bumpBaselineScale(this.userId, { reason: 'benchmark' });
                 }
 
                 // Count as passed if Oggy beats or matches base
                 if (benchmarkResult.oggy_accuracy >= benchmarkResult.base_accuracy) {
                     this.stats.benchmarks_passed++;
                 }
+                await this._maybeDemoteDifficultyFromBenchmark(benchmarkResult);
 
             } catch (error) {
                 logger.error('Benchmark generation/run failed', { error: error.message });
@@ -554,13 +566,81 @@ class ContinuousLearningLoop {
         } else {
             logger.info('Accuracy below threshold - continuing training', {
                 accuracy: (windowAccuracy * 100).toFixed(1) + '%',
-                threshold: (this.config.accuracy_threshold_for_benchmark * 100) + '%'
+                threshold: (this.config.accuracy_threshold_for_benchmark * 100) + '%',
+                trigger_reason: reason,
+                forced: force
             });
         }
 
         // Reset window
         this.stats.current_window_questions = 0;
         this.stats.current_window_correct = 0;
+        this.decisionState.optional_benchmark_declined = false;
+    }
+
+    async _maybeTriggerBenchmark() {
+        const windowQuestions = this.stats.current_window_questions;
+        const windowAccuracy = this.stats.current_window_correct / this.stats.current_window_questions;
+        const threshold = this.config.accuracy_threshold_for_benchmark;
+
+        // Hard cap: force benchmark when accuracy meets threshold
+        if (windowQuestions >= this.config.hard_benchmark_questions) {
+            if (windowAccuracy >= threshold) {
+                await this._checkAndRunBenchmark({ force: true, reason: 'hard_cap' });
+                return;
+            }
+
+            logger.info('Hard cap reached but accuracy below threshold - resetting window', {
+                window_questions: windowQuestions,
+                window_accuracy: (windowAccuracy * 100).toFixed(1) + '%',
+                threshold: (threshold * 100) + '%'
+            });
+            this.stats.current_window_questions = 0;
+            this.stats.current_window_correct = 0;
+            this.decisionState.optional_benchmark_declined = false;
+            return;
+        }
+
+        // Soft cap: optional benchmark if accuracy meets threshold
+        if (windowQuestions >= this.config.optional_benchmark_questions && windowAccuracy >= threshold) {
+            if (this.decisionState.optional_benchmark_declined) {
+                return;
+            }
+
+            const decision = this._shouldRunOptionalBenchmark(windowAccuracy);
+            if (decision.run) {
+                await this._checkAndRunBenchmark({ force: false, reason: decision.reason });
+            } else {
+                this.decisionState.optional_benchmark_declined = true;
+                logger.info('Optional benchmark declined - continuing training', {
+                    window_questions: windowQuestions,
+                    window_accuracy: (windowAccuracy * 100).toFixed(1) + '%',
+                    reason: decision.reason
+                });
+            }
+        }
+    }
+
+    _shouldRunOptionalBenchmark(windowAccuracy) {
+        // Heuristic: run if no benchmarks yet, or if recent performance suggests evaluation is useful
+        if (this.stats.benchmarks_generated === 0) {
+            return { run: true, reason: 'no_benchmarks_yet' };
+        }
+
+        const analysis = this._analyzePerformance();
+        if (analysis.avg_advantage < 0) {
+            return { run: true, reason: 'negative_advantage' };
+        }
+
+        if (analysis.weaknesses.length > 0) {
+            return { run: true, reason: 'weaknesses_detected' };
+        }
+
+        if (windowAccuracy >= 0.90) {
+            return { run: true, reason: 'high_confidence_window' };
+        }
+
+        return { run: false, reason: 'training_continues' };
     }
 
     /**
@@ -601,6 +681,16 @@ class ContinuousLearningLoop {
 
         // Validate the generated scenarios
         const benchmark = await sealedBenchmarkGenerator.getSealedBenchmark(benchmarkName);
+
+        // Always apply cheap reasoning-based auto-fix (no LLM)
+        const reasoningFix = benchmarkValidator.applyReasoningAutoFix(benchmark.scenarios);
+        if (reasoningFix.fixedCount > 0) {
+            logger.info('Applied reasoning-based auto-fix to benchmark scenarios', {
+                fixed_count: reasoningFix.fixedCount
+            });
+            await this._updateBenchmarkScenarios(benchmark.benchmark_id, reasoningFix.scenarios);
+            benchmark.scenarios = reasoningFix.scenarios;
+        }
 
         // Quick validation to check for obvious mislabels
         const validationIssues = [];
@@ -644,6 +734,10 @@ class ContinuousLearningLoop {
         if (testResult.oggy.wrong_scenarios && testResult.oggy.wrong_scenarios.length > 0) {
             const learningResult = await this._learnFromBenchmarkMistakes(testResult.oggy.wrong_scenarios);
             mistakes_learned = learningResult.learned;
+            if (learningResult.confusion_summary) {
+                this._applyConfusionFocusedTraining(learningResult.confusion_summary);
+                await this._generateConfusionTrainingBatch(learningResult.confusion_summary);
+            }
         }
 
         const result = {
@@ -746,9 +840,34 @@ class ContinuousLearningLoop {
 
         let learned = 0;
         let skippedContradictory = 0;
+        let skippedTimeout = 0;
+        let skippedDuplicate = 0;
+        let rulesCreated = 0;
+        const seenByDescription = new Map();
+        const confusionCounts = new Map();
 
         for (const mistake of wrongScenarios) {
             try {
+                if (!mistake.correct_category || mistake.predicted_category === 'TIMEOUT' || mistake.error === 'OGGY_TIMEOUT') {
+                    skippedTimeout++;
+                    continue;
+                }
+
+                const descKey = `${(mistake.merchant || '').toLowerCase()}|${(mistake.description || '').toLowerCase()}`;
+                const existing = seenByDescription.get(descKey);
+                if (existing && existing !== mistake.correct_category) {
+                    skippedContradictory++;
+                    continue;
+                }
+                if (existing === mistake.correct_category) {
+                    skippedDuplicate++;
+                    continue;
+                }
+                seenByDescription.set(descKey, mistake.correct_category);
+
+                const confusionKey = `${mistake.correct_category}|${mistake.predicted_category}`;
+                confusionCounts.set(confusionKey, (confusionCounts.get(confusionKey) || 0) + 1);
+
                 // Validate reasoning consistency before learning
                 const isConsistent = this._isReasoningConsistent(
                     mistake.reasoning,
@@ -765,6 +884,23 @@ class ContinuousLearningLoop {
                     });
                     skippedContradictory++;
                     continue; // Don't learn from contradictory corrections
+                }
+
+                // Per-scenario reasoning-based correction program (rules)
+                const reasoningHint = this._extractReasoningHint(
+                    mistake.reasoning,
+                    mistake.correct_category,
+                    mistake.predicted_category
+                );
+                if (reasoningHint) {
+                    const ruleId = await categoryRulesManager.createScenarioReasonRule({
+                        actual: mistake.correct_category,
+                        predicted: mistake.predicted_category,
+                        scenario_id: mistake.scenario_id
+                    }, reasoningHint);
+                    if (ruleId) {
+                        rulesCreated++;
+                    }
                 }
                 // Create a correction memory card with type for proper formatting
                 const cardContent = {
@@ -830,18 +966,360 @@ class ContinuousLearningLoop {
             }
         }
 
+        const confusionRulesCreated = await this._createConfusionRulesFromMistakes(confusionCounts);
+        rulesCreated += confusionRulesCreated;
+        const confusionSummary = this._buildConfusionSummary(confusionCounts, wrongScenarios.length);
+
         logger.info('📚 BENCHMARK LEARNING COMPLETE', {
             mistakes_processed: wrongScenarios.length,
             memories_created: learned,
-            skipped_contradictory: skippedContradictory
+            rules_created: rulesCreated,
+            skipped_contradictory: skippedContradictory,
+            skipped_timeout: skippedTimeout,
+            skipped_duplicate: skippedDuplicate
         });
 
-        return { learned, skipped: skippedContradictory };
+        return { learned, skipped: skippedContradictory, confusion_summary: confusionSummary };
+    }
+
+    _buildConfusionSummary(confusionCounts, totalMistakes) {
+        if (!confusionCounts || confusionCounts.size === 0 || !totalMistakes) {
+            return null;
+        }
+
+        const patterns = Array.from(confusionCounts.entries()).map(([key, count]) => {
+            const [actual, predicted] = key.split('|');
+            return {
+                actual,
+                predicted,
+                count,
+                confusion_rate: count / totalMistakes
+            };
+        }).sort((a, b) => b.count - a.count);
+
+        const confusionTotal = patterns.reduce((sum, p) => sum + p.count, 0);
+        const majority = confusionTotal / totalMistakes >= 0.5;
+
+        return {
+            totalMistakes,
+            confusionTotal,
+            majority,
+            patterns
+        };
+    }
+
+    _applyConfusionFocusedTraining(confusionSummary) {
+        if (!confusionSummary || !confusionSummary.patterns) {
+            return;
+        }
+
+        if (!confusionSummary.majority) {
+            return;
+        }
+
+        const topPatterns = confusionSummary.patterns.slice(0, 5);
+        const focusCategories = Array.from(new Set(topPatterns.map(p => p.actual))).slice(0, 3);
+
+        const weightMap = {};
+        const total = topPatterns.reduce((sum, p) => sum + p.count, 0) || 1;
+        for (const pattern of topPatterns) {
+            weightMap[pattern.actual] = (weightMap[pattern.actual] || 0) + (pattern.count / total);
+        }
+
+        logger.info('Applying confusion-focused training', {
+            focusCategories,
+            topPatterns: topPatterns.map(p => `${p.actual}→${p.predicted} (${(p.confusion_rate * 100).toFixed(0)}%)`)
+        });
+
+        selfDrivenLearning.setTargetedLearning(
+            weightMap,
+            focusCategories,
+            topPatterns,
+            { confusionTargetRate: 0.9 }
+        );
+    }
+
+    async _generateConfusionTrainingBatch(confusionSummary) {
+        if (!confusionSummary || !confusionSummary.patterns || !confusionSummary.majority) {
+            return;
+        }
+
+        const topPatterns = confusionSummary.patterns.slice(0, 3);
+        const itemsPerPattern = 4;
+
+        logger.info('Generating explicit confusion training batch', {
+            patterns: topPatterns.map(p => `${p.actual}→${p.predicted}`),
+            items_per_pattern: itemsPerPattern
+        });
+
+        let scenarios = [];
+        try {
+            scenarios = await tessaAssessmentGenerator.generateForConfusionPatterns(topPatterns, itemsPerPattern);
+        } catch (error) {
+            logger.warn('Failed to generate confusion training batch', { error: error.message });
+            return;
+        }
+
+        if (!scenarios || scenarios.length === 0) {
+            return;
+        }
+
+        let memoriesCreated = 0;
+        let rulesCreated = 0;
+
+        for (const scenario of scenarios) {
+            try {
+                const confusionContext = scenario.confusion_context || {};
+                const actual = confusionContext.actual_category || scenario.correctCategory;
+                const predicted = confusionContext.confused_with || 'unknown';
+
+                // Create a high-signal pattern memory card
+                const cardContent = {
+                    type: 'PATTERN',
+                    text: `CONFUSION TRAINING: "${scenario.merchant}" with "${scenario.description}" is "${scenario.correctCategory}" (not "${predicted}"). ${scenario.distinction_hint || ''}`,
+                    pattern: {
+                        merchant: scenario.merchant,
+                        category: scenario.correctCategory,
+                        description_keywords: scenario.description.split(' ').filter(w => w.length > 3),
+                        amount_range: this._getAmountRange(scenario.amount)
+                    },
+                    evidence: {
+                        source: 'confusion_training_batch',
+                        confidence: 'high',
+                        learning_mode: 'confusion_pair'
+                    }
+                };
+
+                await axios.post(
+                    `${MEMORY_SERVICE_URL}/cards`,
+                    {
+                        owner_type: 'user',
+                        owner_id: this.userId,
+                        tier: 2,
+                        kind: 'expense_category_pattern',
+                        content: cardContent,
+                        tags: [
+                            'payments',
+                            'categorization',
+                            'confusion_training',
+                            scenario.correctCategory,
+                            `not_${predicted}`,
+                            scenario.merchant.toLowerCase().replace(/\s+/g, '_')
+                        ],
+                        utility_weight: 0.8,
+                        reliability: 0.9
+                    },
+                    {
+                        timeout: 5000,
+                        headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
+                    }
+                );
+
+                memoriesCreated++;
+
+                if (predicted && predicted !== 'unknown') {
+                    const correctionContent = {
+                        type: 'BENCHMARK_CORRECTION',
+                        text: `CORRECTION: "${scenario.merchant}" with "${scenario.description}" is "${scenario.correctCategory}" NOT "${predicted}". ${scenario.distinction_hint || ''}`,
+                        description: scenario.description,
+                        merchant: scenario.merchant,
+                        correct_category: scenario.correctCategory,
+                        wrong_prediction: predicted,
+                        key_distinction: scenario.distinction_hint || '',
+                        correction: {
+                            merchant: scenario.merchant,
+                            description: scenario.description,
+                            wrong_prediction: predicted,
+                            correct_category: scenario.correctCategory,
+                            amount: scenario.amount
+                        },
+                        evidence: {
+                            source: 'confusion_training_batch',
+                            confidence: 'high',
+                            learning_mode: 'confusion_pair'
+                        }
+                    };
+
+                    await axios.post(
+                        `${MEMORY_SERVICE_URL}/cards`,
+                        {
+                            owner_type: 'user',
+                            owner_id: this.userId,
+                            tier: 1,
+                            kind: 'expense_category_correction',
+                            content: correctionContent,
+                            tags: [
+                                'payments',
+                                'categorization',
+                                'correction',
+                                'benchmark_learned',
+                                scenario.correctCategory,
+                                `not_${predicted}`,
+                                scenario.merchant.toLowerCase().replace(/\s+/g, '_')
+                            ],
+                            utility_weight: 0.95,
+                            reliability: 0.95
+                        },
+                        {
+                            timeout: 5000,
+                            headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
+                        }
+                    );
+
+                    memoriesCreated++;
+                }
+
+                const hint = scenario.distinction_hint || scenario.reasoning || '';
+                if (actual && predicted && hint) {
+                    const ruleId = await categoryRulesManager.createDistinctionRule({
+                        actual,
+                        predicted,
+                        confusion_rate: confusionContext.confusion_rate || 0.5
+                    }, hint);
+                    if (ruleId) {
+                        rulesCreated++;
+                    }
+                }
+            } catch (error) {
+                logger.warn('Failed to store confusion training memory', {
+                    merchant: scenario.merchant,
+                    error: error.message
+                });
+            }
+        }
+
+        logger.info('Confusion training batch stored', {
+            total: scenarios.length,
+            memories_created: memoriesCreated,
+            rules_created: rulesCreated
+        });
+    }
+
+    async _maybeDemoteDifficultyFromBenchmark(benchmarkResult) {
+        if (!benchmarkResult) return;
+
+        if (benchmarkResult.oggy_accuracy < benchmarkResult.base_accuracy) {
+            this.stats.benchmark_underperform_streak++;
+        } else {
+            this.stats.benchmark_underperform_streak = 0;
+        }
+
+        if (this.stats.benchmark_underperform_streak < 5) {
+            return;
+        }
+
+        const oldScale = this.stats.current_scale;
+        const oldLevel = this.stats.difficulty_level;
+
+        if (this.stats.difficulty_level > 1) {
+            this.stats.difficulty_level--;
+        } else if (this.stats.current_scale > 1) {
+            this.stats.current_scale--;
+            this.stats.difficulty_level = this.config.max_difficulty_level;
+        } else {
+            logger.info('Already at minimum scale/level, cannot demote further');
+            this.stats.benchmark_underperform_streak = 0;
+            return;
+        }
+
+        const difficultyConfig = this.getDifficultyConfig(this.stats.current_scale, this.stats.difficulty_level);
+        this.stats.current_difficulty = difficultyConfig.description;
+        await this._saveScaleAndLevel(this.userId, this.stats.current_scale, this.stats.difficulty_level);
+
+        logger.warn('Demoted difficulty after benchmark underperformance', {
+            old_scale: oldScale,
+            old_level: oldLevel,
+            new_scale: this.stats.current_scale,
+            new_level: this.stats.difficulty_level,
+            streak: this.stats.benchmark_underperform_streak,
+            user_id: this.userId
+        });
+
+        this.stats.benchmark_underperform_streak = 0;
+    }
+
+    async _createConfusionRulesFromMistakes(confusionCounts) {
+        if (!confusionCounts || confusionCounts.size === 0) return 0;
+
+        const sorted = Array.from(confusionCounts.entries())
+            .map(([key, count]) => ({ key, count }))
+            .filter(item => item.count >= 2)
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 3);
+
+        let created = 0;
+        for (const item of sorted) {
+            const [actual, predicted] = item.key.split('|');
+            const hint = this._defaultDistinctionHint(actual, predicted);
+            if (!hint) continue;
+            const ruleId = await categoryRulesManager.createDistinctionRule({
+                actual,
+                predicted,
+                confusion_rate: Math.min(1, item.count / 10)
+            }, hint);
+            if (ruleId) created++;
+        }
+
+        return created;
+    }
+
+    _defaultDistinctionHint(actual, predicted) {
+        const pair = `${actual}|${predicted}`;
+        const hints = {
+            'business_meal|dining': 'If the meal includes explicit business tasks (client, project, budget, meeting decisions), choose business_meal; if it is primarily social or personal, choose dining.',
+            'dining|business_meal': 'Choose dining when work is incidental; choose business_meal only when business is the primary purpose or decision-making occurs.',
+            'groceries|shopping': 'If the primary purchase is food for home (produce, meat, dairy), choose groceries; if non-food retail items dominate, choose shopping.',
+            'shopping|groceries': 'If non-food retail items dominate (clothing, electronics, home goods), choose shopping; if food for home is the main purpose, choose groceries.',
+            'entertainment|dining': 'If the main draw is a show/event (concert, performance, tickets), choose entertainment; if the main draw is the meal, choose dining.',
+            'health|other': 'If there is a prescription, medical service, pharmacy visit, or clinical treatment, choose health; otherwise consider other.',
+            'shopping|other': 'If there are specific retail goods purchased (clothes, electronics, home items), choose shopping; use other only when no category fits.',
+            'groceries|other': 'If food for home is purchased (produce, meat, dairy, meal prep), choose groceries; use other only if no category applies.',
+            'entertainment|other': 'If a show, performance, tickets, or venue is the focus, choose entertainment; use other only if no category applies.',
+            'dining|other': 'If the expense is a meal at a restaurant or cafe, choose dining; use other only if no category applies.',
+            'transportation|other': 'If gas, fuel, parking, rideshare, or transit is involved, choose transportation; otherwise consider other.',
+            'utilities|shopping': 'If the primary expense is a recurring service bill (internet, phone, cable, electric), choose utilities; otherwise choose shopping.'
+        };
+
+        return hints[pair] || null;
+    }
+
+    /**
+     * Extract a concise reasoning hint for category distinction rules.
+     */
+    _extractReasoningHint(reasoning, correctCategory, wrongPrediction) {
+        if (!reasoning) return null;
+
+        const text = reasoning.replace(/\s+/g, ' ').trim();
+        const lower = text.toLowerCase();
+
+        // Prefer sentences with primary-purpose language
+        const sentences = text.split(/(?<=[.!?])\s+/);
+        const primarySentence = sentences.find(s =>
+            /primary purpose|takes precedence|main reason|dominant|core/.test(s.toLowerCase())
+        );
+        const candidate = primarySentence || sentences[0];
+        if (!candidate) return null;
+
+        const maxLen = 240;
+        let hint = candidate.length > maxLen ? `${candidate.slice(0, maxLen)}...` : candidate;
+
+        // Normalize into a rule-like hint
+        hint = hint.replace(/according to.*$/i, '').trim();
+        if (!hint.toLowerCase().includes(correctCategory)) {
+            hint = `${hint} -> prefer "${correctCategory}" over "${wrongPrediction}".`;
+        }
+
+        // Avoid rules that explicitly endorse the wrong prediction
+        if (lower.includes(`should be ${wrongPrediction}`) || lower.includes(`${wrongPrediction} is correct`)) {
+            return null;
+        }
+
+        return hint;
     }
 
     /**
      * Advance difficulty level with scale system
-     * At level 5, advance to next scale at level 3
+     * At level 5, advance to next scale at level 1
      */
     async _advanceDifficulty() {
         const oldScale = this.stats.current_scale;
@@ -851,9 +1329,9 @@ class ContinuousLearningLoop {
             // Advance within current scale
             this.stats.difficulty_level++;
         } else if (this.stats.current_scale < this.config.max_scale) {
-            // At level 5, advance to next scale at level 3
+            // At level 5, advance to next scale at level 1
             this.stats.current_scale++;
-            this.stats.difficulty_level = 3;  // Start new scale at level 3
+            this.stats.difficulty_level = 1;  // Start new scale at level 1
 
             logger.info('🎉 SCALE ADVANCEMENT! Moving to next scale', {
                 old_scale: oldScale,
@@ -1045,25 +1523,30 @@ class ContinuousLearningLoop {
     async _loadScaleAndLevel(userId, startingScale, startingLevel) {
         let scale = startingScale;
         let level = startingLevel;
+        let baselineScale = null;
         let loadedFromDb = false;
 
         // If not explicitly provided, try to load from database
         if (scale === null || level === null) {
             try {
                 const result = await query(`
-                    SELECT scale, difficulty_level FROM continuous_learning_state
+                    SELECT scale, difficulty_level, baseline_scale FROM continuous_learning_state
                     WHERE user_id = $1
                 `, [userId]);
 
                 if (result.rows.length > 0) {
                     if (scale === null) scale = result.rows[0].scale;
                     if (level === null) level = result.rows[0].difficulty_level;
+                    if (result.rows[0].baseline_scale !== null && result.rows[0].baseline_scale !== undefined) {
+                        baselineScale = result.rows[0].baseline_scale;
+                    }
                     loadedFromDb = true;
 
                     logger.info('Loaded scale and level from database', {
                         user_id: userId,
                         scale: scale,
-                        difficulty_level: level
+                        difficulty_level: level,
+                        baseline_scale: baselineScale
                     });
                 }
             } catch (error) {
@@ -1076,15 +1559,24 @@ class ContinuousLearningLoop {
         scale = Math.max(1, Math.min(this.config.max_scale, scale || 1));
         level = Math.max(1, Math.min(5, level || 3));
 
+        // Apply baseline scale if available
+        if (baselineScale !== null) {
+            adaptiveDifficultyScaler.setBaselineScale(parseInt(baselineScale, 10));
+        }
+
         // Always save the initial state to ensure it's persisted
         // This handles cases where the row doesn't exist or explicit starting values were provided
         if (!loadedFromDb || startingScale !== null || startingLevel !== null) {
-            await this._saveScaleAndLevel(userId, scale, level);
+            const initialBaseline = baselineScale !== null
+                ? parseInt(baselineScale, 10)
+                : adaptiveDifficultyScaler.getBaselineScale();
+            await this._saveScaleAndLevel(userId, scale, level, initialBaseline);
             logger.info('Saved initial scale and level', {
                 user_id: userId,
                 scale: scale,
                 difficulty_level: level,
-                explicit_start: startingScale !== null || startingLevel !== null
+                explicit_start: startingScale !== null || startingLevel !== null,
+                baseline_scale: initialBaseline
             });
         }
 
@@ -1094,26 +1586,29 @@ class ContinuousLearningLoop {
     /**
      * Save scale and level to database
      */
-    async _saveScaleAndLevel(userId, scale, level) {
+    async _saveScaleAndLevel(userId, scale, level, baselineScale = null) {
         try {
             // Upsert the scale and level
             await query(`
-                INSERT INTO continuous_learning_state (user_id, scale, difficulty_level, updated_at)
-                VALUES ($1, $2, $3, NOW())
+                INSERT INTO continuous_learning_state (user_id, scale, difficulty_level, baseline_scale, updated_at)
+                VALUES ($1, $2, $3, COALESCE($4, 50), NOW())
                 ON CONFLICT (user_id)
-                DO UPDATE SET scale = $2, difficulty_level = $3, updated_at = NOW()
-            `, [userId, scale, level]);
+                DO UPDATE SET scale = $2, difficulty_level = $3,
+                    baseline_scale = COALESCE($4, continuous_learning_state.baseline_scale),
+                    updated_at = NOW()
+            `, [userId, scale, level, baselineScale]);
 
             logger.debug('Saved scale and level to database', {
                 user_id: userId,
                 scale: scale,
-                difficulty_level: level
+                difficulty_level: level,
+                baseline_scale: baselineScale
             });
         } catch (error) {
             // If table doesn't exist or missing column, create/update it
             if (error.message.includes('does not exist') || error.message.includes('column')) {
                 await this._createStateTable();
-                await this._saveScaleAndLevel(userId, scale, level);
+                await this._saveScaleAndLevel(userId, scale, level, baselineScale);
             } else {
                 logger.warn('Could not save scale/level', { error: error.message });
             }
@@ -1131,6 +1626,7 @@ class ContinuousLearningLoop {
                     user_id VARCHAR(255) PRIMARY KEY,
                     scale INTEGER DEFAULT 1,
                     difficulty_level INTEGER DEFAULT 3,
+                    baseline_scale INTEGER DEFAULT 50,
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             `);
@@ -1145,10 +1641,38 @@ class ContinuousLearningLoop {
                 // Column might already exist, that's OK
             }
 
+            try {
+                await query(`
+                    ALTER TABLE continuous_learning_state
+                    ADD COLUMN IF NOT EXISTS difficulty_level INTEGER DEFAULT 3
+                `);
+            } catch (alterError) {
+                // Column might already exist, that's OK
+            }
+
+            try {
+                await query(`
+                    ALTER TABLE continuous_learning_state
+                    ADD COLUMN IF NOT EXISTS baseline_scale INTEGER DEFAULT 50
+                `);
+            } catch (alterError) {
+                // Column might already exist, that's OK
+            }
+
             logger.info('Created/updated continuous_learning_state table with scale support');
         } catch (error) {
             logger.warn('Could not create state table', { error: error.message });
         }
+    }
+
+    /**
+     * Format duration for display
+     */
+    _getAmountRange(amount) {
+        if (amount < 20) return 'small';
+        if (amount < 100) return 'medium';
+        if (amount < 500) return 'large';
+        return 'very_large';
     }
 
     /**

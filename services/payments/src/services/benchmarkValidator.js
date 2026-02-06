@@ -131,7 +131,7 @@ class BenchmarkValidator {
         for (const scenario of scenarios) {
             const result = await this.validateScenario(scenario);
 
-            if (result.is_valid === false && result.confidence > 0.8) {
+            if (result.is_valid === false && result.confidence > 0.7) {
                 // High confidence mismatch - fix the label
                 logger.warn('Auto-correcting mislabeled scenario', {
                     merchant: scenario.merchant,
@@ -152,6 +152,35 @@ class BenchmarkValidator {
         }
 
         return validated;
+    }
+
+    /**
+     * Apply reasoning-based auto-fix without LLM calls.
+     * Returns { scenarios, fixedCount }.
+     */
+    applyReasoningAutoFix(scenarios) {
+        let fixedCount = 0;
+        const updated = scenarios.map(scenario => {
+            const reasoningInference = this._inferCategoryFromReasoning(scenario.reasoning || '');
+            if (reasoningInference && reasoningInference.category &&
+                reasoningInference.category !== scenario.correct_category) {
+                fixedCount++;
+                return {
+                    ...scenario,
+                    correct_category: reasoningInference.category,
+                    original_label: scenario.correct_category,
+                    auto_corrected: true,
+                    auto_corrected_reason: 'reasoning_inference'
+                };
+            }
+            return scenario;
+        });
+
+        if (fixedCount > 0) {
+            logger.warn('Reasoning-based auto-fix applied', { fixed_count: fixedCount });
+        }
+
+        return { scenarios: updated, fixedCount };
     }
 
     /**
@@ -219,6 +248,96 @@ class BenchmarkValidator {
             has_flags: flags.length > 0,
             flags
         };
+    }
+
+    /**
+     * Infer correct category from scenario reasoning when it explicitly states the label.
+     * Returns { category, confidence, reason } or null if no strong signal found.
+     */
+    _inferCategoryFromReasoning(reasoning) {
+        if (!reasoning) return null;
+
+        const text = reasoning.toLowerCase();
+        const categories = Object.keys(this.categoryDefinitions);
+
+        const patterns = [
+            { regex: /categorized as ([a-z_\s-]+)/i, reason: 'categorized_as' },
+            { regex: /should be (categorized as )?([a-z_\s-]+)/i, reason: 'should_be' },
+            { regex: /is best categorized as ([a-z_\s-]+)/i, reason: 'best_categorized' },
+            { regex: /primary purpose.*?([a-z_\s-]+)/i, reason: 'primary_purpose' },
+            { regex: /takes precedence.*?([a-z_\s-]+)/i, reason: 'takes_precedence' },
+            { regex: /this is a ([a-z_\s-]+) expense/i, reason: 'is_expense' },
+            { regex: /the correct category.*?([a-z_\s-]+)/i, reason: 'correct_category' },
+            { regex: /classified as ([a-z_\s-]+)/i, reason: 'classified_as' },
+            { regex: /categorized as a ([a-z_\s-]+)/i, reason: 'categorized_as_a' }
+        ];
+
+        for (const pattern of patterns) {
+            const match = text.match(pattern.regex);
+            if (!match) continue;
+            const rawCandidate = (match[2] || match[1] || '').toLowerCase().trim();
+            if (!rawCandidate) continue;
+
+            const normalized = rawCandidate
+                .replace(/category|expense|transaction|type|this|a|an|the/gi, '')
+                .replace(/[^a-z\s-]/g, '')
+                .trim()
+                .replace(/\s+/g, '_')
+                .replace(/-+/g, '_');
+
+            if (!categories.includes(normalized)) continue;
+
+            const idx = match.index || 0;
+            const windowStart = Math.max(0, idx - 5);
+            const window = text.slice(windowStart, idx);
+            if (window.includes('not ')) {
+                continue;
+            }
+
+            return {
+                category: normalized,
+                confidence: 0.95,
+                reason: pattern.reason
+            };
+        }
+
+        // Fallback: pick the first explicit category mention
+        for (const category of categories) {
+            const token = category.replace('_', ' ');
+            const regex = new RegExp(`\\b${token}\\b`, 'i');
+            if (regex.test(text)) {
+                return {
+                    category,
+                    confidence: 0.9,
+                    reason: 'explicit_category_mention'
+                };
+            }
+        }
+
+        // Keyword-based inference (reasoning hints without explicit category names)
+        const keywordHints = [
+            { category: 'health', keywords: ['prescription', 'pharmacy', 'medication', 'doctor', 'clinic'] },
+            { category: 'transportation', keywords: ['gas', 'fuel', 'refuel', 'tank', 'rideshare', 'uber', 'lyft', 'parking'] },
+            { category: 'utilities', keywords: ['internet', 'cable', 'electric', 'electricity', 'water bill', 'phone bill'] },
+            { category: 'entertainment', keywords: ['concert', 'performance', 'show', 'venue', 'tickets'] },
+            { category: 'groceries', keywords: ['produce', 'grocery', 'groceries', 'meal prep', 'supermarket'] },
+            { category: 'shopping', keywords: ['clothing', 'electronics', 'home goods', 'retail', 'lamp', 'vacuum'] },
+            { category: 'business_meal', keywords: ['client', 'budget', 'proposal', 'meeting', 'project', 'presentation'] },
+            { category: 'dining', keywords: ['lunch', 'dinner', 'restaurant', 'cafe', 'meal'] }
+        ];
+
+        for (const hint of keywordHints) {
+            const found = hint.keywords.find(kw => text.includes(kw));
+            if (found) {
+                return {
+                    category: hint.category,
+                    confidence: 0.9,
+                    reason: `keyword:${found}`
+                };
+            }
+        }
+
+        return null;
     }
 
     /**

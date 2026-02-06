@@ -54,13 +54,25 @@ module.exports = (pool, redisClient) => {
           content, tags, utility_weight, reliability, created_at
       `;
 
+      const normalizedTags = Array.isArray(tags) ? [...tags] : [];
+      let normalizedContent = content;
+
+      // Safeguard: correction cards should always be retrievable for categorization
+      if (kind === 'expense_category_correction') {
+        if (!normalizedTags.includes('categorization')) normalizedTags.push('categorization');
+        if (!normalizedTags.includes('payments')) normalizedTags.push('payments');
+        if (normalizedContent && typeof normalizedContent === 'object' && !normalizedContent.type) {
+          normalizedContent = { ...normalizedContent, type: 'BENCHMARK_CORRECTION' };
+        }
+      }
+
       const values = [
         owner_type,
         owner_id,
         tier,
         kind,
-        JSON.stringify(content),
-        tags,
+        JSON.stringify(normalizedContent),
+        normalizedTags,
         utility_weight,
         reliability,
       ];
