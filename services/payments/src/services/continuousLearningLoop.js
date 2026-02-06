@@ -61,9 +61,9 @@ class ContinuousLearningLoop {
 
         // Configuration
         this.config = {
-            questions_per_benchmark: 25,              // Training questions before benchmark check
-            optional_benchmark_questions: 25,         // Soft threshold to consider benchmark
-            hard_benchmark_questions: 40,             // Hard cap to force benchmark if accuracy meets threshold
+            questions_per_benchmark: 20,              // Training questions before benchmark check
+            optional_benchmark_questions: 20,         // Soft threshold to consider benchmark
+            hard_benchmark_questions: 35,             // Hard cap to force benchmark if accuracy meets threshold
             accuracy_threshold_for_benchmark: 0.80,   // 80% accuracy on training to trigger benchmark
             both_models_threshold_for_upgrade: 0.90,  // 90% accuracy on benchmark to advance level
             benchmark_scenario_count: 40,             // Questions per benchmark
@@ -167,9 +167,9 @@ class ContinuousLearningLoop {
 
         const {
             duration_minutes = null,
-            questions_per_benchmark = 25,             // Training questions before benchmark
-            optional_benchmark_questions = 25,        // Soft threshold for optional benchmark
-            hard_benchmark_questions = 40,            // Hard cap for forced benchmark
+            questions_per_benchmark = 20,             // Training questions before benchmark
+            optional_benchmark_questions = 20,        // Soft threshold for optional benchmark
+            hard_benchmark_questions = 35,            // Hard cap for forced benchmark
             accuracy_threshold = 0.80,                // 80% on training to trigger benchmark
             benchmark_scenario_count = 40,            // Questions per benchmark
             upgrade_threshold = 0.90,                 // 90% on benchmark to advance level

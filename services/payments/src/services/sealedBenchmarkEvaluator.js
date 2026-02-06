@@ -59,10 +59,10 @@ class SealedBenchmarkEvaluator {
         // Cooldown between Base and Oggy - Base depletes the rate limit bucket
         const interCooldownMs = await this._waitForRateLimitCooldown(60000);
 
-        // Give Oggy generous time: base duration + 100% buffer + inter-cooldown
-        // Oggy faces MORE rate limiting than Base because Base depletes the bucket first,
-        // and even after the inter-cooldown, Oggy generates its own 429s during 40 calls
-        const safetyMarginMs = Math.max(60000, Math.floor(baseDurationMs * 1.0));
+        // Give Oggy generous time: base duration + 150% buffer + inter-cooldown
+        // Oggy needs MORE time than Base: it makes extra API calls for memory retrieval,
+        // and faces rate limiting that compounds during 40 rapid scenarios
+        const safetyMarginMs = Math.max(120000, Math.floor(baseDurationMs * 1.5));
         const oggyTimeLimitMs = baseDurationMs + safetyMarginMs + interCooldownMs;
 
         // Test Oggy with generous time limit to avoid rate-limit-induced timeouts
@@ -84,20 +84,17 @@ class SealedBenchmarkEvaluator {
             const projected = elapsed + (avgPerItem * remaining);
 
             // Adaptive mode selection:
-            // - If ahead of schedule, allow full memory
-            // - If falling behind, switch to fast mode
-            // - If very late, switch to very fast mode (minimal prompt)
+            // Memory is Oggy's competitive advantage - only sacrifice it as a last resort.
+            // With generous time limits (100% margin + interCooldown), keep memory enabled.
             if (avgPerItem < targetPerItem * 0.75 && projected < oggyTimeLimitMs * 0.8) {
                 memoryMode = 'full';
                 speedMode = 'normal';
-            } else if (
-                elapsed > oggyTimeLimitMs * 0.9 ||
-                avgPerItem > targetPerItem * 1.2 ||
-                projected > oggyTimeLimitMs * 0.95
-            ) {
+            } else if (elapsed > oggyTimeLimitMs * 0.95 && remaining <= 3) {
+                // Only drop memory in the very last scenarios if critically behind
                 memoryMode = 'none';
                 speedMode = 'very_fast';
-            } else if (avgPerItem > targetPerItem * 1.05 || projected > oggyTimeLimitMs * 0.9) {
+            } else if (projected > oggyTimeLimitMs * 0.95) {
+                // Behind schedule but not critical - reduce prompt size but keep memory
                 memoryMode = 'benchmark';
                 speedMode = 'fast';
             } else {
