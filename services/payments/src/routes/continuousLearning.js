@@ -17,21 +17,17 @@ const logger = require('../utils/logger');
 router.post('/start', async (req, res) => {
     try {
         const {
-            user_id,
+            user_id = 'test_user',
             duration_minutes = 5,
-            questions_per_benchmark = 35,         // Training questions before benchmark check
+            questions_per_benchmark = 20,         // Training questions before benchmark check
             accuracy_threshold = 0.80,            // 80% on training to trigger benchmark
             benchmark_scenario_count = 40,        // Questions per benchmark
             upgrade_threshold = 0.90,             // 90% on benchmark to advance level
-            training_interval_ms = 5000,
+            training_interval_ms = 10000,
             practice_count = 3,
             starting_difficulty = null,  // null = load from DB, or specify 1-5
             starting_scale = null        // null = load from DB, or specify 1-10
         } = req.body;
-
-        if (!user_id) {
-            return res.status(400).json({ error: 'user_id is required' });
-        }
 
         logger.info('Starting continuous learning via API', {
             requestId: req.requestId,
@@ -97,21 +93,17 @@ router.post('/start', async (req, res) => {
 router.post('/start-and-wait', async (req, res) => {
     try {
         const {
-            user_id,
+            user_id = 'test_user',
             duration_minutes = 5,
-            questions_per_benchmark = 35,         // Training questions before benchmark check
+            questions_per_benchmark = 20,         // Training questions before benchmark check
             accuracy_threshold = 0.80,            // 80% on training to trigger benchmark
             benchmark_scenario_count = 40,        // Questions per benchmark
             upgrade_threshold = 0.90,             // 90% on benchmark to advance level
-            training_interval_ms = 5000,
+            training_interval_ms = 10000,
             practice_count = 3,
             starting_difficulty = null,  // null = load from DB, or specify 1-5
             starting_scale = null        // null = load from DB, or specify 1-10
         } = req.body;
-
-        if (!user_id) {
-            return res.status(400).json({ error: 'user_id is required' });
-        }
 
         logger.info('Starting continuous learning (blocking) via API', {
             requestId: req.requestId,

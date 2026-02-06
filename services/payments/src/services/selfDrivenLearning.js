@@ -110,6 +110,15 @@ class SelfDrivenLearning {
         this.userId = userId;
         this.practiceCount = practiceCount;
 
+        // Reset stats for new session to prevent stale counts from triggering premature benchmarks
+        this.stats = {
+            total_attempts: 0,
+            correct: 0,
+            incorrect: 0,
+            sessions: 0
+        };
+        this.recentAccuracy = [];
+
         logger.info('Starting self-driven learning', {
             userId,
             interval_ms: interval,
