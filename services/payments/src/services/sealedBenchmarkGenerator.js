@@ -13,6 +13,8 @@ const logger = require('../utils/logger');
 const circuitBreakerRegistry = require('../utils/circuitBreakerRegistry');
 const retryHandler = require('../utils/retry');
 
+const { parallelMap } = require('../utils/parallel');
+
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const ANTHROPIC_MODEL = 'claude-3-haiku-20240307'; // Claude 3 Haiku - fast and affordable
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -176,7 +178,7 @@ class SealedBenchmarkGenerator {
             use_ood
         });
 
-        const { scenarios, errors } = await this._generateScenariosInParallel(tasks, 5);
+        const { scenarios, errors } = await this._generateScenariosInParallel(tasks, 8);
 
         // Store sealed benchmark in database
         await this._storeSealedBenchmark({
@@ -929,57 +931,39 @@ Return only the JSON object.`;
      * @param {number} concurrency - Max concurrent requests (default 5)
      * @returns {object} { scenarios: [], errors: [] }
      */
-    async _generateScenariosInParallel(tasks, concurrency = 5) {
-        const scenarios = [];
-        const errors = [];
+    async _generateScenariosInParallel(tasks, concurrency = 8) {
+        const parallelResult = await parallelMap(
+            tasks,
+            async (task) => {
+                const scenario = task.use_ood
+                    ? await this._generateOODScenario(task.category, task.difficulty, task.scaleContext)
+                    : await this._generateInDistributionScenario(task.category, task.difficulty, task.scaleContext);
 
-        // Process in batches for controlled concurrency
-        for (let i = 0; i < tasks.length; i += concurrency) {
-            const batch = tasks.slice(i, i + concurrency);
+                if (!scenario) throw new Error('Empty scenario returned');
 
-            const batchPromises = batch.map(async (task) => {
-                try {
-                    const scenario = task.use_ood
-                        ? await this._generateOODScenario(task.category, task.difficulty, task.scaleContext)
-                        : await this._generateInDistributionScenario(task.category, task.difficulty, task.scaleContext);
+                return {
+                    scenario_id: uuidv4(),
+                    ...scenario,
+                    order_index: task.index,
+                    scale: task.scaleContext.scale,
+                    level: task.scaleContext.level
+                };
+            },
+            concurrency,
+            { operationName: 'sealed-benchmark-generation' }
+        );
 
-                    if (scenario) {
-                        return {
-                            success: true,
-                            scenario: {
-                                scenario_id: uuidv4(),
-                                ...scenario,
-                                order_index: task.index,
-                                scale: task.scaleContext.scale,
-                                level: task.scaleContext.level
-                            }
-                        };
-                    }
-                    return { success: false, error: 'Empty scenario returned', index: task.index };
-                } catch (error) {
-                    return { success: false, error: error.message, index: task.index };
-                }
+        const scenarios = parallelResult.results
+            .filter(r => r.success)
+            .map(r => r.value);
+
+        const errors = parallelResult.errors.map(e => {
+            logger.warn('Failed to generate sealed benchmark scenario', {
+                index: e.index,
+                error: e.error
             });
-
-            const batchResults = await Promise.all(batchPromises);
-
-            for (const result of batchResults) {
-                if (result.success) {
-                    scenarios.push(result.scenario);
-                } else {
-                    errors.push({ index: result.index, error: result.error });
-                    logger.warn('Failed to generate sealed benchmark scenario', {
-                        index: result.index,
-                        error: result.error
-                    });
-                }
-            }
-
-            // Small delay between batches to avoid rate limits
-            if (i + concurrency < tasks.length) {
-                await this._sleep(100);
-            }
-        }
+            return { index: e.index, error: e.error };
+        });
 
         return { scenarios, errors };
     }

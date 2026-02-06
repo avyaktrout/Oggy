@@ -201,8 +201,8 @@ class SelfDrivenLearning {
                         predicted: result.predictedCategory
                     });
 
-                    // Small delay between attempts to avoid hammering APIs
-                    await this._sleep(1000);
+                    // Brief delay between attempts — circuit breakers handle rate limiting
+                    await this._sleep(200);
                 } catch (error) {
                     sessionErrors++;
                     logger.logError(error, {

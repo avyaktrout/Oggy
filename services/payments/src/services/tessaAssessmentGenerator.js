@@ -13,6 +13,7 @@ const logger = require('../utils/logger');
 const circuitBreakerRegistry = require('../utils/circuitBreakerRegistry');
 const retryHandler = require('../utils/retry');
 const { adaptiveDifficultyScaler, DIFFICULTY_TIERS } = require('./adaptiveDifficultyScaler');
+const { parallelMap } = require('../utils/parallel');
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = 'gpt-4o-mini';
@@ -547,47 +548,42 @@ This is a realistic example for training categorization AI.`;
      * @returns {Array} Practice items with category metadata
      */
     async generateForWeakCategories(weakCategories, itemsPerCategory = 10) {
-        const items = [];
-
         logger.info('Generating items for weak categories', {
             weak_categories: weakCategories.map(w => w.category),
             items_per_category: itemsPerCategory
         });
 
+        // Flatten nested loops into a single task list
+        const tasks = [];
         for (const weakness of weakCategories) {
-            // Select difficulty tier based on severity
             const tier = this._severityToTier(weakness.severity);
-
             for (let i = 0; i < itemsPerCategory; i++) {
-                try {
-                    const scenario = await this.generateNovelScenario({
-                        category: weakness.category,
-                        difficultyTier: tier
-                    });
-
-                    if (scenario) {
-                        items.push({
-                            ...scenario,
-                            weakness_context: {
-                                original_accuracy: weakness.accuracy,
-                                severity: weakness.severity,
-                                target_improvement: Math.max(0.60 - weakness.accuracy, 0.10)
-                            }
-                        });
-                    }
-
-                    // Rate limit to avoid API issues
-                    await this._sleep(300);
-
-                } catch (error) {
-                    logger.warn('Failed to generate targeted item', {
-                        category: weakness.category,
-                        index: i,
-                        error: error.message
-                    });
-                }
+                tasks.push({ weakness, tier });
             }
         }
+
+        const result = await parallelMap(
+            tasks,
+            async (task) => {
+                const scenario = await this.generateNovelScenario({
+                    category: task.weakness.category,
+                    difficultyTier: task.tier
+                });
+                if (!scenario) throw new Error('Empty scenario');
+                return {
+                    ...scenario,
+                    weakness_context: {
+                        original_accuracy: task.weakness.accuracy,
+                        severity: task.weakness.severity,
+                        target_improvement: Math.max(0.60 - task.weakness.accuracy, 0.10)
+                    }
+                };
+            },
+            8,
+            { operationName: 'weak-category-generation', interTaskDelayMs: 50 }
+        );
+
+        const items = result.results.filter(r => r.success).map(r => r.value);
 
         logger.info('Generated weak category items', {
             total: items.length,
@@ -635,45 +631,40 @@ This is a realistic example for training categorization AI.`;
      * @returns {Array} Practice items targeting specific confusion patterns
      */
     async generateForConfusionPatterns(confusionPatterns, itemsPerPattern = 5) {
-        const items = [];
-
         logger.info('Generating confusion-targeted scenarios', {
             patterns: confusionPatterns.map(p => `${p.actual}→${p.predicted}`),
             items_per_pattern: itemsPerPattern
         });
 
+        // Flatten nested loops into a single task list
+        const tasks = [];
         for (const pattern of confusionPatterns) {
-            const { actual, predicted, confusion_rate } = pattern;
-
             for (let i = 0; i < itemsPerPattern; i++) {
-                try {
-                    const scenario = await this._generateConfusionScenario(actual, predicted, confusion_rate);
-
-                    if (scenario) {
-                        items.push({
-                            ...scenario,
-                            confusion_context: {
-                                actual_category: actual,
-                                confused_with: predicted,
-                                confusion_rate: confusion_rate,
-                                training_goal: `Learn to distinguish ${actual} from ${predicted}`
-                            }
-                        });
-                    }
-
-                    // Rate limit to avoid API issues
-                    await this._sleep(300);
-
-                } catch (error) {
-                    logger.warn('Failed to generate confusion-targeted item', {
-                        actual,
-                        predicted,
-                        index: i,
-                        error: error.message
-                    });
-                }
+                tasks.push(pattern);
             }
         }
+
+        const result = await parallelMap(
+            tasks,
+            async (pattern) => {
+                const { actual, predicted, confusion_rate } = pattern;
+                const scenario = await this._generateConfusionScenario(actual, predicted, confusion_rate);
+                if (!scenario) throw new Error('Empty scenario');
+                return {
+                    ...scenario,
+                    confusion_context: {
+                        actual_category: actual,
+                        confused_with: predicted,
+                        confusion_rate: confusion_rate,
+                        training_goal: `Learn to distinguish ${actual} from ${predicted}`
+                    }
+                };
+            },
+            6,
+            { operationName: 'confusion-pattern-generation', interTaskDelayMs: 50 }
+        );
+
+        const items = result.results.filter(r => r.success).map(r => r.value);
 
         logger.info('Generated confusion-targeted items', {
             total: items.length,

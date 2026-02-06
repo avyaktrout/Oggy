@@ -25,6 +25,7 @@ const tessaAssessmentGenerator = require('./tessaAssessmentGenerator');
 const { adaptiveDifficultyScaler } = require('./adaptiveDifficultyScaler');
 const logger = require('../utils/logger');
 const correctionValidator = require('../utils/correctionValidator');
+const { parallelMap } = require('../utils/parallel');
 const { query } = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
@@ -837,66 +838,74 @@ class ContinuousLearningLoop {
         const seenByDescription = new Map();
         const confusionCounts = new Map();
 
+        // Phase 1: Sequential filtering and validation
+        const cardsToCreate = [];
         for (const mistake of wrongScenarios) {
-            try {
-                if (!mistake.correct_category || mistake.predicted_category === 'TIMEOUT' || mistake.error === 'OGGY_TIMEOUT') {
-                    skippedTimeout++;
-                    continue;
-                }
+            if (!mistake.correct_category || mistake.predicted_category === 'TIMEOUT' || mistake.error === 'OGGY_TIMEOUT') {
+                skippedTimeout++;
+                continue;
+            }
 
-                const descKey = `${(mistake.merchant || '').toLowerCase()}|${(mistake.description || '').toLowerCase()}`;
-                const existing = seenByDescription.get(descKey);
-                if (existing && existing !== mistake.correct_category) {
-                    skippedContradictory++;
-                    continue;
-                }
-                if (existing === mistake.correct_category) {
-                    skippedDuplicate++;
-                    continue;
-                }
-                seenByDescription.set(descKey, mistake.correct_category);
+            const descKey = `${(mistake.merchant || '').toLowerCase()}|${(mistake.description || '').toLowerCase()}`;
+            const existing = seenByDescription.get(descKey);
+            if (existing && existing !== mistake.correct_category) {
+                skippedContradictory++;
+                continue;
+            }
+            if (existing === mistake.correct_category) {
+                skippedDuplicate++;
+                continue;
+            }
+            seenByDescription.set(descKey, mistake.correct_category);
 
-                const confusionKey = `${mistake.correct_category}|${mistake.predicted_category}`;
-                confusionCounts.set(confusionKey, (confusionCounts.get(confusionKey) || 0) + 1);
+            const confusionKey = `${mistake.correct_category}|${mistake.predicted_category}`;
+            confusionCounts.set(confusionKey, (confusionCounts.get(confusionKey) || 0) + 1);
 
-                // Validate reasoning consistency before learning
-                const isConsistent = this._isReasoningConsistent(
-                    mistake.reasoning,
-                    mistake.correct_category,
-                    mistake.predicted_category
-                );
+            const isConsistent = this._isReasoningConsistent(
+                mistake.reasoning,
+                mistake.correct_category,
+                mistake.predicted_category
+            );
 
-                if (!isConsistent) {
-                    logger.warn('⚠️ Skipping contradictory correction', {
-                        merchant: mistake.merchant,
-                        stated_correct: mistake.correct_category,
-                        reasoning_suggests: mistake.predicted_category,
-                        reasoning: mistake.reasoning?.substring(0, 100)
-                    });
-                    skippedContradictory++;
-                    continue; // Don't learn from contradictory corrections
-                }
+            if (!isConsistent) {
+                logger.warn('Skipping contradictory correction', {
+                    merchant: mistake.merchant,
+                    stated_correct: mistake.correct_category,
+                    reasoning_suggests: mistake.predicted_category,
+                    reasoning: mistake.reasoning?.substring(0, 100)
+                });
+                skippedContradictory++;
+                continue;
+            }
 
-                // Per-scenario reasoning-based correction program (rules)
-                const reasoningHint = this._extractReasoningHint(
-                    mistake.reasoning,
-                    mistake.correct_category,
-                    mistake.predicted_category
-                );
+            const reasoningHint = this._extractReasoningHint(
+                mistake.reasoning,
+                mistake.correct_category,
+                mistake.predicted_category
+            );
+
+            const safeDistinction = correctionValidator.sanitizeKeyDistinction(mistake.reasoning || '', mistake.correct_category);
+            cardsToCreate.push({ mistake, reasoningHint, safeDistinction });
+        }
+
+        // Phase 2: Parallel API calls (rule creation + memory card creation)
+        const createResults = await parallelMap(
+            cardsToCreate,
+            async (item) => {
+                const { mistake, reasoningHint, safeDistinction } = item;
+                let localRules = 0;
+
                 if (reasoningHint) {
                     const ruleId = await categoryRulesManager.createScenarioReasonRule({
                         actual: mistake.correct_category,
                         predicted: mistake.predicted_category,
                         scenario_id: mistake.scenario_id
                     }, reasoningHint);
-                    if (ruleId) {
-                        rulesCreated++;
-                    }
+                    if (ruleId) localRules++;
                 }
-                // Create a correction memory card with type for proper formatting
-                const safeDistinction = correctionValidator.sanitizeKeyDistinction(mistake.reasoning || '', mistake.correct_category);
+
                 const cardContent = {
-                    type: 'BENCHMARK_CORRECTION',  // Used by oggyCategorizer._formatMemoryCard
+                    type: 'BENCHMARK_CORRECTION',
                     text: `CORRECTION: "${mistake.merchant}" with "${mistake.description}" is "${mistake.correct_category}" NOT "${mistake.predicted_category}".${safeDistinction ? ' ' + safeDistinction : ''}`,
                     description: mistake.description,
                     merchant: mistake.merchant,
@@ -922,19 +931,19 @@ class ContinuousLearningLoop {
                     {
                         owner_type: 'user',
                         owner_id: this.userId,
-                        tier: 1, // Long-term memory for corrections
+                        tier: 1,
                         kind: 'expense_category_correction',
                         content: cardContent,
                         tags: [
                             'payments',
-                            'categorization',  // CRITICAL: Must include this for retrieval during categorization
+                            'categorization',
                             'correction',
                             'benchmark_learned',
                             mistake.correct_category,
                             `not_${mistake.predicted_category}`,
                             mistake.merchant.toLowerCase().replace(/\s+/g, '_')
                         ],
-                        utility_weight: 0.9, // High weight for corrections
+                        utility_weight: 0.9,
                         reliability: 0.95
                     },
                     {
@@ -943,19 +952,28 @@ class ContinuousLearningLoop {
                     }
                 );
 
-                learned++;
-
                 logger.info('Created correction memory from benchmark mistake', {
                     merchant: mistake.merchant,
                     wrong: mistake.predicted_category,
                     correct: mistake.correct_category
                 });
-            } catch (error) {
-                logger.warn('Failed to create correction memory', {
-                    merchant: mistake.merchant,
-                    error: error.message
-                });
-            }
+
+                return { rules: localRules };
+            },
+            5,  // Memory service concurrency
+            { operationName: 'learn-from-mistakes' }
+        );
+
+        learned = createResults.results.filter(r => r.success).length;
+        rulesCreated = createResults.results
+            .filter(r => r.success)
+            .reduce((sum, r) => sum + r.value.rules, 0);
+
+        for (const err of createResults.errors) {
+            logger.warn('Failed to create correction memory', {
+                merchant: cardsToCreate[err.index]?.mistake?.merchant,
+                error: err.error
+            });
         }
 
         const confusionRulesCreated = await this._createConfusionRulesFromMistakes(confusionCounts);
@@ -1056,21 +1074,22 @@ class ContinuousLearningLoop {
             return;
         }
 
-        let memoriesCreated = 0;
-        let rulesCreated = 0;
+        // Parallel confusion training — each scenario creates pattern + correction cards + rules
+        const confusionResults = await parallelMap(
+            scenarios,
+            async (scenario) => {
+                let localMemories = 0;
+                let localRules = 0;
 
-        for (const scenario of scenarios) {
-            try {
                 const confusionContext = scenario.confusion_context || {};
                 const actual = confusionContext.actual_category || scenario.correctCategory;
                 const predicted = confusionContext.confused_with || 'unknown';
 
-                // Sanitize distinction_hint before using it in any memory cards
                 const safeHint = correctionValidator.sanitizeKeyDistinction(
                     scenario.distinction_hint || '', scenario.correctCategory
                 );
 
-                // Create a high-signal pattern memory card
+                // Create pattern memory card
                 const cardContent = {
                     type: 'PATTERN',
                     text: `CONFUSION TRAINING: "${scenario.merchant}" with "${scenario.description}" is "${scenario.correctCategory}" (not "${predicted}").${safeHint ? ' ' + safeHint : ''}`,
@@ -1096,23 +1115,16 @@ class ContinuousLearningLoop {
                         kind: 'expense_category_pattern',
                         content: cardContent,
                         tags: [
-                            'payments',
-                            'categorization',
-                            'confusion_training',
-                            scenario.correctCategory,
-                            `not_${predicted}`,
+                            'payments', 'categorization', 'confusion_training',
+                            scenario.correctCategory, `not_${predicted}`,
                             scenario.merchant.toLowerCase().replace(/\s+/g, '_')
                         ],
                         utility_weight: 0.8,
                         reliability: 0.9
                     },
-                    {
-                        timeout: 5000,
-                        headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
-                    }
+                    { timeout: 5000, headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' } }
                 );
-
-                memoriesCreated++;
+                localMemories++;
 
                 if (predicted && predicted !== 'unknown') {
                     const correctionContent = {
@@ -1124,17 +1136,11 @@ class ContinuousLearningLoop {
                         wrong_prediction: predicted,
                         key_distinction: safeHint,
                         correction: {
-                            merchant: scenario.merchant,
-                            description: scenario.description,
-                            wrong_prediction: predicted,
-                            correct_category: scenario.correctCategory,
+                            merchant: scenario.merchant, description: scenario.description,
+                            wrong_prediction: predicted, correct_category: scenario.correctCategory,
                             amount: scenario.amount
                         },
-                        evidence: {
-                            source: 'confusion_training_batch',
-                            confidence: 'high',
-                            learning_mode: 'confusion_pair'
-                        }
+                        evidence: { source: 'confusion_training_batch', confidence: 'high', learning_mode: 'confusion_pair' }
                     };
 
                     await axios.post(
@@ -1146,43 +1152,45 @@ class ContinuousLearningLoop {
                             kind: 'expense_category_correction',
                             content: correctionContent,
                             tags: [
-                                'payments',
-                                'categorization',
-                                'correction',
-                                'benchmark_learned',
-                                scenario.correctCategory,
-                                `not_${predicted}`,
+                                'payments', 'categorization', 'correction', 'benchmark_learned',
+                                scenario.correctCategory, `not_${predicted}`,
                                 scenario.merchant.toLowerCase().replace(/\s+/g, '_')
                             ],
                             utility_weight: 0.95,
                             reliability: 0.95
                         },
-                        {
-                            timeout: 5000,
-                            headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
-                        }
+                        { timeout: 5000, headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' } }
                     );
-
-                    memoriesCreated++;
+                    localMemories++;
                 }
 
                 const hint = safeHint || correctionValidator.sanitizeKeyDistinction(scenario.reasoning || '', scenario.correctCategory);
                 if (actual && predicted && hint) {
                     const ruleId = await categoryRulesManager.createDistinctionRule({
-                        actual,
-                        predicted,
+                        actual, predicted,
                         confusion_rate: confusionContext.confusion_rate || 0.5
                     }, hint);
-                    if (ruleId) {
-                        rulesCreated++;
-                    }
+                    if (ruleId) localRules++;
                 }
-            } catch (error) {
-                logger.warn('Failed to store confusion training memory', {
-                    merchant: scenario.merchant,
-                    error: error.message
-                });
-            }
+
+                return { memories: localMemories, rules: localRules };
+            },
+            5,  // Memory service concurrency
+            { operationName: 'confusion-training-batch' }
+        );
+
+        const memoriesCreated = confusionResults.results
+            .filter(r => r.success)
+            .reduce((sum, r) => sum + r.value.memories, 0);
+        const rulesCreated = confusionResults.results
+            .filter(r => r.success)
+            .reduce((sum, r) => sum + r.value.rules, 0);
+
+        for (const err of confusionResults.errors) {
+            logger.warn('Failed to store confusion training memory', {
+                merchant: scenarios[err.index]?.merchant,
+                error: err.error
+            });
         }
 
         logger.info('Confusion training batch stored', {

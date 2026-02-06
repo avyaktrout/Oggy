@@ -13,6 +13,7 @@ const logger = require('../utils/logger');
 const OggyCategorizer = require('./oggyCategorizer');
 const sealedBenchmarkGenerator = require('./sealedBenchmarkGenerator');
 const { adaptiveDifficultyScaler } = require('./adaptiveDifficultyScaler');
+const { parallelMap } = require('../utils/parallel');
 
 const BENCHMARK_UPGRADE_THRESHOLD = parseFloat(process.env.BENCHMARK_UPGRADE_THRESHOLD || '0.90');
 
@@ -47,13 +48,21 @@ class SealedBenchmarkEvaluator {
         // Wait for rate limits to clear before starting benchmark
         const preCooldownMs = await this._waitForRateLimitCooldown();
 
-        // Test Base first and measure duration to set time limit for Oggy
-        const base_results = [];
+        // Test Base first (parallel) and measure duration to set time limit for Oggy
         const baseStartTime = Date.now();
-        for (const scenario of benchmark.scenarios) {
-            const result = await this._testBaseOnScenario(scenario);
-            base_results.push(result);
-        }
+        const baseParallel = await parallelMap(
+            benchmark.scenarios,
+            (scenario) => this._testBaseOnScenario(scenario),
+            10,  // Base has no memory calls, just OpenAI — safe at high concurrency
+            { operationName: 'base-benchmark', interTaskDelayMs: 50 }
+        );
+        const base_results = baseParallel.results.map((r, i) => r.success ? r.value : {
+            scenario_id: benchmark.scenarios[i].scenario_id,
+            predicted_category: 'ERROR',
+            correct_category: benchmark.scenarios[i].correct_category,
+            correct: false,
+            error: r.error
+        });
         const baseDurationMs = Date.now() - baseStartTime;
 
         // Cooldown between Base and Oggy - Base depletes the rate limit bucket
@@ -65,36 +74,36 @@ class SealedBenchmarkEvaluator {
         const safetyMarginMs = Math.max(120000, Math.floor(baseDurationMs * 1.5));
         const oggyTimeLimitMs = baseDurationMs + safetyMarginMs + interCooldownMs;
 
-        // Test Oggy with generous time limit to avoid rate-limit-induced timeouts
+        // Test Oggy with generous time limit — wave-based parallel execution
+        // Process scenarios in waves of OGGY_CONCURRENCY, recalculating adaptive mode between waves
+        const OGGY_CONCURRENCY = 5;
         const oggy_results = [];
         const oggyStartTime = Date.now();
         let oggyTimedOut = false;
         const targetPerItem = oggyTimeLimitMs / benchmark.scenarios.length;
-        let memoryMode = 'benchmark';
-        let speedMode = 'normal';
-        for (const scenario of benchmark.scenarios) {
+        let scenarioIndex = 0;
+
+        while (scenarioIndex < benchmark.scenarios.length && !oggyTimedOut) {
             const elapsed = Date.now() - oggyStartTime;
             if (elapsed > oggyTimeLimitMs) {
                 oggyTimedOut = true;
                 break;
             }
+
+            // Adaptive mode selection (recalculated per wave)
             const idx = oggy_results.length;
             const avgPerItem = idx > 0 ? (elapsed / idx) : targetPerItem;
             const remaining = benchmark.scenarios.length - idx;
             const projected = elapsed + (avgPerItem * remaining);
 
-            // Adaptive mode selection:
-            // Memory is Oggy's competitive advantage - only sacrifice it as a last resort.
-            // With generous time limits (100% margin + interCooldown), keep memory enabled.
+            let memoryMode, speedMode;
             if (avgPerItem < targetPerItem * 0.75 && projected < oggyTimeLimitMs * 0.8) {
                 memoryMode = 'full';
                 speedMode = 'normal';
             } else if (elapsed > oggyTimeLimitMs * 0.95 && remaining <= 3) {
-                // Only drop memory in the very last scenarios if critically behind
                 memoryMode = 'none';
                 speedMode = 'very_fast';
             } else if (projected > oggyTimeLimitMs * 0.95) {
-                // Behind schedule but not critical - reduce prompt size but keep memory
                 memoryMode = 'benchmark';
                 speedMode = 'fast';
             } else {
@@ -102,11 +111,32 @@ class SealedBenchmarkEvaluator {
                 speedMode = 'normal';
             }
 
-            const result = await this._testOggyOnScenario(user_id, scenario, {
-                memory_mode: memoryMode,
-                speed_mode: speedMode
-            });
-            oggy_results.push(result);
+            // Take next wave of scenarios
+            const waveSize = Math.min(OGGY_CONCURRENCY, benchmark.scenarios.length - scenarioIndex);
+            const waveScenarios = benchmark.scenarios.slice(scenarioIndex, scenarioIndex + waveSize);
+
+            const waveResults = await parallelMap(
+                waveScenarios,
+                (scenario) => this._testOggyOnScenario(user_id, scenario, {
+                    memory_mode: memoryMode,
+                    speed_mode: speedMode
+                }),
+                OGGY_CONCURRENCY,
+                { operationName: 'oggy-benchmark-wave' }
+            );
+
+            for (let i = 0; i < waveResults.results.length; i++) {
+                const r = waveResults.results[i];
+                oggy_results.push(r.success ? r.value : {
+                    scenario_id: waveScenarios[i].scenario_id,
+                    predicted_category: 'ERROR',
+                    correct_category: waveScenarios[i].correct_category,
+                    correct: false,
+                    error: r.error
+                });
+            }
+
+            scenarioIndex += waveSize;
         }
 
         // If Oggy timed out, mark remaining scenarios as incorrect
