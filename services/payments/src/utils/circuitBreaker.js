@@ -38,6 +38,11 @@ class CircuitBreaker {
      * Only 5xx errors and network errors count as failures
      */
     static defaultIsFailure(error) {
+        // JSON parse errors are NOT service failures (bad model output, service is fine)
+        if (error.jsonParseError || error.retryable) {
+            return false;
+        }
+
         // Network errors are failures
         if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
             return true;

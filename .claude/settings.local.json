@@ -3,7 +3,9 @@
     "allow": [
       "Bash(curl:*)",
       "Bash(docker restart:*)",
-      "Bash(docker logs:*)"
+      "Bash(docker logs:*)",
+      "Bash(docker compose up:*)",
+      "Bash(docker exec:*)"
     ]
   }
 }

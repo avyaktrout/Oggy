@@ -346,7 +346,7 @@ Respond in JSON format (no markdown, just raw JSON):
                             { role: 'user', content: prompt }
                         ],
                         temperature: 0.3,
-                        max_tokens: speed_mode === 'very_fast' ? 80 : (speed_mode === 'fast' ? 120 : (benchmark_mode ? 200 : 300))
+                        max_tokens: speed_mode === 'very_fast' ? 200 : (speed_mode === 'fast' ? 250 : (benchmark_mode ? 300 : 400))
                     },
                     {
                         headers: {
@@ -362,14 +362,26 @@ Respond in JSON format (no markdown, just raw JSON):
                 // Parse JSON response
                 // Remove markdown code blocks if present
                 const jsonStr = completion.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-                return JSON.parse(jsonStr);
+                try {
+                    return JSON.parse(jsonStr);
+                } catch (parseError) {
+                    // Mark as retryable - the API is fine, just bad output
+                    const retryableError = new Error(`JSON parse failed: ${parseError.message}`);
+                    retryableError.retryable = true;
+                    retryableError.jsonParseError = true;
+                    throw retryableError;
+                }
             },
             {
                 maxRetries: 3,
                 baseDelay: 2000,
                 maxDelay: 10000,
                 operationName: 'openai-categorization',
-                shouldRetry: retryHandler.constructor.retryableOpenAIErrors
+                shouldRetry: (error) => {
+                    // JSON parse errors are retryable (bad model output, not service failure)
+                    if (error.jsonParseError || error.retryable) return true;
+                    return retryHandler.constructor.retryableOpenAIErrors(error);
+                }
             }
         );
     }
