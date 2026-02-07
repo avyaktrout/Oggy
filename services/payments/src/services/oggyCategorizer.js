@@ -400,9 +400,15 @@ Respond in JSON format (no markdown, just raw JSON):
             return `RULE: "${content.description}" should be "${content.correct_category}" (NOT ${content.wrong_prediction}).${distinction ? ' ' + distinction : ''}`;
         }
 
-        // Handle pattern memories
+        // Handle pattern memories (confusion training stores data in content.pattern, not top-level)
         if (content.type === 'PATTERN') {
-            return `PATTERN: ${content.merchant || ''} ${content.description || ''} → ${content.category}`;
+            if (content.text) {
+                return content.text;
+            }
+            const p = content.pattern || {};
+            const merchant = content.merchant || p.merchant || '';
+            const category = content.category || p.category || '';
+            return `PATTERN: ${merchant} → ${category}`;
         }
 
         // Handle text-based memories

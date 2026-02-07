@@ -5,6 +5,7 @@
 
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const { query, close } = require('./utils/db');
@@ -25,8 +26,16 @@ const trainingRouter = require('./routes/training');
 const benchmarkDrivenLearningRouter = require('./routes/benchmarkDrivenLearning');
 const continuousLearningRouter = require('./routes/continuousLearning');
 const serviceHealthRouter = require('./routes/serviceHealth');
+const chatRouter = require('./routes/chat');
+const inquiriesRouter = require('./routes/inquiries');
+const preferencesRouter = require('./routes/preferences');
+const benchmarkAnalyticsRouter = require('./routes/benchmarkAnalytics');
 
 const auditChecker = require('./utils/auditChecker');
+const { getClient: getRedisClient } = require('./utils/redisClient');
+const chatHandler = require('./services/chatHandler');
+const { runMigrations } = require('./utils/migrationRunner');
+const { initTelemetry, seedHistoricalMetrics } = require('./utils/telemetry');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -158,6 +167,9 @@ app.get('/v0/audit/quick', async (req, res) => {
     }
 });
 
+// Serve static frontend files
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
 // API Routes
 app.use('/v0/expenses', expensesRouter);
 app.use('/v0/query', queryRouter);
@@ -227,6 +239,18 @@ app.use('/v0/continuous-learning', continuousLearningRouter);
 
 // Service health and circuit breaker management routes
 app.use('/v0/service-health', serviceHealthRouter);
+
+// Chat routes (Oggy vs Base comparison)
+app.use('/v0/chat', chatRouter);
+
+// Inquiry routes (self-driven questions)
+app.use('/v0/inquiries', inquiriesRouter);
+
+// Preference and behavior audit routes
+app.use('/v0/preferences', preferencesRouter);
+
+// Benchmark analytics + OTEL metrics
+app.use('/v0/benchmark-analytics', benchmarkAnalyticsRouter);
 
 // Event processing endpoint (for manual trigger or webhook)
 app.post('/v0/process-events', async (req, res) => {
@@ -310,11 +334,38 @@ const server = app.listen(PORT, async () => {
         process.exit(1);
     }
 
+    // Auto-apply database migrations (idempotent)
+    try {
+        const migrationResult = await runMigrations();
+        if (migrationResult.errors.length > 0) {
+            logger.warn('Some migrations had errors', { errors: migrationResult.errors });
+        }
+        logger.info('✅ Database migrations applied');
+    } catch (error) {
+        logger.error('❌ Migration runner failed', { error: error.message });
+        // Non-fatal: tables may already exist from a previous run
+    }
+
     if (!OPENAI_API_KEY) {
         logger.error('❌ OPENAI_API_KEY not configured');
         process.exit(1);
     }
     logger.info('✅ OpenAI API key configured');
+
+    // Initialize Redis for behavior system (non-blocking)
+    try {
+        const redisClient = await getRedisClient();
+        if (redisClient) {
+            chatHandler.setRedisClient(redisClient);
+            const { setRedisClient: setPrefsRedis } = require('./routes/preferences');
+            setPrefsRedis(redisClient);
+            logger.info('✅ Redis connected for behavior system');
+        } else {
+            logger.warn('Redis not available, behavior system running without cache');
+        }
+    } catch (error) {
+        logger.warn('Redis init failed, continuing without cache', { error: error.message });
+    }
 
     logger.info('📊 API Endpoints ready', {
         health: `http://localhost:${PORT}/health`,
@@ -323,6 +374,15 @@ const server = app.listen(PORT, async () => {
         categorization: `http://localhost:${PORT}/v0/categorization`,
         evaluation: `http://localhost:${PORT}/v0/evaluation`
     });
+
+    // Initialize OpenTelemetry metrics
+    try {
+        initTelemetry();
+        await seedHistoricalMetrics(query);
+        logger.info('✅ OpenTelemetry metrics initialized');
+    } catch (error) {
+        logger.warn('OpenTelemetry init failed, continuing without metrics', { error: error.message });
+    }
 
     logger.info('✅ Ready to accept connections');
 

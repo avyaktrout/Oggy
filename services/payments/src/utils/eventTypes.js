@@ -128,6 +128,29 @@ const APP_EVENT_TYPES = {
         feeds_memory_substrate: false,
         entity_type: 'training',
         action: 'adjust'
+    },
+
+    // =====================================================
+    // Inquiry events (self-driven questions)
+    // =====================================================
+    INQUIRY_GENERATED: {
+        description: 'Oggy generated a self-driven inquiry for the user',
+        feeds_domain_knowledge: false,
+        feeds_memory_substrate: false,
+        entity_type: 'inquiry',
+        action: 'generate'
+    },
+
+    INQUIRY_ANSWERED: {
+        description: 'User answered an Oggy inquiry',
+        feeds_domain_knowledge: true,
+        feeds_memory_substrate: true,
+        memory_intent: {
+            event_type: 'user_feedback',
+            user_feedback: 'inquiry_response'
+        },
+        entity_type: 'inquiry',
+        action: 'answer'
     }
 };
 

@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oggy - Chat & Training</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <nav class="nav" id="nav"></nav>
+
+    <div id="inquiry-banner-container"></div>
+
+    <div class="container">
+        <!-- Training Panel -->
+        <div class="training-panel" id="training-panel">
+            <div class="training-panel-header">
+                <div class="training-panel-title">Train Oggy</div>
+                <div class="training-controls">
+                    <select id="train-duration" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+                        <option value="5">5 minutes</option>
+                        <option value="10" selected>10 minutes</option>
+                        <option value="15">15 minutes</option>
+                        <option value="30">30 minutes</option>
+                        <option value="60">1 hour</option>
+                    </select>
+                    <button class="btn btn-success btn-sm" id="train-start" onclick="startTraining()">Start Training</button>
+                    <button class="btn btn-danger btn-sm" id="train-stop" onclick="stopTraining()" style="display:none">Stop</button>
+                </div>
+            </div>
+            <div class="report-row" id="training-report-options">
+                <div class="form-group" style="margin-bottom:0;flex:1;min-width:180px">
+                    <label>Email for reports</label>
+                    <input type="email" id="train-email" placeholder="you@example.com">
+                </div>
+                <div class="form-group" style="margin-bottom:0;min-width:160px">
+                    <label>Send reports</label>
+                    <select id="train-report-interval">
+                        <option value="end_only">After session ends</option>
+                        <option value="benchmark">After each benchmark</option>
+                        <option value="5">Every 5 minutes</option>
+                        <option value="10">Every 10 minutes</option>
+                        <option value="15">Every 15 minutes</option>
+                    </select>
+                </div>
+            </div>
+            <div class="training-status" id="training-status" style="display:none">
+                <div class="training-stat">
+                    <div class="training-stat-label">Level</div>
+                    <div class="training-stat-value" id="ts-level">-</div>
+                </div>
+                <div class="training-stat">
+                    <div class="training-stat-label">Accuracy</div>
+                    <div class="training-stat-value" id="ts-accuracy">-</div>
+                </div>
+                <div class="training-stat">
+                    <div class="training-stat-label">Questions</div>
+                    <div class="training-stat-value" id="ts-questions">-</div>
+                </div>
+                <div class="training-stat">
+                    <div class="training-stat-label">Benchmarks</div>
+                    <div class="training-stat-value" id="ts-benchmarks">-</div>
+                </div>
+                <div class="training-stat">
+                    <div class="training-stat-label">Time Left</div>
+                    <div class="training-stat-value" id="ts-remaining">-</div>
+                </div>
+                <div class="training-stat">
+                    <div class="training-stat-label">Status</div>
+                    <div class="training-stat-value" id="ts-status">-</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Inquiry Settings Panel -->
+        <div class="inquiry-settings-panel" id="inquiry-settings-panel">
+            <div class="inquiry-settings-header">
+                <div class="inquiry-settings-title">Self-Driven Inquiries</div>
+                <div class="inquiry-settings-controls">
+                    <label class="toggle-label" title="When enabled, Oggy proactively asks questions to improve categorization">
+                        <input type="checkbox" id="inquiry-toggle" onchange="toggleInquiries(this.checked)" checked>
+                        <span class="toggle-switch"></span>
+                        <span class="toggle-text">Enabled</span>
+                    </label>
+                    <label style="font-size:13px;color:var(--text-muted);font-weight:500;display:flex;align-items:center;gap:6px">
+                        Daily limit
+                        <select id="inquiry-limit" onchange="updateInquiryLimit(this.value)" style="padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+                            <option value="0">Off</option>
+                            <option value="1">1</option>
+                            <option value="3">3</option>
+                            <option value="5" selected>5</option>
+                            <option value="10">10</option>
+                            <option value="15">15</option>
+                        </select>
+                    </label>
+                </div>
+            </div>
+            <div class="inquiry-settings-desc">Oggy asks about uncategorized payments and ambiguous merchants to learn your preferences and store them to memory.</div>
+        </div>
+
+        <!-- Chat -->
+        <div class="chat-title-row">
+            <h1 class="page-title" style="margin-bottom:0">Chat with Oggy</h1>
+            <div class="chat-controls">
+                <label class="toggle-label" title="When enabled, Oggy learns from your corrections and preferences shared in chat">
+                    <input type="checkbox" id="learn-toggle" onchange="toggleLearning(this.checked)">
+                    <span class="toggle-switch"></span>
+                    <span class="toggle-text">Learn from chat</span>
+                </label>
+                <button class="btn btn-sm btn-outline" onclick="clearChat()" title="Clear conversation history">Clear Chat</button>
+            </div>
+        </div>
+
+        <div class="chat-container">
+            <!-- Oggy column -->
+            <div class="chat-column">
+                <div class="chat-header">
+                    <span class="dot dot-oggy"></span>
+                    Oggy <span style="font-weight:400;color:var(--text-muted);font-size:12px">(with memory)</span>
+                    <span class="learning-indicator" id="learning-indicator" style="display:none" title="Learning from this conversation">learning</span>
+                </div>
+                <div class="chat-messages" id="oggy-messages">
+                    <div class="chat-msg chat-msg-bot">Hi! I'm Oggy. Ask me about your spending, or have me categorize an expense. I learn from our interactions!</div>
+                </div>
+            </div>
+
+            <!-- Base column -->
+            <div class="chat-column">
+                <div class="chat-header">
+                    <span class="dot dot-base"></span>
+                    Base Model <span style="font-weight:400;color:var(--text-muted);font-size:12px">(no memory)</span>
+                </div>
+                <div class="chat-messages" id="base-messages">
+                    <div class="chat-msg chat-msg-bot">Hi! I'm the base model without memory. Compare my answers with Oggy's to see the difference learning makes.</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-input-row" style="margin-top:12px">
+            <input type="text" id="chat-input" placeholder="Ask about your spending, categorization, or anything..."
+                   onkeydown="if(event.key==='Enter')sendChat()">
+            <button class="btn btn-primary" onclick="sendChat()" id="chat-send-btn">Send</button>
+            <button class="btn btn-sm" onclick="resetPreferences()" title="Reset learned response preferences"
+                    style="margin-left:8px;font-size:11px;padding:6px 10px;background:var(--bg-secondary);border:1px solid var(--border)">Reset Preferences</button>
+        </div>
+    </div>
+
+    <script src="/js/app.js"></script>
+    <script src="/js/inquiries.js"></script>
+    <script src="/js/chat.js"></script>
+</body>
+</html>

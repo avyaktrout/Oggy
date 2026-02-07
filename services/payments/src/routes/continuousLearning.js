@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const continuousLearningLoop = require('../services/continuousLearningLoop');
 const benchmarkValidator = require('../services/benchmarkValidator');
+const trainingReporter = require('../services/trainingReporter');
 const { query } = require('../utils/db');
 const logger = require('../utils/logger');
 
@@ -26,8 +27,16 @@ router.post('/start', async (req, res) => {
             training_interval_ms = 10000,
             practice_count = 3,
             starting_difficulty = null,  // null = load from DB, or specify 1-5
-            starting_scale = null        // null = load from DB, or specify 1-10
+            starting_scale = null,       // null = load from DB, or specify 1-10
+            report_email = null,
+            report_interval = 'end_only'
         } = req.body;
+
+        // Configure email reporting if requested
+        if (report_email) {
+            trainingReporter.configure(report_email, report_interval, duration_minutes);
+            trainingReporter.setStatsProvider(() => continuousLearningLoop.getStats());
+        }
 
         logger.info('Starting continuous learning via API', {
             requestId: req.requestId,
@@ -36,7 +45,9 @@ router.post('/start', async (req, res) => {
             starting_scale,
             starting_difficulty,
             benchmark_scenario_count,
-            upgrade_threshold
+            upgrade_threshold,
+            report_email: report_email ? '***' : null,
+            report_interval
         });
 
         // Start the loop (this will run in the background)

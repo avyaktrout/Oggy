@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oggy - Enter Payment</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <nav class="nav" id="nav"></nav>
+
+    <div id="inquiry-banner-container"></div>
+
+    <div class="container">
+        <h1 class="page-title">Enter Payment</h1>
+
+        <div class="card">
+            <form id="expense-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Amount *</label>
+                        <input type="number" id="amount" step="0.01" min="0" required placeholder="0.00">
+                    </div>
+                    <div class="form-group">
+                        <label>Transaction Date *</label>
+                        <input type="date" id="transaction_date" required>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Description *</label>
+                    <input type="text" id="description" required placeholder="e.g. Lunch at Italian restaurant">
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Merchant</label>
+                        <input type="text" id="merchant" placeholder="e.g. Olive Garden">
+                    </div>
+                    <div class="form-group">
+                        <label>Category</label>
+                        <select id="category">
+                            <option value="">Let Oggy decide</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Tags (comma-separated)</label>
+                    <input type="text" id="tags" placeholder="e.g. business, lunch">
+                </div>
+
+                <div class="form-group">
+                    <label>Notes</label>
+                    <textarea id="notes" rows="2" placeholder="Optional notes..."></textarea>
+                </div>
+
+                <button type="submit" class="btn btn-primary" id="submit-btn">Add Payment</button>
+            </form>
+
+            <div class="suggestion-box" id="suggestion-box">
+                <div style="font-size:13px;color:var(--text-muted);margin-bottom:4px">Oggy suggests:</div>
+                <div class="suggestion-category" id="sug-category"></div>
+                <div class="suggestion-confidence" id="sug-confidence"></div>
+                <div class="suggestion-reasoning" id="sug-reasoning"></div>
+                <div class="suggestion-actions">
+                    <button class="btn btn-success btn-sm" id="sug-accept">Accept</button>
+                    <button class="btn btn-outline btn-sm" id="sug-reject">Choose Different</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/app.js"></script>
+    <script src="/js/inquiries.js"></script>
+    <script src="/js/enter-payment.js"></script>
+</body>
+</html>

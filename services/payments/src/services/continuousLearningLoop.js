@@ -25,6 +25,8 @@ const tessaAssessmentGenerator = require('./tessaAssessmentGenerator');
 const { adaptiveDifficultyScaler } = require('./adaptiveDifficultyScaler');
 const logger = require('../utils/logger');
 const correctionValidator = require('../utils/correctionValidator');
+const trainingReporter = require('./trainingReporter');
+const { recordBenchmarkMetrics } = require('../utils/telemetry');
 const { parallelMap } = require('../utils/parallel');
 const { query } = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
@@ -289,6 +291,13 @@ class ContinuousLearningLoop {
             await sessionCleanupManager.cleanupSession(this.userId, this.getStats());
         } catch (error) {
             logger.warn('Session cleanup failed', { error: error.message });
+        }
+
+        // Send final training report email
+        try {
+            await trainingReporter.onSessionEnd(this.getStats());
+        } catch (error) {
+            logger.warn('Final training report failed', { error: error.message });
         }
 
         logger.info('Continuous learning loop stopped', this.getStats());
@@ -557,6 +566,27 @@ class ContinuousLearningLoop {
                     this.stats.benchmarks_passed++;
                 }
                 await this._maybeDemoteDifficultyFromBenchmark(benchmarkResult);
+
+                // Send email report if configured for benchmark events
+                try {
+                    await trainingReporter.onBenchmarkComplete(this.getStats(), benchmarkResult);
+                } catch (reportErr) {
+                    logger.warn('Benchmark report failed', { error: reportErr.message });
+                }
+
+                // Record OTEL metrics for this benchmark
+                try {
+                    recordBenchmarkMetrics({
+                        oggy_accuracy: benchmarkResult.oggy_accuracy,
+                        base_accuracy: benchmarkResult.base_accuracy,
+                        advantage_delta: benchmarkResult.oggy_accuracy - benchmarkResult.base_accuracy,
+                        training_state: benchmarkResult.training_state,
+                        level: benchmarkResult.scale_level_display || `S${this.stats.current_scale}L${this.stats.difficulty_level}`,
+                        difficulty_mix: benchmarkResult.difficulty_mix || 'unknown'
+                    });
+                } catch (otelErr) {
+                    // Non-critical, don't interrupt training
+                }
 
             } catch (error) {
                 logger.error('Benchmark generation/run failed', { error: error.message });
