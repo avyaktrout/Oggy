@@ -182,8 +182,8 @@ class WeaknessAnalyzer {
               AND event_type = 'OGGY_SELF_PRACTICE'
               AND event_data->>'correct' IS NOT NULL
               AND event_data->>'expected_category' IS NOT NULL
-              AND created_at > NOW() - INTERVAL '${lookback_hours} hours'
-            ORDER BY created_at DESC
+              AND ts > NOW() - INTERVAL '${lookback_hours} hours'
+            ORDER BY ts DESC
             LIMIT 500
         `, [user_id]);
 

@@ -63,7 +63,19 @@ class ObserverService {
 
     async exportWeaknesses(userId) {
         try {
-            const analysis = await weaknessAnalyzer.analyzeWeaknesses({ user_id: userId });
+            // Find the latest sealed benchmark result for this user
+            const latestResult = await query(
+                `SELECT result_id FROM sealed_benchmark_results
+                 WHERE user_id = $1 AND oggy_accuracy != 'NaN'
+                 ORDER BY tested_at DESC LIMIT 1`,
+                [userId]
+            );
+            const resultId = latestResult.rows.length > 0 ? latestResult.rows[0].result_id : null;
+
+            const analysis = await weaknessAnalyzer.analyzeWeaknesses({
+                user_id: userId,
+                result_id: resultId
+            });
             if (!analysis || !analysis.weaknesses) return { weaknesses: [], confusion_patterns: [] };
 
             // Strip PII: only return category-level data, no merchant names or amounts
