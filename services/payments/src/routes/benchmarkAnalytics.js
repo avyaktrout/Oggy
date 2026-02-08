@@ -507,7 +507,8 @@ Rules:
  */
 router.post('/sync-to-remote', async (req, res) => {
     try {
-        const userId = req.body.user_id || req.query.user_id || 'oggy';
+        // user_id for the REMOTE side (who the data belongs to on production)
+        const targetUserId = req.body.user_id || req.query.user_id || 'oggy';
         const remoteUrl = (req.body.remote_url || process.env.REMOTE_OGGY_URL || '').replace(/\/+$/, '');
         const syncKey = process.env.SYNC_API_KEY;
 
@@ -518,7 +519,9 @@ router.post('/sync-to-remote', async (req, res) => {
             return res.status(400).json({ error: 'SYNC_API_KEY env var is not set' });
         }
 
-        // 1. Read all benchmark results for this user
+        // 1. Read ALL local benchmark results (regardless of local user_id)
+        //    Local machines may store benchmarks under 'oggy' or any user_id.
+        //    We push everything and assign it to the authenticated user on the remote.
         const results = await query(`
             SELECT b.benchmark_id, b.benchmark_name, b.difficulty_mix,
                    b.scenario_count, b.description, b.metadata,
@@ -528,10 +531,9 @@ router.post('/sync-to-remote', async (req, res) => {
                    r.detailed_results
             FROM sealed_benchmark_results r
             JOIN sealed_benchmarks b ON r.benchmark_id = b.benchmark_id
-            WHERE r.user_id = $1
-              AND r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
+            WHERE r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
             ORDER BY r.tested_at ASC
-        `, [userId]);
+        `);
 
         if (results.rows.length === 0) {
             return res.json({ success: true, message: 'No benchmarks to sync.', results_sent: 0 });
@@ -592,9 +594,9 @@ router.post('/sync-to-remote', async (req, res) => {
             });
         }
 
-        // 3. POST to remote
+        // 3. POST to remote — assign all results to the authenticated user
         const payload = {
-            user_id: userId,
+            user_id: targetUserId,
             benchmarks: Object.values(benchmarksMap),
             results: benchmarkResults
         };
