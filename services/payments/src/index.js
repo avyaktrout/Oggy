@@ -54,7 +54,7 @@ app.use(cors({
     origin: CORS_ORIGIN === '*' ? true : CORS_ORIGIN,
     credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
 // Request ID middleware (for tracing requests across services)
 app.use((req, res, next) => {
@@ -194,6 +194,9 @@ app.use('/js', express.static(path.join(publicDir, 'js'), noCacheStatic));
 // Import is still protected by auth middleware below.
 const { migrationExportRouter, migrationImportRouter } = require('./routes/migration');
 app.use('/v0/migration', migrationExportRouter);
+
+// Receive-sync endpoint (before auth — uses X-Sync-Key header for auth)
+app.post('/v0/benchmark-analytics/receive-sync', benchmarkAnalyticsRouter.receiveSyncHandler);
 
 // Auth middleware — everything below requires authentication
 app.use(requireAuth);

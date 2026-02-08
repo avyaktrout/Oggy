@@ -21,14 +21,28 @@ const openaiBreaker = circuitBreakerRegistry.getOrCreate('openai-api', {
 });
 
 /**
+ * Extract level from benchmark name.
+ * Handles: auto_benchmark_S2L5_... → S2L5
+ *          auto_benchmark_L3_...  → S1L3 (old format, assume Scale 1)
+ */
+function _extractLevel(benchmarkName) {
+    const newFmt = benchmarkName.match(/_(S\dL\d)_/);
+    if (newFmt) return newFmt[1];
+    const oldFmt = benchmarkName.match(/_L(\d)_/);
+    if (oldFmt) return `S1L${oldFmt[1]}`;
+    return 'unknown';
+}
+
+/**
  * GET /v0/benchmark-analytics
  * Returns compiled benchmark performance data for charting
  */
 router.get('/', async (req, res) => {
     try {
         const limit = parseInt(req.query.limit) || 200;
+        const userId = req.query.user_id || 'oggy';
 
-        // Get all benchmark results with benchmark info
+        // Get benchmark results for this user
         const results = await query(`
             SELECT r.result_id, r.tested_at, r.total_scenarios,
                    r.oggy_correct, r.oggy_accuracy, r.base_correct, r.base_accuracy,
@@ -36,10 +50,11 @@ router.get('/', async (req, res) => {
                    b.benchmark_name, b.difficulty_mix
             FROM sealed_benchmark_results r
             JOIN sealed_benchmarks b ON r.benchmark_id = b.benchmark_id
-            WHERE r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
+            WHERE r.user_id = $2
+              AND r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
             ORDER BY r.tested_at ASC
             LIMIT $1
-        `, [limit]);
+        `, [limit, userId]);
 
         if (results.rows.length === 0) {
             return res.json({
@@ -50,7 +65,7 @@ router.get('/', async (req, res) => {
 
         // Build time series data
         const timeSeries = results.rows.map((r, i) => {
-            const levelMatch = r.benchmark_name.match(/_(S\dL\d)_/);
+            const level = _extractLevel(r.benchmark_name);
             const ts = typeof r.training_state === 'string'
                 ? JSON.parse(r.training_state) : (r.training_state || {});
             return {
@@ -60,7 +75,7 @@ router.get('/', async (req, res) => {
                 base_accuracy: parseFloat(r.base_accuracy),
                 advantage_delta: parseFloat(r.advantage_delta),
                 advantage_percent: parseFloat(r.advantage_percent),
-                level: levelMatch ? levelMatch[1] : 'unknown',
+                level,
                 difficulty_mix: r.difficulty_mix,
                 total_scenarios: r.total_scenarios,
                 oggy_correct: r.oggy_correct,
@@ -137,7 +152,6 @@ router.get('/', async (req, res) => {
         // Get the ACTUAL current level from DB (benchmark names reflect pre-benchmark level)
         let actualLevel = latest.level;
         try {
-            const userId = req.query.user_id || 'oggy';
             const stateResult = await query(
                 `SELECT scale, difficulty_level FROM continuous_learning_state WHERE user_id = $1 LIMIT 1`,
                 [userId]
@@ -200,29 +214,30 @@ router.get('/', async (req, res) => {
  */
 router.get('/prometheus', async (req, res) => {
     try {
+        const userId = req.query.user_id || 'oggy';
         const results = await query(`
             SELECT r.oggy_accuracy, r.base_accuracy, r.advantage_delta,
                    r.training_state, b.benchmark_name, b.difficulty_mix,
                    r.tested_at
             FROM sealed_benchmark_results r
             JOIN sealed_benchmarks b ON r.benchmark_id = b.benchmark_id
+            WHERE r.user_id = $1
             ORDER BY r.tested_at DESC
             LIMIT 1
-        `);
+        `, [userId]);
 
         let metrics = '';
         metrics += '# HELP oggy_benchmark_total Total benchmarks run\n';
         metrics += '# TYPE oggy_benchmark_total counter\n';
 
-        const countResult = await query('SELECT COUNT(*) as cnt FROM sealed_benchmark_results');
+        const countResult = await query('SELECT COUNT(*) as cnt FROM sealed_benchmark_results WHERE user_id = $1', [userId]);
         metrics += `oggy_benchmark_total ${countResult.rows[0].cnt}\n\n`;
 
         if (results.rows.length > 0) {
             const r = results.rows[0];
             const ts = typeof r.training_state === 'string'
                 ? JSON.parse(r.training_state) : (r.training_state || {});
-            const levelMatch = r.benchmark_name.match(/_(S\dL\d)_/);
-            const level = levelMatch ? levelMatch[1] : 'unknown';
+            const level = _extractLevel(r.benchmark_name);
 
             metrics += '# HELP oggy_benchmark_oggy_accuracy Oggy accuracy on latest benchmark\n';
             metrics += '# TYPE oggy_benchmark_oggy_accuracy gauge\n';
@@ -250,7 +265,8 @@ router.get('/prometheus', async (req, res) => {
                     COUNT(*) FILTER (WHERE advantage_delta > 0) as wins,
                     COUNT(*) as total
                 FROM sealed_benchmark_results
-            `);
+                WHERE user_id = $1
+            `, [userId]);
             const winRate = winResult.rows[0].total > 0
                 ? (winResult.rows[0].wins / winResult.rows[0].total) : 0;
             metrics += '# HELP oggy_benchmark_win_rate Fraction of benchmarks where Oggy beats Base\n';
@@ -355,16 +371,17 @@ function _buildAuditContext(benchmarkRows, aggregated) {
 router.get('/weakness-data', async (req, res) => {
     try {
         const limit = parseInt(req.query.limit) || 15;
-        const userId = req.body?.user_id || req.query.user_id || 'oggy';
+        const userId = req.query.user_id || 'oggy';
 
         const results = await query(`
             SELECT r.detailed_results, r.oggy_accuracy, r.base_accuracy,
                    r.advantage_delta, r.tested_at
             FROM sealed_benchmark_results r
-            WHERE r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
+            WHERE r.user_id = $2
+              AND r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
             ORDER BY r.tested_at DESC
             LIMIT $1
-        `, [limit]);
+        `, [limit, userId]);
 
         if (results.rows.length === 0) {
             return res.json({
@@ -403,17 +420,19 @@ router.post('/audit-chat', async (req, res) => {
         // Budget check (~1200 tokens for context + response)
         await costGovernor.checkBudget(8000);
 
-        // Get last 15 benchmarks with detailed_results
+        // Get last 15 benchmarks with detailed_results for this user
+        const userId = req.body.user_id || 'oggy';
         const benchmarkRows = await query(`
             SELECT r.result_id, r.detailed_results, r.oggy_accuracy, r.base_accuracy,
                    r.advantage_delta, r.tested_at, r.total_scenarios,
                    b.benchmark_name, b.difficulty_mix
             FROM sealed_benchmark_results r
             JOIN sealed_benchmarks b ON r.benchmark_id = b.benchmark_id
-            WHERE r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
+            WHERE r.user_id = $1
+              AND r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
             ORDER BY r.tested_at DESC
             LIMIT 15
-        `);
+        `, [userId]);
 
         if (benchmarkRows.rows.length === 0) {
             return res.json({
@@ -479,4 +498,246 @@ Rules:
     }
 });
 
+/**
+ * POST /v0/benchmark-analytics/sync-to-remote
+ * Reads all benchmarks for the authenticated user from local DB,
+ * then pushes them to the remote Oggy instance's /receive-sync endpoint.
+ * Body: { remote_url } (e.g. "https://oggy-v1.com")
+ * Uses SYNC_API_KEY env var for auth on the remote side.
+ */
+router.post('/sync-to-remote', async (req, res) => {
+    try {
+        const userId = req.body.user_id || req.query.user_id || 'oggy';
+        const remoteUrl = (req.body.remote_url || process.env.REMOTE_OGGY_URL || '').replace(/\/+$/, '');
+        const syncKey = process.env.SYNC_API_KEY;
+
+        if (!remoteUrl) {
+            return res.status(400).json({ error: 'remote_url is required (or set REMOTE_OGGY_URL env var)' });
+        }
+        if (!syncKey) {
+            return res.status(400).json({ error: 'SYNC_API_KEY env var is not set' });
+        }
+
+        // 1. Read all benchmark results for this user
+        const results = await query(`
+            SELECT b.benchmark_id, b.benchmark_name, b.difficulty_mix,
+                   b.scenario_count, b.description, b.metadata,
+                   r.result_id, r.user_id, r.tested_at, r.total_scenarios,
+                   r.oggy_correct, r.oggy_accuracy, r.base_correct, r.base_accuracy,
+                   r.advantage_delta, r.advantage_percent, r.training_state,
+                   r.detailed_results
+            FROM sealed_benchmark_results r
+            JOIN sealed_benchmarks b ON r.benchmark_id = b.benchmark_id
+            WHERE r.user_id = $1
+              AND r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
+            ORDER BY r.tested_at ASC
+        `, [userId]);
+
+        if (results.rows.length === 0) {
+            return res.json({ success: true, message: 'No benchmarks to sync.', results_sent: 0 });
+        }
+
+        // 2. Build payload — benchmarks + scenarios + results
+        const benchmarksMap = {};
+        const benchmarkResults = [];
+
+        for (const row of results.rows) {
+            if (!benchmarksMap[row.benchmark_id]) {
+                benchmarksMap[row.benchmark_id] = {
+                    benchmark_id: row.benchmark_id,
+                    benchmark_name: row.benchmark_name,
+                    difficulty_mix: row.difficulty_mix,
+                    scenario_count: row.scenario_count,
+                    description: row.description,
+                    metadata: row.metadata
+                };
+            }
+            benchmarkResults.push({
+                benchmark_id: row.benchmark_id,
+                tested_at: row.tested_at,
+                total_scenarios: row.total_scenarios,
+                oggy_correct: row.oggy_correct,
+                oggy_accuracy: row.oggy_accuracy,
+                base_correct: row.base_correct,
+                base_accuracy: row.base_accuracy,
+                advantage_delta: row.advantage_delta,
+                advantage_percent: row.advantage_percent,
+                training_state: row.training_state,
+                detailed_results: row.detailed_results
+            });
+        }
+
+        // Get scenarios
+        const benchmarkIds = Object.keys(benchmarksMap);
+        const scenariosResult = await query(`
+            SELECT benchmark_id, order_index, merchant, amount, description,
+                   correct_category, reasoning, generator, model
+            FROM sealed_benchmark_scenarios
+            WHERE benchmark_id = ANY($1)
+            ORDER BY benchmark_id, order_index
+        `, [benchmarkIds]);
+
+        for (const s of scenariosResult.rows) {
+            const b = benchmarksMap[s.benchmark_id];
+            if (!b.scenarios) b.scenarios = [];
+            b.scenarios.push({
+                order_index: s.order_index,
+                merchant: s.merchant,
+                amount: parseFloat(s.amount),
+                description: s.description,
+                correct_category: s.correct_category,
+                reasoning: s.reasoning,
+                generator: s.generator,
+                model: s.model
+            });
+        }
+
+        // 3. POST to remote
+        const payload = {
+            user_id: userId,
+            benchmarks: Object.values(benchmarksMap),
+            results: benchmarkResults
+        };
+
+        const response = await axios.post(
+            `${remoteUrl}/v0/benchmark-analytics/receive-sync`,
+            payload,
+            {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Sync-Key': syncKey
+                },
+                timeout: 60000,
+                maxContentLength: 100 * 1024 * 1024
+            }
+        );
+
+        res.json({
+            success: true,
+            local_results: benchmarkResults.length,
+            local_benchmarks: benchmarkIds.length,
+            remote_response: response.data
+        });
+
+    } catch (error) {
+        const msg = error.response?.data?.error || error.message;
+        logger.logError(error, { operation: 'sync-to-remote' });
+        res.status(500).json({ error: 'Sync failed', message: msg });
+    }
+});
+
+/**
+ * POST /v0/benchmark-analytics/receive-sync
+ * Receives benchmark data from another Oggy instance.
+ * Auth: X-Sync-Key header must match SYNC_API_KEY env var.
+ * Skips duplicates automatically.
+ */
+/**
+ * Standalone receive-sync handler (exported separately for pre-auth mounting)
+ */
+async function receiveSyncHandler(req, res) {
+    try {
+        // Auth via sync key (bypasses session auth)
+        const syncKey = req.headers['x-sync-key'];
+        const expectedKey = process.env.SYNC_API_KEY;
+        if (!expectedKey || syncKey !== expectedKey) {
+            return res.status(403).json({ error: 'Invalid sync key' });
+        }
+
+        const { user_id, benchmarks, results: resultRows } = req.body;
+        if (!user_id || !benchmarks || !resultRows) {
+            return res.status(400).json({ error: 'user_id, benchmarks, and results are required' });
+        }
+
+        let benchmarksInserted = 0, benchmarksSkipped = 0;
+        let scenariosInserted = 0;
+        let resultsInserted = 0, resultsSkipped = 0;
+
+        // 1. Insert benchmarks + scenarios
+        for (const b of benchmarks) {
+            const existing = await query(
+                'SELECT benchmark_id FROM sealed_benchmarks WHERE benchmark_id = $1',
+                [b.benchmark_id]
+            );
+            if (existing.rows.length > 0) {
+                benchmarksSkipped++;
+                continue;
+            }
+            try {
+                await query(
+                    `INSERT INTO sealed_benchmarks (benchmark_id, benchmark_name, difficulty_mix, scenario_count, description, metadata)
+                     VALUES ($1, $2, $3, $4, $5, $6)`,
+                    [b.benchmark_id, b.benchmark_name, b.difficulty_mix,
+                     b.scenario_count || (b.scenarios ? b.scenarios.length : 0),
+                     b.description || null,
+                     b.metadata ? (typeof b.metadata === 'string' ? b.metadata : JSON.stringify(b.metadata)) : null]
+                );
+                benchmarksInserted++;
+
+                if (b.scenarios && b.scenarios.length > 0) {
+                    for (const s of b.scenarios) {
+                        await query(
+                            `INSERT INTO sealed_benchmark_scenarios
+                             (benchmark_id, order_index, merchant, amount, description, correct_category, reasoning, generator, model)
+                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                            [b.benchmark_id, s.order_index, s.merchant, s.amount,
+                             s.description, s.correct_category, s.reasoning,
+                             s.generator || null, s.model || null]
+                        );
+                        scenariosInserted++;
+                    }
+                }
+            } catch (e) {
+                benchmarksSkipped++;
+            }
+        }
+
+        // 2. Insert results (skip duplicates within 1s window)
+        for (const r of resultRows) {
+            const existing = await query(
+                `SELECT result_id FROM sealed_benchmark_results
+                 WHERE benchmark_id = $1 AND user_id = $2
+                   AND tested_at BETWEEN $3::timestamptz - interval '1 second'
+                                     AND $3::timestamptz + interval '1 second'`,
+                [r.benchmark_id, user_id, r.tested_at]
+            );
+            if (existing.rows.length > 0) {
+                resultsSkipped++;
+                continue;
+            }
+            try {
+                await query(
+                    `INSERT INTO sealed_benchmark_results
+                     (benchmark_id, user_id, tested_at, total_scenarios,
+                      oggy_correct, oggy_accuracy, base_correct, base_accuracy,
+                      advantage_delta, advantage_percent, training_state, detailed_results)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+                    [r.benchmark_id, user_id, r.tested_at, r.total_scenarios,
+                     r.oggy_correct, r.oggy_accuracy, r.base_correct, r.base_accuracy,
+                     r.advantage_delta, r.advantage_percent,
+                     typeof r.training_state === 'string' ? r.training_state : JSON.stringify(r.training_state),
+                     typeof r.detailed_results === 'string' ? r.detailed_results : JSON.stringify(r.detailed_results)]
+                );
+                resultsInserted++;
+            } catch (e) {
+                resultsSkipped++;
+            }
+        }
+
+        res.json({
+            success: true,
+            user_id,
+            benchmarks: { inserted: benchmarksInserted, skipped: benchmarksSkipped, scenarios: scenariosInserted },
+            results: { inserted: resultsInserted, skipped: resultsSkipped }
+        });
+
+    } catch (error) {
+        logger.logError(error, { operation: 'receive-sync' });
+        res.status(500).json({ error: 'Receive sync failed', message: error.message });
+    }
+}
+
+router.post('/receive-sync', receiveSyncHandler);
+
+router.receiveSyncHandler = receiveSyncHandler;
 module.exports = router;

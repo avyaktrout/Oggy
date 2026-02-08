@@ -143,10 +143,30 @@
                         <span class="toggle-text">Merchant packs</span>
                     </label>
                 </div>
+                <!-- Observer Job Dashboard -->
+                <div class="observer-job-dashboard" id="observer-job-dashboard">
+                    <div class="observer-job-row">
+                        <div class="observer-job-left">
+                            <label class="toggle-label" title="Automatically run observer job when conditions are met (2+ sharing tenants)">
+                                <input type="checkbox" id="observer-auto-run" onchange="toggleObserverAutoRun(this.checked)">
+                                <span class="toggle-switch"></span>
+                                <span class="toggle-text">Auto-run observer job</span>
+                            </label>
+                        </div>
+                        <div class="observer-job-right">
+                            <span class="observer-job-status" id="observer-job-status">
+                                <span class="observer-status-dot observer-status-checking"></span>
+                                <span id="observer-status-text">Checking...</span>
+                            </span>
+                            <button class="btn btn-sm btn-outline" id="observer-run-btn" onclick="runObserverJob()" disabled style="opacity:0.5">Run Now</button>
+                        </div>
+                    </div>
+                    <div class="observer-job-meta" id="observer-job-meta"></div>
+                </div>
+
                 <div class="observer-packs" id="observer-packs">
                     <div style="color:var(--text-muted);font-size:13px;padding:8px 0">Loading packs...</div>
                 </div>
-                <button class="btn btn-sm btn-outline" onclick="runObserverJob()" style="margin-top:8px">Run Observer Job</button>
             </div>
         </div>
 

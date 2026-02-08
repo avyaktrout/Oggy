@@ -118,9 +118,31 @@ router.post('/rollback-pack', async (req, res) => {
     }
 });
 
-// POST /v0/observer/run-job (manual trigger)
+// GET /v0/observer/job-status (check if job can run)
+router.get('/job-status', async (req, res) => {
+    try {
+        const status = await observerService.getJobStatus();
+        res.json(status);
+    } catch (error) {
+        logger.logError(error, { operation: 'observer-job-status', requestId: req.requestId });
+        res.status(500).json({ error: 'Failed to get job status' });
+    }
+});
+
+// POST /v0/observer/run-job (manual trigger or schedule toggle)
 router.post('/run-job', async (req, res) => {
     try {
+        const { start_schedule, stop_schedule } = req.body;
+
+        if (start_schedule) {
+            observerService.startSchedule(6);
+            return res.json({ success: true, message: 'Auto-run enabled (every 6h)' });
+        }
+        if (stop_schedule) {
+            observerService.stopSchedule();
+            return res.json({ success: true, message: 'Auto-run disabled' });
+        }
+
         const result = await observerService.runObserverJob();
         res.json(result);
     } catch (error) {

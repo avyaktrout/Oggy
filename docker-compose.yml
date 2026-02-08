@@ -115,6 +115,8 @@ services:
       SMTP_FROM: ${SMTP_FROM:-}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@oggy.local}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      SYNC_API_KEY: ${SYNC_API_KEY:-}
+      REMOTE_OGGY_URL: ${REMOTE_OGGY_URL:-}
     ports:
       - "3001:3001"
     volumes:

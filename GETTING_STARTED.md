@@ -52,6 +52,7 @@ docker compose up -d
 ```
 
 This starts 5 containers:
+
 - `oggy-postgres` — PostgreSQL database (port 5432)
 - `oggy-redis` — Redis cache (port 6379)
 - `oggy-otel-collector` — OpenTelemetry collector
@@ -103,6 +104,7 @@ Ask the admin (the person who runs `oggy-v1.com`) to add your email to the allow
 ## Step 6: Log in to the hosted instance
 
 1. **Request a magic link:**
+
 ```bash
 curl -X POST https://oggy-v1.com/v0/auth/request-magic-link \
   -H "Content-Type: application/json" \
@@ -112,11 +114,15 @@ curl -X POST https://oggy-v1.com/v0/auth/request-magic-link \
 2. **Check your email** and click the magic link. This opens `oggy-v1.com` in your browser and sets your session cookie.
 
 3. **Get your CSRF token** (needed for the import). In the browser console (F12 > Console):
+
 ```javascript
-fetch('/v0/auth/me').then(r => r.json()).then(d => console.log('CSRF:', d.csrf_token))
+fetch("/v0/auth/me")
+  .then((r) => r.json())
+  .then((d) => console.log("CSRF:", d.csrf_token));
 ```
 
 Or extract the session cookie from your browser and use curl:
+
 ```bash
 curl -s -b "oggy_session=YOUR_SESSION_COOKIE" https://oggy-v1.com/v0/auth/me
 ```
@@ -147,6 +153,7 @@ Invoke-RestMethod -Uri "https://oggy-v1.com/v0/migration/import" `
 ```
 
 The response shows what was imported:
+
 ```json
 {
   "success": true,
@@ -168,22 +175,22 @@ Visit `https://oggy-v1.com` in your browser. You should see your Oggy's level di
 
 ## .env Reference
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `OPENAI_API_KEY` | Yes | — | OpenAI API key for categorization and chat |
-| `ANTHROPIC_API_KEY` | No | — | Anthropic API key for benchmark generation |
-| `POSTGRES_USER` | No | `oggy` | PostgreSQL username |
-| `POSTGRES_PASSWORD` | No | `oggy_dev_password` | PostgreSQL password |
-| `POSTGRES_DB` | No | `oggy_db` | PostgreSQL database name |
-| `NODE_ENV` | No | `development` | `development` or `production` |
-| `ADMIN_EMAIL` | No | `admin@oggy.local` | Admin email for auth allowlist |
-| `SMTP_HOST` | No | — | SMTP server for email reports |
-| `SMTP_PORT` | No | `587` | SMTP port |
-| `SMTP_USER` | No | — | SMTP username |
-| `SMTP_PASS` | No | — | SMTP password (use app password for Gmail) |
-| `SMTP_FROM` | No | — | Sender email address |
-| `CORS_ORIGIN` | No | `*` | Allowed CORS origin (set to your domain in production) |
-| `DAILY_TOKEN_BUDGET` | No | `20000000` | Daily OpenAI token budget |
+| Variable             | Required | Default             | Description                                            |
+| -------------------- | -------- | ------------------- | ------------------------------------------------------ |
+| `OPENAI_API_KEY`     | Yes      | —                   | OpenAI API key for categorization and chat             |
+| `ANTHROPIC_API_KEY`  | No       | —                   | Anthropic API key for benchmark generation             |
+| `POSTGRES_USER`      | No       | `oggy`              | PostgreSQL username                                    |
+| `POSTGRES_PASSWORD`  | No       | `oggy_dev_password` | PostgreSQL password                                    |
+| `POSTGRES_DB`        | No       | `oggy_db`           | PostgreSQL database name                               |
+| `NODE_ENV`           | No       | `development`       | `development` or `production`                          |
+| `ADMIN_EMAIL`        | No       | `admin@oggy.local`  | Admin email for auth allowlist                         |
+| `SMTP_HOST`          | No       | —                   | SMTP server for email reports                          |
+| `SMTP_PORT`          | No       | `587`               | SMTP port                                              |
+| `SMTP_USER`          | No       | —                   | SMTP username                                          |
+| `SMTP_PASS`          | No       | —                   | SMTP password (use app password for Gmail)             |
+| `SMTP_FROM`          | No       | —                   | Sender email address                                   |
+| `CORS_ORIGIN`        | No       | `*`                 | Allowed CORS origin (set to your domain in production) |
+| `DAILY_TOKEN_BUDGET` | No       | `20000000`          | Daily OpenAI token budget                              |
 
 ## Rebuilding after code changes
 

@@ -455,6 +455,7 @@
             body.style.display = 'block';
             arrow.innerHTML = '&#9660;';
             loadObserverConfig();
+            loadObserverJobStatus();
             loadObserverPacks();
         } else {
             body.style.display = 'none';
@@ -546,14 +547,89 @@
         }
     };
 
+    // --- Observer Job Dashboard ---
+    async function loadObserverJobStatus() {
+        try {
+            const status = await apiCall('GET', '/v0/observer/job-status');
+            const btn = document.getElementById('observer-run-btn');
+            const dot = document.querySelector('.observer-status-dot');
+            const text = document.getElementById('observer-status-text');
+            const meta = document.getElementById('observer-job-meta');
+            const autoRunEl = document.getElementById('observer-auto-run');
+
+            if (autoRunEl) autoRunEl.checked = status.auto_run_active;
+
+            if (status.is_running) {
+                dot.className = 'observer-status-dot observer-status-running';
+                text.textContent = 'Running...';
+                btn.disabled = true;
+                btn.style.opacity = '0.5';
+            } else if (status.ready) {
+                dot.className = 'observer-status-dot observer-status-ready';
+                text.textContent = 'Ready';
+                btn.disabled = false;
+                btn.style.opacity = '1';
+            } else {
+                dot.className = 'observer-status-dot observer-status-unavailable';
+                text.textContent = 'Unavailable';
+                btn.disabled = true;
+                btn.style.opacity = '0.5';
+            }
+
+            // Meta info line
+            const parts = [];
+            parts.push(`${status.sharing_tenants} tenant${status.sharing_tenants !== 1 ? 's' : ''} sharing`);
+            if (status.last_run) {
+                const ago = timeSince(new Date(status.last_run));
+                parts.push(`last run ${ago}`);
+                if (status.last_packs_generated > 0) parts.push(`${status.last_packs_generated} packs`);
+            } else {
+                parts.push('never run');
+            }
+            if (status.reason && !status.ready) parts.push(status.reason);
+            meta.textContent = parts.join(' · ');
+        } catch (e) {
+            // Observer may not be ready
+        }
+    }
+
+    function timeSince(date) {
+        const s = Math.floor((Date.now() - date.getTime()) / 1000);
+        if (s < 60) return 'just now';
+        if (s < 3600) return Math.floor(s / 60) + 'm ago';
+        if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+        return Math.floor(s / 86400) + 'd ago';
+    }
+
+    window.toggleObserverAutoRun = async function(enabled) {
+        try {
+            if (enabled) {
+                await apiCall('POST', '/v0/observer/run-job', { start_schedule: true });
+                showToast('Observer auto-run enabled (every 6h)');
+            } else {
+                await apiCall('POST', '/v0/observer/run-job', { stop_schedule: true });
+                showToast('Observer auto-run disabled');
+            }
+            loadObserverJobStatus();
+        } catch (err) {
+            showToast('Failed: ' + err.message, 'error');
+        }
+    };
+
     window.runObserverJob = async function() {
         try {
-            showToast('Running observer job...', 'info');
+            const btn = document.getElementById('observer-run-btn');
+            btn.disabled = true;
+            btn.textContent = 'Running...';
             const result = await apiCall('POST', '/v0/observer/run-job', {});
             showToast(`Observer job complete: ${result.packs_generated} packs generated`);
+            btn.textContent = 'Run Now';
             loadObserverPacks();
+            loadObserverJobStatus();
         } catch (err) {
             showToast('Observer job failed: ' + err.message, 'error');
+            document.getElementById('observer-run-btn').textContent = 'Run Now';
+            loadObserverJobStatus();
         }
     };
 

@@ -488,6 +488,46 @@
         container.innerHTML = html;
     }
 
+    window.syncToRemote = async function() {
+        const urlInput = document.getElementById('sync-remote-url');
+        const status = document.getElementById('sync-status');
+        const btn = document.getElementById('sync-btn');
+        const remoteUrl = urlInput.value.trim();
+
+        if (!remoteUrl) {
+            status.style.display = 'block';
+            status.style.background = 'var(--red-bg, #fef2f2)';
+            status.style.color = 'var(--red, #dc2626)';
+            status.textContent = 'Enter the production URL first.';
+            return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Syncing...';
+        status.style.display = 'block';
+        status.style.background = 'var(--bg-secondary)';
+        status.style.color = 'var(--text-muted)';
+        status.textContent = 'Pushing benchmarks to ' + remoteUrl + '...';
+
+        try {
+            const result = await apiCall('POST', '/v0/benchmark-analytics/sync-to-remote', {
+                remote_url: remoteUrl
+            });
+            const r = result.remote_response || {};
+            status.style.background = '#f0fdf4';
+            status.style.color = '#16a34a';
+            status.textContent = `Synced! Sent ${result.local_results} results. ` +
+                `Remote: ${r.results?.inserted || 0} new, ${r.results?.skipped || 0} already existed.`;
+        } catch (err) {
+            status.style.background = '#fef2f2';
+            status.style.color = '#dc2626';
+            status.textContent = 'Sync failed: ' + err.message;
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Sync Benchmarks';
+        }
+    };
+
     // Load immediately, auto-refresh every 30s
     loadAnalytics();
     setInterval(loadAnalytics, 30000);

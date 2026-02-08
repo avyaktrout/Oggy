@@ -420,6 +420,45 @@ class ObserverService {
         return result.rows;
     }
 
+    // --- Job status (readiness check) ---
+
+    async getJobStatus() {
+        // Count tenants sharing data
+        const tenants = await query(
+            'SELECT COUNT(*) as count FROM observer_tenant_config WHERE share_learning = true'
+        );
+        const sharingTenants = parseInt(tenants.rows[0].count);
+
+        // Get last job info
+        const lastJob = await query(
+            'SELECT job_id, started_at, completed_at, status, packs_generated FROM observer_job_log ORDER BY started_at DESC LIMIT 1'
+        );
+
+        const last = lastJob.rows[0] || null;
+        const lastRunAt = last ? last.completed_at || last.started_at : null;
+        const isRunning = last && last.status === 'running';
+
+        // Job is ready if: 2+ sharing tenants, not currently running, and >1hr since last run (or never run)
+        const cooldownMs = 3600000; // 1 hour
+        const cooldownPassed = !lastRunAt || (Date.now() - new Date(lastRunAt).getTime()) > cooldownMs;
+        const ready = sharingTenants >= 2 && !isRunning && cooldownPassed;
+
+        let reason = null;
+        if (isRunning) reason = 'Job is currently running';
+        else if (sharingTenants < 2) reason = `Need 2+ tenants sharing data (currently ${sharingTenants})`;
+        else if (!cooldownPassed) reason = 'Cooldown period — last job ran less than 1 hour ago';
+
+        return {
+            ready,
+            reason,
+            sharing_tenants: sharingTenants,
+            is_running: isRunning,
+            last_run: lastRunAt,
+            last_packs_generated: last ? last.packs_generated : 0,
+            auto_run_active: !!this._scheduleInterval
+        };
+    }
+
     // --- Scheduled runs ---
 
     startSchedule(intervalHours = 6) {

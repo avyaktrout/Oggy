@@ -113,6 +113,19 @@
             <div id="level-timeline" class="level-timeline"></div>
         </div>
 
+        <!-- Sync to Production -->
+        <div class="analytics-panel" style="margin-top:16px" id="sync-panel">
+            <h3 class="analytics-panel-title">Sync to Production</h3>
+            <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">
+                Push your local benchmark results to the hosted Oggy instance.
+            </p>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <input type="text" id="sync-remote-url" class="admin-input" placeholder="Remote URL (e.g. https://oggy-v1.com)" style="flex:1;min-width:250px">
+                <button class="btn btn-primary btn-sm" id="sync-btn" onclick="syncToRemote()">Sync Benchmarks</button>
+            </div>
+            <div id="sync-status" style="display:none;margin-top:10px;padding:10px;border-radius:8px;font-size:13px"></div>
+        </div>
+
         <div style="text-align:center;padding:24px 0;color:var(--text-muted);font-size:13px">
             Auto-refreshes every 30 seconds during training
         </div>
