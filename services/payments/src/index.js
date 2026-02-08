@@ -30,6 +30,12 @@ const chatRouter = require('./routes/chat');
 const inquiriesRouter = require('./routes/inquiries');
 const preferencesRouter = require('./routes/preferences');
 const benchmarkAnalyticsRouter = require('./routes/benchmarkAnalytics');
+const observerRouter = require('./routes/observer');
+const migrationRouter = require('./routes/migration');
+
+const authRouter = require('./routes/auth');
+const authService = require('./services/authService');
+const { requireAuth, requireCSRF, injectUserId } = require('./middleware/auth');
 
 const auditChecker = require('./utils/auditChecker');
 const { getClient: getRedisClient } = require('./utils/redisClient');
@@ -43,7 +49,11 @@ const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory-serv
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // Middleware
-app.use(cors());
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
+app.use(cors({
+    origin: CORS_ORIGIN === '*' ? true : CORS_ORIGIN,
+    credentials: true
+}));
 app.use(express.json());
 
 // Request ID middleware (for tracing requests across services)
@@ -167,8 +177,22 @@ app.get('/v0/audit/quick', async (req, res) => {
     }
 });
 
-// Serve static frontend files
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// Auth routes (BEFORE auth middleware — must be accessible without session)
+app.use('/v0/auth', authRouter);
+
+// Serve login page and static assets without auth
+const publicDir = path.join(__dirname, '..', 'public');
+app.get('/login.html', (req, res) => res.sendFile(path.join(publicDir, 'login.html')));
+app.use('/css', express.static(path.join(publicDir, 'css')));
+app.use('/js', express.static(path.join(publicDir, 'js')));
+
+// Auth middleware — everything below requires authentication
+app.use(requireAuth);
+app.use(requireCSRF);
+app.use(injectUserId);
+
+// Serve static frontend files (authenticated)
+app.use(express.static(publicDir));
 
 // API Routes
 app.use('/v0/expenses', expensesRouter);
@@ -251,6 +275,12 @@ app.use('/v0/preferences', preferencesRouter);
 
 // Benchmark analytics + OTEL metrics
 app.use('/v0/benchmark-analytics', benchmarkAnalyticsRouter);
+
+// Observer (federated learning) routes
+app.use('/v0/observer', observerRouter);
+
+// Migration (tenant data export/import)
+app.use('/v0/migration', migrationRouter);
 
 // Event processing endpoint (for manual trigger or webhook)
 app.post('/v0/process-events', async (req, res) => {
@@ -359,12 +389,32 @@ const server = app.listen(PORT, async () => {
             chatHandler.setRedisClient(redisClient);
             const { setRedisClient: setPrefsRedis } = require('./routes/preferences');
             setPrefsRedis(redisClient);
+            const { suggestionGate } = require('./services/suggestionGate');
+            suggestionGate.setRedisClient(redisClient);
             logger.info('✅ Redis connected for behavior system');
         } else {
             logger.warn('Redis not available, behavior system running without cache');
         }
     } catch (error) {
         logger.warn('Redis init failed, continuing without cache', { error: error.message });
+    }
+
+    // Seed admin email and start auth cleanup
+    try {
+        await authService.seedAdminEmail();
+        authService.startCleanup();
+        logger.info('✅ Auth system initialized');
+    } catch (error) {
+        logger.warn('Auth init failed, continuing', { error: error.message });
+    }
+
+    // Start Observer schedule (federated learning every 6 hours)
+    try {
+        const observerService = require('./services/observerService');
+        observerService.startSchedule(6);
+        logger.info('✅ Observer schedule started (every 6 hours)');
+    } catch (error) {
+        logger.warn('Observer schedule init failed', { error: error.message });
     }
 
     logger.info('📊 API Endpoints ready', {

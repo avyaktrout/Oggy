@@ -5,6 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const inquiryGenerator = require('../services/inquiryGenerator');
+const { suggestionGate } = require('../services/suggestionGate');
 const logger = require('../utils/logger');
 
 // GET /v0/inquiries/pending - Get pending inquiries (triggers lazy generation)
@@ -104,6 +105,37 @@ router.post('/generate', async (req, res) => {
     } catch (error) {
         logger.logError(error, { operation: 'generate-inquiries', requestId: req.requestId });
         res.status(500).json({ error: 'Failed to generate inquiries' });
+    }
+});
+
+// GET /v0/inquiries/suggestion-settings
+router.get('/suggestion-settings', async (req, res) => {
+    const { user_id } = req.query;
+    if (!user_id) return res.status(400).json({ error: 'user_id is required' });
+
+    try {
+        const settings = await suggestionGate.getSettings(user_id);
+        res.json(settings);
+    } catch (error) {
+        logger.logError(error, { operation: 'get-suggestion-settings', requestId: req.requestId });
+        res.status(500).json({ error: 'Failed to get suggestion settings' });
+    }
+});
+
+// PUT /v0/inquiries/suggestion-settings
+router.put('/suggestion-settings', async (req, res) => {
+    const { user_id, receive_suggestions, suggestion_interval_seconds } = req.body;
+    if (!user_id) return res.status(400).json({ error: 'user_id is required' });
+
+    try {
+        const updated = await suggestionGate.updateSettings(user_id, {
+            receive_suggestions,
+            suggestion_interval_seconds
+        });
+        res.json(updated);
+    } catch (error) {
+        logger.logError(error, { operation: 'update-suggestion-settings', requestId: req.requestId });
+        res.status(500).json({ error: 'Failed to update suggestion settings' });
     }
 });
 

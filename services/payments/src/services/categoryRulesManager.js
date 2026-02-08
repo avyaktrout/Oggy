@@ -4,7 +4,7 @@
  * These rules are ALWAYS injected into categorization prompts
  * regardless of semantic memory retrieval
  *
- * Week 8+: Closing the learning feedback loop
+ * Per-tenant: all rules are scoped by user_id
  */
 
 const { query } = require('../utils/db');
@@ -14,20 +14,28 @@ const crypto = require('crypto');
 
 class CategoryRulesManager {
     constructor() {
-        // Cache rules in memory for fast access
-        this.rulesCache = new Map();
+        // Per-user cache: Map<userId, { rules: Map, updatedAt: number }>
+        this.userCaches = new Map();
         this.cacheExpiry = 5 * 60 * 1000; // 5 minute cache
-        this.lastCacheUpdate = 0;
+    }
+
+    _getUserCache(userId) {
+        if (!this.userCaches.has(userId)) {
+            this.userCaches.set(userId, { rules: new Map(), updatedAt: 0 });
+        }
+        return this.userCaches.get(userId);
     }
 
     /**
-     * Get all active category distinction rules
+     * Get all active category distinction rules for a user
      * These should ALWAYS be injected into categorization prompts
      */
-    async getActiveRules() {
+    async getActiveRules(userId) {
+        const cache = this._getUserCache(userId);
+
         // Check cache
-        if (Date.now() - this.lastCacheUpdate < this.cacheExpiry && this.rulesCache.size > 0) {
-            return Array.from(this.rulesCache.values());
+        if (Date.now() - cache.updatedAt < this.cacheExpiry && cache.rules.size > 0) {
+            return Array.from(cache.rules.values());
         }
 
         try {
@@ -38,29 +46,31 @@ class CategoryRulesManager {
                   AND topic = 'categorization'
                   AND subtopic = 'category_distinction_rules'
                   AND visibility = 'shareable'
+                  AND user_id = $1
                 ORDER BY created_at DESC
                 LIMIT 20
-            `);
+            `, [userId]);
 
             // Update cache
-            this.rulesCache.clear();
+            cache.rules.clear();
             for (const row of result.rows) {
                 const rule = {
                     rule_id: row.knowledge_id,
                     ...row.content_structured,
                     created_at: row.created_at
                 };
-                this.rulesCache.set(row.knowledge_id, rule);
+                cache.rules.set(row.knowledge_id, rule);
             }
-            this.lastCacheUpdate = Date.now();
+            cache.updatedAt = Date.now();
 
             logger.debug('Loaded category distinction rules', {
-                count: result.rows.length
+                count: result.rows.length,
+                user_id: userId
             });
 
-            return Array.from(this.rulesCache.values());
+            return Array.from(cache.rules.values());
         } catch (error) {
-            logger.warn('Failed to load category rules', { error: error.message });
+            logger.warn('Failed to load category rules', { error: error.message, user_id: userId });
             return [];
         }
     }
@@ -68,9 +78,10 @@ class CategoryRulesManager {
     /**
      * Get rules relevant to specific categories
      * @param {array} categories - Categories involved in the transaction
+     * @param {string} userId - User ID
      */
-    async getRulesForCategories(categories) {
-        const allRules = await this.getActiveRules();
+    async getRulesForCategories(categories, userId) {
+        const allRules = await this.getActiveRules(userId);
 
         // Filter rules that mention any of the categories
         return allRules.filter(rule => {
@@ -88,15 +99,16 @@ class CategoryRulesManager {
      * Create a new category distinction rule from confusion training
      * @param {object} confusionPattern - The confusion pattern that was learned
      * @param {string} distinctionHint - The key distinction learned
+     * @param {string} userId - User ID
      */
-    async createDistinctionRule(confusionPattern, distinctionHint) {
+    async createDistinctionRule(confusionPattern, distinctionHint, userId) {
         const { actual, predicted, confusion_rate } = confusionPattern;
 
-        // Check if similar rule already exists
-        const existingRule = await this._findExistingRule(actual, predicted);
+        // Check if similar rule already exists for this user
+        const existingRule = await this._findExistingRule(actual, predicted, userId);
         if (existingRule) {
             // Update existing rule with new hint
-            return await this._updateRule(existingRule.knowledge_id, distinctionHint, confusion_rate);
+            return await this._updateRule(existingRule.knowledge_id, distinctionHint, confusion_rate, userId);
         }
 
         const rule_id = uuidv4();
@@ -138,8 +150,9 @@ This rule was learned from confusion pattern training where ${actual} was being 
                     visibility,
                     difficulty_band,
                     tags,
-                    content_hash
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    content_hash,
+                    user_id
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             `, [
                 rule_id,
                 'payments',
@@ -147,21 +160,23 @@ This rule was learned from confusion pattern training where ${actual} was being 
                 'category_distinction_rules',
                 content_text,
                 JSON.stringify(content_structured),
-                'tessa_ai',  // Using tessa_ai as source since rules come from Tessa-generated training
+                'tessa_ai',
                 `confusion:${actual}:${predicted}`,
                 'shareable',
                 3,
                 JSON.stringify(['category_rule', 'distinction', actual, predicted, 'learned']),
-                content_hash
+                content_hash,
+                userId
             ]);
 
-            // Invalidate cache
-            this.lastCacheUpdate = 0;
+            // Invalidate cache for this user
+            this._getUserCache(userId).updatedAt = 0;
 
             logger.info('Created category distinction rule', {
                 rule_id,
                 category_a: actual,
                 category_b: predicted,
+                user_id: userId,
                 distinction: distinctionHint.substring(0, 100)
             });
 
@@ -179,8 +194,9 @@ This rule was learned from confusion pattern training where ${actual} was being 
      * Create a per-scenario reasoning-based rule to target specific mistakes
      * @param {object} mistake - mistake context (actual/predicted/scenario_id)
      * @param {string} reasoningHint - short reasoning snippet
+     * @param {string} userId - User ID
      */
-    async createScenarioReasonRule(mistake, reasoningHint) {
+    async createScenarioReasonRule(mistake, reasoningHint, userId) {
         const { actual, predicted, scenario_id } = mistake;
 
         if (!actual || !predicted || !reasoningHint) return null;
@@ -223,8 +239,9 @@ Source: benchmark scenario ${scenario_id || 'unknown'}.`;
                     visibility,
                     difficulty_band,
                     tags,
-                    content_hash
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    content_hash,
+                    user_id
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             `, [
                 rule_id,
                 'payments',
@@ -237,16 +254,18 @@ Source: benchmark scenario ${scenario_id || 'unknown'}.`;
                 'shareable',
                 3,
                 JSON.stringify(['category_rule', 'scenario_reasoning', actual, predicted]),
-                content_hash
+                content_hash,
+                userId
             ]);
 
-            // Invalidate cache
-            this.lastCacheUpdate = 0;
+            // Invalidate cache for this user
+            this._getUserCache(userId).updatedAt = 0;
 
             logger.info('Created scenario reasoning rule', {
                 rule_id,
                 category_a: actual,
                 category_b: predicted,
+                user_id: userId,
                 scenario_id
             });
 
@@ -261,21 +280,22 @@ Source: benchmark scenario ${scenario_id || 'unknown'}.`;
     }
 
     /**
-     * Find existing rule for a category pair
+     * Find existing rule for a category pair for a specific user
      */
-    async _findExistingRule(categoryA, categoryB) {
+    async _findExistingRule(categoryA, categoryB, userId) {
         const result = await query(`
             SELECT knowledge_id, content_structured
             FROM domain_knowledge
             WHERE domain = 'payments'
               AND topic = 'categorization'
               AND subtopic = 'category_distinction_rules'
+              AND user_id = $3
               AND (
                   (content_structured->>'category_a' = $1 AND content_structured->>'category_b' = $2)
                   OR (content_structured->>'category_a' = $2 AND content_structured->>'category_b' = $1)
               )
             LIMIT 1
-        `, [categoryA, categoryB]);
+        `, [categoryA, categoryB, userId]);
 
         return result.rows[0] || null;
     }
@@ -283,7 +303,7 @@ Source: benchmark scenario ${scenario_id || 'unknown'}.`;
     /**
      * Update an existing rule with additional distinction
      */
-    async _updateRule(knowledgeId, newHint, confusionRate) {
+    async _updateRule(knowledgeId, newHint, confusionRate, userId) {
         const result = await query(`
             SELECT content_structured, content_text
             FROM domain_knowledge
@@ -323,8 +343,8 @@ Last confusion rate: ${(confusionRate * 100).toFixed(0)}%`;
             WHERE knowledge_id = $3
         `, [JSON.stringify(updatedStructured), updatedText, knowledgeId]);
 
-        // Invalidate cache
-        this.lastCacheUpdate = 0;
+        // Invalidate cache for this user
+        if (userId) this._getUserCache(userId).updatedAt = 0;
 
         logger.info('Updated category distinction rule', {
             knowledge_id: knowledgeId,
@@ -355,9 +375,12 @@ IMPORTANT: Apply these learned distinctions when the expense could be either cat
     /**
      * Clear the rules cache (for testing)
      */
-    clearCache() {
-        this.rulesCache.clear();
-        this.lastCacheUpdate = 0;
+    clearCache(userId) {
+        if (userId) {
+            this.userCaches.delete(userId);
+        } else {
+            this.userCaches.clear();
+        }
     }
 }
 

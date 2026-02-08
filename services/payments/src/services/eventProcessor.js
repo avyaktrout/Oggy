@@ -98,12 +98,12 @@ class AppEventProcessor {
             return;
         }
 
-        // Insert into domain_knowledge
+        // Insert into domain_knowledge (scoped to user)
         await query(
             `INSERT INTO domain_knowledge (
                 domain, topic, subtopic, content_text, content_structured,
-                source_type, source_ref, visibility, difficulty_band, tags, content_hash
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                source_type, source_ref, visibility, difficulty_band, tags, content_hash, user_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
             [
                 knowledgeEntry.domain,
                 knowledgeEntry.topic,
@@ -115,7 +115,8 @@ class AppEventProcessor {
                 knowledgeEntry.visibility,
                 knowledgeEntry.difficulty_band,
                 JSON.stringify(knowledgeEntry.tags),
-                knowledgeEntry.content_hash
+                knowledgeEntry.content_hash,
+                event.user_id || 'oggy'
             ]
         );
 

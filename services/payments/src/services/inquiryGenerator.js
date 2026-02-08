@@ -8,9 +8,11 @@ const { v4: uuidv4 } = require('uuid');
 const { query } = require('../utils/db');
 const logger = require('../utils/logger');
 const { costGovernor } = require('../middleware/costGovernor');
+const { suggestionGate } = require('./suggestionGate');
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory-service:3000';
 
 class InquiryGenerator {
     async getPreferences(userId) {
@@ -81,13 +83,31 @@ class InquiryGenerator {
         const remaining = prefs.max_questions_per_day - todayCount;
         const toGenerate = Math.min(remaining, 2); // Generate at most 2 at a time
 
-        const sources = await this._findQuestionSources(userId);
+        // Clarification sources always available
+        const clarificationSources = await this._findClarificationSources(userId);
+
+        // Suggestion sources gated by opt-in + interval
+        let suggestionSources = [];
+        const suggestCheck = await suggestionGate.canSuggest(userId);
+        if (suggestCheck.allowed) {
+            suggestionSources = await this._findSuggestionSources(userId);
+        } else if (suggestCheck.reason !== 'suggestions_disabled') {
+            await suggestionGate.recordSuppression(userId, suggestCheck.reason);
+        }
+
+        const sources = [...clarificationSources, ...suggestionSources];
         const generated = [];
 
         for (let i = 0; i < Math.min(toGenerate, sources.length); i++) {
             try {
                 const inquiry = await this._generateInquiry(userId, sources[i]);
-                if (inquiry) generated.push(inquiry);
+                if (inquiry) {
+                    generated.push(inquiry);
+                    // Record suggestion emission for rate limiting
+                    if (sources[i].response_type === 'suggestion') {
+                        await suggestionGate.recordSuggestion(userId);
+                    }
+                }
             } catch (err) {
                 logger.warn('Failed to generate inquiry', { error: err.message, source: sources[i].type });
             }
@@ -96,10 +116,13 @@ class InquiryGenerator {
         return generated.length > 0 ? generated : [];
     }
 
-    async _findQuestionSources(userId) {
+    /**
+     * Clarification sources — always available (uncategorized, ambiguous).
+     */
+    async _findClarificationSources(userId) {
         const sources = [];
 
-        // Priority 1: Uncategorized expenses (most actionable — user needs to assign categories)
+        // Priority 1: Uncategorized expenses
         try {
             const uncategorized = await query(
                 `SELECT DISTINCT merchant, description
@@ -113,6 +136,7 @@ class InquiryGenerator {
             for (const row of uncategorized.rows) {
                 sources.push({
                     type: 'uncategorized_expense',
+                    response_type: 'clarification',
                     merchant: row.merchant,
                     description: row.description
                 });
@@ -121,7 +145,7 @@ class InquiryGenerator {
             logger.warn('Inquiry: uncategorized query failed', { error: err.message });
         }
 
-        // Priority 2: Ambiguous merchants (same merchant, multiple categories)
+        // Priority 2: Ambiguous merchants
         try {
             const ambiguous = await query(
                 `SELECT merchant, array_agg(DISTINCT category) as categories, COUNT(*) as count
@@ -135,6 +159,7 @@ class InquiryGenerator {
             for (const row of ambiguous.rows) {
                 sources.push({
                     type: 'ambiguous_merchant',
+                    response_type: 'clarification',
                     merchant: row.merchant,
                     categories: row.categories,
                     count: parseInt(row.count)
@@ -147,8 +172,47 @@ class InquiryGenerator {
         return sources;
     }
 
+    /**
+     * Suggestion sources — only available when opted in (cost-cutting tips).
+     */
+    async _findSuggestionSources(userId) {
+        const sources = [];
+
+        // Cost-cutting: top spending categories in the last 90 days over $100 total
+        try {
+            const topSpending = await query(
+                `SELECT category, SUM(amount) as total, COUNT(*) as txn_count,
+                        AVG(amount) as avg_amount
+                 FROM expenses
+                 WHERE user_id = $1 AND status = 'active'
+                   AND category IS NOT NULL AND category != 'uncategorized'
+                   AND transaction_date >= CURRENT_DATE - INTERVAL '90 days'
+                 GROUP BY category
+                 HAVING SUM(amount) > 100
+                 ORDER BY SUM(amount) DESC
+                 LIMIT 3`,
+                [userId]
+            );
+            for (const row of topSpending.rows) {
+                sources.push({
+                    type: 'cost_cutting',
+                    response_type: 'suggestion',
+                    category: row.category,
+                    total: parseFloat(row.total),
+                    txn_count: parseInt(row.txn_count),
+                    avg_amount: parseFloat(row.avg_amount)
+                });
+            }
+        } catch (err) {
+            logger.warn('Inquiry: cost-cutting query failed', { error: err.message });
+        }
+
+        return sources;
+    }
+
     async _generateInquiry(userId, source) {
         let questionText, questionType, context;
+        const responseType = source.response_type || 'clarification';
 
         if (source.type === 'ambiguous_merchant') {
             questionType = 'ambiguous_merchant';
@@ -181,34 +245,75 @@ class InquiryGenerator {
             context = { merchant: source.merchant, description: source.description, options: ['dining', 'groceries', 'transportation', 'utilities', 'entertainment', 'business_meal', 'shopping', 'health', 'personal_care', 'other'] };
             const desc = source.description ? ` ("${source.description}")` : '';
             questionText = `What category should "${source.merchant}"${desc} expenses go under?`;
+        } else if (source.type === 'cost_cutting') {
+            questionType = 'cost_cutting';
+            const total = source.total.toFixed(2);
+            const avg = source.avg_amount.toFixed(2);
+            context = {
+                category: source.category,
+                total: source.total,
+                txn_count: source.txn_count,
+                avg_amount: source.avg_amount,
+                options: ['yes, show tips', 'no thanks', 'remind me later']
+            };
+
+            try {
+                await costGovernor.checkBudget(500);
+                const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+                    model: OPENAI_MODEL,
+                    messages: [{
+                        role: 'system',
+                        content: 'Generate a short, friendly cost-cutting suggestion for someone who spends a lot in a particular expense category. Include the dollar amount. Reply with ONLY the suggestion text, nothing else. Keep it to 1-2 sentences.'
+                    }, {
+                        role: 'user',
+                        content: `Category: "${source.category}". Total spent last 90 days: $${total} across ${source.txn_count} transactions (avg $${avg} each). Suggest ways to reduce spending in this category.`
+                    }],
+                    temperature: 0.7,
+                    max_tokens: 150
+                }, {
+                    headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+                    timeout: 10000
+                });
+                questionText = response.data.choices[0].message.content.trim();
+                costGovernor.recordUsage(300);
+            } catch (err) {
+                questionText = `You've spent $${total} on ${source.category.replace(/_/g, ' ')} in the last 90 days (${source.txn_count} transactions, avg $${avg}). Would you like tips to reduce this spending?`;
+            }
         } else {
             questionType = 'spending_pattern';
             context = { merchant: source.merchant, options: ['dining', 'groceries', 'shopping', 'entertainment', 'other'] };
             questionText = `What category should "${source.merchant}" expenses go under?`;
         }
 
-        // Check for duplicate questions
+        // Check for duplicate questions (use merchant or category as dedup key)
+        const dedupKey = source.merchant || source.category || questionType;
         const existing = await query(
             `SELECT 1 FROM oggy_inquiries
-             WHERE user_id = $1 AND question_type = $2 AND context->>'merchant' = $3
+             WHERE user_id = $1 AND question_type = $2
+             AND (context->>'merchant' = $3 OR context->>'category' = $3)
              AND status IN ('pending', 'answered') AND created_at > now() - INTERVAL '30 days'`,
-            [userId, questionType, source.merchant]
+            [userId, questionType, dedupKey]
         );
         if (existing.rows.length > 0) return null;
 
         const inquiryId = uuidv4();
         await query(
-            `INSERT INTO oggy_inquiries (inquiry_id, user_id, question_text, question_type, context, generation_date)
-             VALUES ($1, $2, $3, $4, $5, CURRENT_DATE)`,
-            [inquiryId, userId, questionText, questionType, JSON.stringify(context)]
+            `INSERT INTO oggy_inquiries (inquiry_id, user_id, question_text, question_type, context, response_type, generation_date)
+             VALUES ($1, $2, $3, $4, $5, $6, CURRENT_DATE)`,
+            [inquiryId, userId, questionText, questionType, JSON.stringify(context), responseType]
         );
 
-        logger.info('Generated inquiry', { inquiry_id: inquiryId, type: questionType, merchant: source.merchant });
+        logger.info('Generated inquiry', {
+            inquiry_id: inquiryId, type: questionType,
+            response_type: responseType,
+            key: dedupKey
+        });
 
         return {
             inquiry_id: inquiryId,
             question_text: questionText,
             question_type: questionType,
+            response_type: responseType,
             context,
             created_at: new Date().toISOString()
         };
@@ -228,67 +333,89 @@ class InquiryGenerator {
 
         const inquiry = result.rows[0];
         const merchant = inquiry.context?.merchant;
+        const category = inquiry.context?.category;
 
-        // Create memory card from the answer
-        if (merchant && answer) {
-            try {
-                const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory-service:3000';
-                const cardResponse = await axios.post(`${MEMORY_SERVICE_URL}/cards`, {
-                    owner_type: 'user',
-                    owner_id: userId,
-                    tier: 2,
-                    kind: 'expense_category_correction',
-                    content: {
-                        type: 'BENCHMARK_CORRECTION',
-                        text: `USER STATED: ${merchant} should be categorized as ${answer}`,
-                        merchant: merchant,
-                        preferred_category: answer,
-                        source: 'user_inquiry',
-                        question: inquiry.question_text,
-                        confidence: 1.0
-                    },
-                    tags: ['payments', 'categorization', 'user_preference', answer, merchant.toLowerCase()],
-                    utility_weight: 0.9,
-                    reliability: 0.95
-                }, {
-                    timeout: 5000,
-                    headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
-                });
+        // Always create memory card from the answer
+        try {
+            let cardContent, cardKind, cardTags;
 
-                const cardId = cardResponse.data?.card_id;
-                if (cardId) {
-                    await query(
-                        'UPDATE oggy_inquiries SET applied_to_memory = true, memory_card_id = $1 WHERE inquiry_id = $2',
-                        [cardId, inquiryId]
-                    );
-                }
-
-                logger.info('Inquiry answer applied to memory', {
-                    inquiry_id: inquiryId, merchant, category: answer, card_id: cardId
-                });
-
-                // Also update uncategorized expenses for this merchant
-                if (inquiry.question_type === 'uncategorized_expense') {
-                    try {
-                        const updated = await query(
-                            `UPDATE expenses SET category = $1
-                             WHERE user_id = $2 AND merchant = $3
-                               AND (category IS NULL OR category = 'uncategorized')
-                               AND status = 'active'`,
-                            [answer, userId, merchant]
-                        );
-                        if (updated.rowCount > 0) {
-                            logger.info('Updated uncategorized expenses from inquiry', {
-                                merchant, category: answer, count: updated.rowCount
-                            });
-                        }
-                    } catch (updateErr) {
-                        logger.warn('Failed to update expenses from inquiry', { error: updateErr.message });
-                    }
-                }
-            } catch (err) {
-                logger.warn('Failed to create memory from inquiry', { error: err.message });
+            if (merchant && answer) {
+                // Merchant-specific memory (categorization preference)
+                cardKind = 'expense_category_correction';
+                cardContent = {
+                    type: 'BENCHMARK_CORRECTION',
+                    text: `USER STATED: ${merchant} should be categorized as ${answer}`,
+                    merchant: merchant,
+                    preferred_category: answer,
+                    source: 'user_inquiry',
+                    question: inquiry.question_text,
+                    confidence: 1.0
+                };
+                cardTags = ['payments', 'categorization', 'user_preference', answer, merchant.toLowerCase()];
+            } else {
+                // General preference memory (cost-cutting, spending patterns, etc.)
+                cardKind = 'user_preference';
+                cardContent = {
+                    type: 'PATTERN',
+                    text: `USER RESPONDED to "${inquiry.question_text}": ${answer}`,
+                    question_type: inquiry.question_type,
+                    category: category || null,
+                    answer: answer,
+                    source: 'user_inquiry',
+                    confidence: 0.9
+                };
+                cardTags = ['payments', 'categorization', inquiry.question_type];
+                if (category) cardTags.push(category);
             }
+
+            const cardResponse = await axios.post(`${MEMORY_SERVICE_URL}/cards`, {
+                owner_type: 'user',
+                owner_id: userId,
+                tier: 2,
+                kind: cardKind,
+                content: cardContent,
+                tags: cardTags,
+                utility_weight: merchant ? 0.9 : 0.7,
+                reliability: 0.95
+            }, {
+                timeout: 5000,
+                headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
+            });
+
+            const cardId = cardResponse.data?.card_id;
+            if (cardId) {
+                await query(
+                    'UPDATE oggy_inquiries SET applied_to_memory = true, memory_card_id = $1 WHERE inquiry_id = $2',
+                    [cardId, inquiryId]
+                );
+            }
+
+            logger.info('Inquiry answer applied to memory', {
+                inquiry_id: inquiryId, merchant, category, answer, card_id: cardId,
+                question_type: inquiry.question_type
+            });
+
+            // Also update uncategorized expenses for this merchant
+            if (merchant && inquiry.question_type === 'uncategorized_expense') {
+                try {
+                    const updated = await query(
+                        `UPDATE expenses SET category = $1
+                         WHERE user_id = $2 AND merchant = $3
+                           AND (category IS NULL OR category = 'uncategorized')
+                           AND status = 'active'`,
+                        [answer, userId, merchant]
+                    );
+                    if (updated.rowCount > 0) {
+                        logger.info('Updated uncategorized expenses from inquiry', {
+                            merchant, category: answer, count: updated.rowCount
+                        });
+                    }
+                } catch (updateErr) {
+                    logger.warn('Failed to update expenses from inquiry', { error: updateErr.message });
+                }
+            }
+        } catch (err) {
+            logger.warn('Failed to create memory from inquiry', { error: err.message });
         }
     }
 

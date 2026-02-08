@@ -1,5 +1,7 @@
 // Enter Payment page logic
-(function() {
+(async function() {
+    const authed = await initAuth();
+    if (!authed) return;
     renderNav('enter');
     startInquiryPolling();
 

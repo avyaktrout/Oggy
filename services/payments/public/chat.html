@@ -95,7 +95,59 @@
                     </label>
                 </div>
             </div>
-            <div class="inquiry-settings-desc">Oggy asks about uncategorized payments and ambiguous merchants to learn your preferences and store them to memory.</div>
+            <div class="inquiry-settings-desc">Clarification questions (uncategorized payments, ambiguous merchants) always appear. Suggestions follow the schedule below.</div>
+            <div class="suggestion-settings" id="suggestion-settings">
+                <label class="toggle-label" title="When enabled, Oggy proactively suggests cost-cutting tips and spending insights">
+                    <input type="checkbox" id="suggestion-toggle" onchange="toggleSuggestions(this.checked)">
+                    <span class="toggle-switch"></span>
+                    <span class="toggle-text">Receive suggestions</span>
+                </label>
+                <label style="font-size:13px;color:var(--text-muted);font-weight:500;display:flex;align-items:center;gap:6px">
+                    Frequency
+                    <select id="suggestion-interval" onchange="updateSuggestionInterval(this.value)" style="padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+                        <option value="180">Every 3 min</option>
+                        <option value="300">Every 5 min</option>
+                        <option value="600">Every 10 min</option>
+                        <option value="900" selected>Every 15 min</option>
+                        <option value="1800">Every 30 min</option>
+                        <option value="3600">Every 1 hour</option>
+                        <option value="21600">Every 6 hours</option>
+                        <option value="43200">Every 12 hours</option>
+                        <option value="86400">Once a day</option>
+                    </select>
+                </label>
+            </div>
+        </div>
+
+        <!-- Observer Panel -->
+        <div class="observer-panel" id="observer-panel">
+            <div class="observer-panel-header" onclick="toggleObserverPanel()">
+                <div class="observer-panel-title">Observer Suggestions</div>
+                <span class="observer-toggle-arrow" id="observer-arrow">&#9654;</span>
+            </div>
+            <div class="observer-panel-body" id="observer-body" style="display:none">
+                <div class="observer-toggles">
+                    <label class="toggle-label" title="Share anonymized learning data to help improve packs">
+                        <input type="checkbox" id="observer-share" onchange="updateObserverConfig('share_learning', this.checked)">
+                        <span class="toggle-switch"></span>
+                        <span class="toggle-text">Share learning</span>
+                    </label>
+                    <label class="toggle-label" title="Receive suggestion packs from observer analysis">
+                        <input type="checkbox" id="observer-suggestions" onchange="updateObserverConfig('receive_observer_suggestions', this.checked)">
+                        <span class="toggle-switch"></span>
+                        <span class="toggle-text">Receive suggestions</span>
+                    </label>
+                    <label class="toggle-label" title="Receive merchant-specific rule packs">
+                        <input type="checkbox" id="observer-merchant" onchange="updateObserverConfig('receive_merchant_packs', this.checked)">
+                        <span class="toggle-switch"></span>
+                        <span class="toggle-text">Merchant packs</span>
+                    </label>
+                </div>
+                <div class="observer-packs" id="observer-packs">
+                    <div style="color:var(--text-muted);font-size:13px;padding:8px 0">Loading packs...</div>
+                </div>
+                <button class="btn btn-sm btn-outline" onclick="runObserverJob()" style="margin-top:8px">Run Observer Job</button>
+            </div>
         </div>
 
         <!-- Chat -->

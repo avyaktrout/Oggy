@@ -1,5 +1,7 @@
 // Chat page logic + Training controls
-(function() {
+(async function() {
+    const authed = await initAuth();
+    if (!authed) return;
     renderNav('chat');
     startInquiryPolling();
 
@@ -397,6 +399,31 @@
         }
     };
 
+    // --- Suggestion Settings ---
+    window.toggleSuggestions = async function(enabled) {
+        try {
+            await apiCall('PUT', '/v0/inquiries/suggestion-settings', {
+                user_id: USER_ID,
+                receive_suggestions: enabled
+            });
+            showToast(enabled ? 'Suggestions enabled — Oggy will share cost-cutting tips' : 'Suggestions disabled');
+        } catch (err) {
+            showToast('Failed to update: ' + err.message, 'error');
+        }
+    };
+
+    window.updateSuggestionInterval = async function(seconds) {
+        try {
+            await apiCall('PUT', '/v0/inquiries/suggestion-settings', {
+                user_id: USER_ID,
+                suggestion_interval_seconds: parseInt(seconds)
+            });
+            showToast('Suggestion frequency updated');
+        } catch (err) {
+            showToast('Failed to update: ' + err.message, 'error');
+        }
+    };
+
     async function loadInquiryPreferences() {
         try {
             const prefs = await apiCall('GET', `/v0/inquiries/preferences?user_id=${USER_ID}`);
@@ -407,7 +434,128 @@
         } catch (e) {
             // Inquiry system may not be ready
         }
+
+        // Load suggestion settings
+        try {
+            const settings = await apiCall('GET', `/v0/inquiries/suggestion-settings?user_id=${USER_ID}`);
+            const sugToggle = document.getElementById('suggestion-toggle');
+            const sugInterval = document.getElementById('suggestion-interval');
+            if (sugToggle) sugToggle.checked = settings.receive_suggestions === true;
+            if (sugInterval) sugInterval.value = String(settings.suggestion_interval_seconds || 900);
+        } catch (e) {
+            // Suggestion system may not be ready
+        }
     }
+
+    // --- Observer Settings ---
+    window.toggleObserverPanel = function() {
+        const body = document.getElementById('observer-body');
+        const arrow = document.getElementById('observer-arrow');
+        if (body.style.display === 'none') {
+            body.style.display = 'block';
+            arrow.innerHTML = '&#9660;';
+            loadObserverConfig();
+            loadObserverPacks();
+        } else {
+            body.style.display = 'none';
+            arrow.innerHTML = '&#9654;';
+        }
+    };
+
+    window.updateObserverConfig = async function(field, value) {
+        try {
+            const update = { user_id: USER_ID };
+            update[field] = value;
+            await apiCall('PUT', '/v0/observer/config', update);
+            showToast('Observer setting updated');
+        } catch (err) {
+            showToast('Failed to update: ' + err.message, 'error');
+        }
+    };
+
+    async function loadObserverConfig() {
+        try {
+            const config = await apiCall('GET', `/v0/observer/config?user_id=${USER_ID}`);
+            const shareEl = document.getElementById('observer-share');
+            const sugEl = document.getElementById('observer-suggestions');
+            const merchEl = document.getElementById('observer-merchant');
+            if (shareEl) shareEl.checked = config.share_learning === true;
+            if (sugEl) sugEl.checked = config.receive_observer_suggestions === true;
+            if (merchEl) merchEl.checked = config.receive_merchant_packs === true;
+        } catch (e) {
+            // Observer may not be ready
+        }
+    }
+
+    async function loadObserverPacks() {
+        const container = document.getElementById('observer-packs');
+        try {
+            const data = await apiCall('GET', '/v0/observer/packs');
+            if (!data.packs || data.packs.length === 0) {
+                container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px 0">No packs available yet. Run an observer job to generate packs.</div>';
+                return;
+            }
+            container.innerHTML = data.packs.map(pack => {
+                const riskColor = pack.risk_level === 'low' ? 'var(--success)' :
+                                  pack.risk_level === 'medium' ? 'var(--warning)' : 'var(--danger)';
+                const rules = pack.rules || [];
+                const isApplied = pack.status === 'applied';
+                const isRolledBack = pack.status === 'rolled_back';
+                return `
+                    <div class="observer-pack-card">
+                        <div class="observer-pack-header">
+                            <strong>${pack.name}</strong>
+                            <span class="observer-risk-badge" style="background:${riskColor}">${pack.risk_level}</span>
+                        </div>
+                        <div class="observer-pack-meta">
+                            ${rules.length} rules | ${(pack.categories_covered || []).join(', ') || 'various'} |
+                            +${pack.expected_lift || 0}% expected lift
+                        </div>
+                        <div class="observer-pack-actions">
+                            ${isApplied ? `<button class="btn btn-sm btn-danger" onclick="rollbackPack('${pack.pack_id}')">Rollback</button>
+                                          <span style="color:var(--success);font-size:12px">Applied</span>` :
+                              isRolledBack ? `<span style="color:var(--text-muted);font-size:12px">Rolled back</span>` :
+                              `<button class="btn btn-sm btn-success" onclick="applyPack('${pack.pack_id}')">Apply</button>`}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        } catch (e) {
+            container.innerHTML = '<div style="color:var(--text-muted);font-size:13px">Failed to load packs</div>';
+        }
+    }
+
+    window.applyPack = async function(packId) {
+        try {
+            const result = await apiCall('POST', '/v0/observer/import-pack', { pack_id: packId, user_id: USER_ID });
+            showToast(`Pack applied: ${result.rules_applied} rules, ${result.cards_created} memory cards created`);
+            loadObserverPacks();
+        } catch (err) {
+            showToast('Failed to apply pack: ' + err.message, 'error');
+        }
+    };
+
+    window.rollbackPack = async function(packId) {
+        if (!confirm('Rollback this observer pack? This will zero out the memory cards it created.')) return;
+        try {
+            const result = await apiCall('POST', '/v0/observer/rollback-pack', { pack_id: packId, user_id: USER_ID });
+            showToast(`Pack rolled back: ${result.cards_rolled_back} cards affected`);
+            loadObserverPacks();
+        } catch (err) {
+            showToast('Failed to rollback: ' + err.message, 'error');
+        }
+    };
+
+    window.runObserverJob = async function() {
+        try {
+            showToast('Running observer job...', 'info');
+            const result = await apiCall('POST', '/v0/observer/run-job', {});
+            showToast(`Observer job complete: ${result.packs_generated} packs generated`);
+            loadObserverPacks();
+        } catch (err) {
+            showToast('Observer job failed: ' + err.message, 'error');
+        }
+    };
 
     // Check if training is already running on page load
     (async function() {

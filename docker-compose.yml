@@ -113,6 +113,8 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@oggy.local}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
     ports:
       - "3001:3001"
     volumes:

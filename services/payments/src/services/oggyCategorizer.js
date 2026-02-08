@@ -99,7 +99,7 @@ class OggyCategorizer {
             let categoryRules = [];
             try {
                 // Get all active rules - these bypass semantic retrieval
-                categoryRules = await categoryRulesManager.getActiveRules();
+                categoryRules = await categoryRulesManager.getActiveRules(userId);
                 if (categoryRules.length > 0) {
                     logger.debug('Loaded category distinction rules', {
                         count: categoryRules.length,

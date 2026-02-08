@@ -930,7 +930,7 @@ class ContinuousLearningLoop {
                         actual: mistake.correct_category,
                         predicted: mistake.predicted_category,
                         scenario_id: mistake.scenario_id
-                    }, reasoningHint);
+                    }, reasoningHint, this.userId);
                     if (ruleId) localRules++;
                 }
 
@@ -1199,7 +1199,7 @@ class ContinuousLearningLoop {
                     const ruleId = await categoryRulesManager.createDistinctionRule({
                         actual, predicted,
                         confusion_rate: confusionContext.confusion_rate || 0.5
-                    }, hint);
+                    }, hint, this.userId);
                     if (ruleId) localRules++;
                 }
 

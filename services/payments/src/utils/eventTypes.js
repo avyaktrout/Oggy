@@ -151,6 +151,60 @@ const APP_EVENT_TYPES = {
         },
         entity_type: 'inquiry',
         action: 'answer'
+    },
+
+    // =====================================================
+    // Suggestion events (Behavior Design v0.2)
+    // =====================================================
+    SUGGESTION_EMITTED: {
+        description: 'Oggy emitted a proactive suggestion to the user',
+        feeds_domain_knowledge: false,
+        feeds_memory_substrate: false,
+        entity_type: 'suggestion',
+        action: 'emit'
+    },
+
+    SUGGESTION_SUPPRESSED: {
+        description: 'A suggestion was suppressed due to rate limiting or opt-out',
+        feeds_domain_knowledge: false,
+        feeds_memory_substrate: false,
+        entity_type: 'suggestion',
+        action: 'suppress'
+    },
+
+    SUGGESTION_SETTINGS_CHANGED: {
+        description: 'User changed suggestion settings (opt-in/interval)',
+        feeds_domain_knowledge: false,
+        feeds_memory_substrate: false,
+        entity_type: 'suggestion',
+        action: 'settings'
+    },
+
+    // =====================================================
+    // Observer events (Federated Learning v0.1)
+    // =====================================================
+    OBSERVER_JOB_COMPLETED: {
+        description: 'Observer federated learning job completed',
+        feeds_domain_knowledge: false,
+        feeds_memory_substrate: false,
+        entity_type: 'observer',
+        action: 'job_complete'
+    },
+
+    OBSERVER_PACK_APPLIED: {
+        description: 'User applied an observer rule pack',
+        feeds_domain_knowledge: true,
+        feeds_memory_substrate: false,
+        entity_type: 'observer',
+        action: 'pack_apply'
+    },
+
+    OBSERVER_PACK_ROLLED_BACK: {
+        description: 'User rolled back an observer rule pack',
+        feeds_domain_knowledge: false,
+        feeds_memory_substrate: false,
+        entity_type: 'observer',
+        action: 'pack_rollback'
     }
 };
 

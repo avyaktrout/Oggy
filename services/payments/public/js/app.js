@@ -1,6 +1,8 @@
 // Shared utilities for Oggy Payments UI
 const API_BASE = window.location.origin;
-const USER_ID = 'oggy';
+let USER_ID = null;
+let CSRF_TOKEN = null;
+let USER_DISPLAY_NAME = null;
 
 const CATEGORIES = [
     'dining', 'groceries', 'transportation', 'utilities',
@@ -8,14 +10,67 @@ const CATEGORIES = [
     'personal_care', 'other'
 ];
 
+// --- Auth initialization ---
+async function initAuth() {
+    try {
+        const res = await fetch(`${API_BASE}/v0/auth/me`, { credentials: 'include' });
+        if (!res.ok) {
+            // Not authenticated — redirect to login
+            if (!window.location.pathname.includes('login.html')) {
+                window.location.href = '/login.html';
+            }
+            return false;
+        }
+        const data = await res.json();
+        USER_ID = data.user_id;
+        CSRF_TOKEN = data.csrf_token;
+        USER_DISPLAY_NAME = data.display_name || data.user_id;
+        return true;
+    } catch (e) {
+        if (!window.location.pathname.includes('login.html')) {
+            window.location.href = '/login.html';
+        }
+        return false;
+    }
+}
+
+async function logout() {
+    try {
+        await fetch(`${API_BASE}/v0/auth/logout`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': CSRF_TOKEN || ''
+            }
+        });
+    } catch (e) {
+        // Proceed to redirect even if request fails
+    }
+    window.location.href = '/login.html';
+}
+
 // --- API helper ---
 async function apiCall(method, path, body) {
     const opts = {
         method,
-        headers: { 'Content-Type': 'application/json' }
+        credentials: 'include',
+        headers: {
+            'Content-Type': 'application/json'
+        }
     };
+    if (CSRF_TOKEN) {
+        opts.headers['X-CSRF-Token'] = CSRF_TOKEN;
+    }
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(`${API_BASE}${path}`, opts);
+
+    // Handle auth failures
+    if (res.status === 401) {
+        window.location.href = '/login.html';
+        throw new Error('Authentication required');
+    }
+
     const data = await res.json();
     if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
     return data;
@@ -72,6 +127,8 @@ function renderNav(activePage) {
                   title="Oggy has questions for you">
                 <span class="inquiry-badge" id="inquiry-count">0</span>
             </span>
+            <span class="nav-user" title="${USER_DISPLAY_NAME || ''}">${USER_DISPLAY_NAME || ''}</span>
+            <a href="#" onclick="logout();return false" class="nav-logout">Sign out</a>
         </div>
     `;
 }

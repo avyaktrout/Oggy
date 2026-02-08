@@ -96,7 +96,8 @@ class BenchmarkDrivenLearning {
 
                     const ruleId = await categoryRulesManager.createDistinctionRule(
                         pattern,
-                        distinctionHint
+                        distinctionHint,
+                        user_id
                     );
                     if (ruleId) rulesCreated++;
                 } catch (error) {

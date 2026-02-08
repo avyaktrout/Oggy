@@ -1,5 +1,7 @@
 // Benchmark Analytics Dashboard
-(function() {
+(async function() {
+    const authed = await initAuth();
+    if (!authed) return;
     renderNav('analytics');
     startInquiryPolling();
 
