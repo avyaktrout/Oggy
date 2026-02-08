@@ -42,18 +42,21 @@ router.get('/', async (req, res) => {
         const limit = parseInt(req.query.limit) || 200;
         const userId = req.query.user_id || 'oggy';
 
-        // Get benchmark results for this user
+        // Get the LATEST N benchmark results for this user, then order chronologically
         const results = await query(`
-            SELECT r.result_id, r.tested_at, r.total_scenarios,
-                   r.oggy_correct, r.oggy_accuracy, r.base_correct, r.base_accuracy,
-                   r.advantage_delta, r.advantage_percent, r.training_state,
-                   b.benchmark_name, b.difficulty_mix
-            FROM sealed_benchmark_results r
-            JOIN sealed_benchmarks b ON r.benchmark_id = b.benchmark_id
-            WHERE r.user_id = $2
-              AND r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
-            ORDER BY r.tested_at ASC
-            LIMIT $1
+            SELECT * FROM (
+                SELECT r.result_id, r.tested_at, r.total_scenarios,
+                       r.oggy_correct, r.oggy_accuracy, r.base_correct, r.base_accuracy,
+                       r.advantage_delta, r.advantage_percent, r.training_state,
+                       b.benchmark_name, b.difficulty_mix
+                FROM sealed_benchmark_results r
+                JOIN sealed_benchmarks b ON r.benchmark_id = b.benchmark_id
+                WHERE r.user_id = $2
+                  AND r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
+                ORDER BY r.tested_at DESC
+                LIMIT $1
+            ) recent
+            ORDER BY tested_at ASC
         `, [limit, userId]);
 
         if (results.rows.length === 0) {

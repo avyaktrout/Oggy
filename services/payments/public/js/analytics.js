@@ -258,9 +258,9 @@
                 },
                 scales: {
                     y: {
-                        min: 40,
+                        min: 0,
                         max: 100,
-                        ticks: { callback: v => v + '%', font: { size: 13 }, stepSize: 10 },
+                        ticks: { callback: v => v + '%', font: { size: 13 }, stepSize: 20 },
                         title: { display: true, text: 'Accuracy %', font: { size: 14, weight: '600' } },
                         grid: { color: '#f1f5f9' }
                     },
@@ -436,9 +436,9 @@
                 },
                 scales: {
                     y: {
-                        min: 50,
+                        min: 0,
                         max: 100,
-                        ticks: { callback: v => v + '%', font: { size: 13 }, stepSize: 10 },
+                        ticks: { callback: v => v + '%', font: { size: 13 }, stepSize: 20 },
                         title: { display: true, text: 'Avg Accuracy %', font: { size: 14, weight: '600' } },
                         grid: { color: '#f1f5f9' }
                     },
