@@ -528,10 +528,18 @@ Return ONLY a JSON object:
     }
 }
 
-// Singleton instance
-const adaptiveDifficultyScaler = new AdaptiveDifficultyScaler();
+// Per-user instance registry (replaces singleton for tenant isolation)
+const instances = new Map();
+
+function getInstance(userId) {
+    if (!instances.has(userId)) {
+        instances.set(userId, new AdaptiveDifficultyScaler());
+    }
+    return instances.get(userId);
+}
 
 module.exports = {
-    adaptiveDifficultyScaler,
+    getInstance,
+    AdaptiveDifficultyScaler,
     DIFFICULTY_TIERS
 };

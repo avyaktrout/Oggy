@@ -41,7 +41,9 @@ class AuthService {
         await query(
             `INSERT INTO auth_allowed_emails (email, display_name, role)
              VALUES (LOWER($1), $2, $3)
-             ON CONFLICT (email) DO UPDATE SET display_name = COALESCE($2, auth_allowed_emails.display_name)`,
+             ON CONFLICT (email) DO UPDATE SET
+               display_name = COALESCE($2, auth_allowed_emails.display_name),
+               role = $3`,
             [email, displayName, role]
         );
     }
@@ -76,14 +78,6 @@ class AuthService {
         if (!allowed) {
             return { error: 'email_not_allowed' };
         }
-
-        // Check rate limit
-        const withinLimit = await this._checkRateLimit(email, ip);
-        if (!withinLimit) {
-            return { error: 'rate_limited' };
-        }
-
-        await this._recordAttempt(email, ip);
 
         // Generate token
         const rawToken = crypto.randomBytes(32).toString('hex');
@@ -123,6 +117,9 @@ class AuthService {
 
         // Derive user_id from email (use the part before @ as user_id)
         const userId = email.split('@')[0].toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+
+        // Initialize tenant data on first login (idempotent)
+        await this.initializeTenant(userId);
 
         // Create session
         const session = await this.createSession(userId, email, ip);
@@ -173,9 +170,9 @@ class AuthService {
             [session.session_id]
         );
 
-        // Look up display name
+        // Look up display name and role
         const emailResult = await query(
-            'SELECT email, display_name FROM auth_allowed_emails WHERE LOWER(email) LIKE $1',
+            'SELECT email, display_name, role FROM auth_allowed_emails WHERE LOWER(email) LIKE $1',
             [`${session.user_id}@%`]
         );
 
@@ -183,7 +180,8 @@ class AuthService {
             user_id: session.user_id,
             csrf_token: session.csrf_token,
             display_name: emailResult.rows[0]?.display_name || session.user_id,
-            email: emailResult.rows[0]?.email || null
+            email: emailResult.rows[0]?.email || null,
+            role: emailResult.rows[0]?.role || 'user'
         };
     }
 
@@ -293,6 +291,31 @@ class AuthService {
         if (this._cleanupInterval) {
             clearInterval(this._cleanupInterval);
             this._cleanupInterval = null;
+        }
+    }
+
+    /**
+     * Initialize tenant data for a new user (idempotent).
+     * Called on first login — gives each tenant their own fresh Oggy at S1 L1.
+     */
+    async initializeTenant(userId) {
+        try {
+            await query(
+                `INSERT INTO oggy_inquiry_preferences (user_id) VALUES ($1) ON CONFLICT DO NOTHING`,
+                [userId]
+            );
+            await query(
+                `INSERT INTO observer_tenant_config (user_id) VALUES ($1) ON CONFLICT DO NOTHING`,
+                [userId]
+            );
+            await query(
+                `INSERT INTO continuous_learning_state (user_id, scale, difficulty_level)
+                 VALUES ($1, 1, 1) ON CONFLICT DO NOTHING`,
+                [userId]
+            );
+            logger.info('Tenant initialized', { user_id: userId });
+        } catch (err) {
+            logger.warn('Tenant initialization partial failure', { user_id: userId, error: err.message });
         }
     }
 

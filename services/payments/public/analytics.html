@@ -15,11 +15,18 @@
             <div>
                 <h1 class="page-title" style="margin-bottom:4px">Benchmark Analytics</h1>
                 <p class="analytics-subtitle">
-                    OpenTelemetry-instrumented performance data &mdash;
                     <strong id="total-benchmarks">0</strong> benchmarks tracked
                 </p>
             </div>
-            <button class="btn btn-outline btn-sm" onclick="loadAnalytics()" style="height:36px">Refresh</button>
+            <div class="analytics-header-controls">
+                <div class="range-selector">
+                    <button class="range-btn" onclick="setRange(5)">Last 5</button>
+                    <button class="range-btn range-btn-active" onclick="setRange(15)">Last 15</button>
+                    <button class="range-btn" onclick="setRange(30)">Last 30</button>
+                    <button class="range-btn" onclick="setRange(0)">All</button>
+                </div>
+                <button class="btn btn-outline btn-sm" onclick="loadAnalytics()" style="height:36px">Refresh</button>
+            </div>
         </div>
 
         <!-- Summary Cards -->
@@ -50,6 +57,22 @@
             </div>
         </div>
 
+        <!-- Category Accuracy + Confusion Pairs -->
+        <div class="analytics-row">
+            <div class="analytics-panel" style="flex:1">
+                <h3 class="analytics-panel-title">Category Accuracy</h3>
+                <div class="chart-container chart-md">
+                    <canvas id="chart-weakness"></canvas>
+                </div>
+            </div>
+            <div class="analytics-panel" style="flex:1">
+                <h3 class="analytics-panel-title">Top Confusion Pairs</h3>
+                <div class="chart-container chart-md">
+                    <canvas id="chart-confusion"></canvas>
+                </div>
+            </div>
+        </div>
+
         <!-- Main accuracy chart -->
         <div class="analytics-row">
             <div class="analytics-panel" style="flex:2">
@@ -74,14 +97,8 @@
             </div>
         </div>
 
-        <!-- Memory growth + per-level stats -->
+        <!-- Performance by level -->
         <div class="analytics-row" style="margin-top:16px">
-            <div class="analytics-panel" style="flex:1">
-                <h3 class="analytics-panel-title">Memory Growth</h3>
-                <div class="chart-container chart-md">
-                    <canvas id="chart-memory"></canvas>
-                </div>
-            </div>
             <div class="analytics-panel" style="flex:1">
                 <h3 class="analytics-panel-title">Performance by Level</h3>
                 <div class="chart-container chart-md">
@@ -94,18 +111,6 @@
         <div class="analytics-panel" style="margin-top:16px">
             <h3 class="analytics-panel-title">Level Progression</h3>
             <div id="level-timeline" class="level-timeline"></div>
-        </div>
-
-        <!-- OTEL info -->
-        <div class="analytics-panel otel-panel" style="margin-top:16px">
-            <h3 class="analytics-panel-title">OpenTelemetry Export</h3>
-            <p class="otel-desc">Metrics are exported via OTLP to the OpenTelemetry Collector and available as Prometheus metrics.</p>
-            <div class="otel-endpoints">
-                <div><strong>OTLP Endpoint:</strong> <code>otel-collector:4318</code></div>
-                <div><strong>Prometheus Metrics:</strong> <code><a href="http://localhost:8889/metrics" target="_blank">localhost:8889/metrics</a></code></div>
-                <div><strong>Direct Prometheus:</strong> <code><a href="/v0/benchmark-analytics/prometheus" target="_blank">/v0/benchmark-analytics/prometheus</a></code></div>
-                <div><strong>JSON API:</strong> <code><a href="/v0/benchmark-analytics" target="_blank">/v0/benchmark-analytics</a></code></div>
-            </div>
         </div>
 
         <div style="text-align:center;padding:24px 0;color:var(--text-muted);font-size:13px">

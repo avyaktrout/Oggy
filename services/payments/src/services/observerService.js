@@ -87,9 +87,9 @@ class ObserverService {
         }
     }
 
-    async exportRules() {
+    async exportRules(userId) {
         try {
-            const rules = await categoryRulesManager.getActiveRules();
+            const rules = await categoryRulesManager.getActiveRules(userId);
             // Strip raw text, only keep structured rule data
             return rules.map(r => ({
                 category_a: r.category_a,
@@ -99,7 +99,7 @@ class ObserverService {
                 rule_type: r.rule_type
             }));
         } catch (err) {
-            logger.warn('Observer: export rules failed', { error: err.message });
+            logger.warn('Observer: export rules failed', { error: err.message, user_id: userId });
             return [];
         }
     }
@@ -164,7 +164,13 @@ class ObserverService {
 
             // 4. Build rules for pack (only patterns seen by 2+ tenants or high confusion)
             const packRules = [];
-            const existingRules = await this.exportRules();
+            // Collect existing rules from all tenants for dedup
+            const allExistingRules = [];
+            for (const tenant of tenants.rows) {
+                const tenantRules = await this.exportRules(tenant.user_id);
+                allExistingRules.push(...tenantRules);
+            }
+            const existingRules = allExistingRules;
 
             for (const [key, conf] of Object.entries(confusionPairs)) {
                 const avgRate = conf.totalRate / conf.count;
@@ -295,7 +301,8 @@ class ObserverService {
                 // Create distinction rule via categoryRulesManager
                 const ruleId = await categoryRulesManager.createDistinctionRule(
                     { actual: rule.actual, predicted: rule.predicted, confusion_rate: rule.avg_confusion_rate },
-                    rule.distinction
+                    rule.distinction,
+                    userId
                 );
 
                 // Create memory card for the rule

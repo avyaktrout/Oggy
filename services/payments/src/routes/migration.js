@@ -4,19 +4,29 @@
  */
 
 const express = require('express');
-const router = express.Router();
+const exportRouter = express.Router();
+const importRouter = express.Router();
 const { query } = require('../utils/db');
-const axios = require('axios');
 const logger = require('../utils/logger');
-
-const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory-service:3000';
+const authService = require('../services/authService');
+const { parseCookies } = require('../middleware/auth');
 
 /**
  * GET /v0/migration/export?user_id=X
- * Export all of a user's trained Oggy data as JSON bundle
+ * Export all of a user's trained Oggy data as JSON bundle.
+ * Mounted before auth middleware so local instances can export without login.
+ * If a valid session exists, uses the session user_id for security.
  */
-router.get('/export', async (req, res) => {
-    const { user_id } = req.query;
+exportRouter.get('/export', async (req, res) => {
+    // Try to resolve user_id from session first (secure), fall back to query param (local)
+    let user_id = req.query.user_id;
+    try {
+        const cookies = parseCookies(req);
+        if (cookies['oggy_session']) {
+            const session = await authService.validateSession(cookies['oggy_session']);
+            if (session) user_id = session.user_id;
+        }
+    } catch (_) { /* no session — use query param */ }
     if (!user_id) return res.status(400).json({ error: 'user_id is required' });
 
     try {
@@ -24,7 +34,7 @@ router.get('/export', async (req, res) => {
         const knowledgeResult = await query(
             `SELECT domain, topic, subtopic, content_text, content_structured,
                     source_type, source_ref, visibility, difficulty_band, tags, content_hash
-             FROM domain_knowledge WHERE user_id = $1 AND retired_at IS NULL`,
+             FROM domain_knowledge WHERE user_id = $1`,
             [user_id]
         );
 
@@ -43,25 +53,13 @@ router.get('/export', async (req, res) => {
             [user_id]
         );
 
-        // 4. Memory cards from memory-service
-        let memoryCards = [];
-        try {
-            const cardsResponse = await axios.get(`${MEMORY_SERVICE_URL}/cards`, {
-                params: { owner_id: user_id, limit: 500 },
-                timeout: 10000,
-                headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
-            });
-            memoryCards = (cardsResponse.data?.cards || []).map(c => ({
-                tier: c.tier,
-                kind: c.kind,
-                content: c.content,
-                tags: c.tags,
-                utility_weight: c.utility_weight,
-                reliability: c.reliability
-            }));
-        } catch (err) {
-            logger.warn('Migration: failed to export memory cards', { error: err.message });
-        }
+        // 4. Memory cards (query shared DB directly — memory-service has no list endpoint)
+        const cardsResult = await query(
+            `SELECT tier, kind, content, tags, utility_weight, reliability
+             FROM memory_cards WHERE owner_id = $1 AND status = 'active'`,
+            [user_id]
+        );
+        const memoryCards = cardsResult.rows;
 
         // 5. Inquiry preferences
         const prefsResult = await query(
@@ -102,7 +100,7 @@ router.get('/export', async (req, res) => {
  * Import a previously exported Oggy bundle under the current user's ID
  * Body: { bundle: <exported JSON> }
  */
-router.post('/import', async (req, res) => {
+importRouter.post('/import', async (req, res) => {
     const { user_id } = req.body;
     const bundle = req.body.bundle;
 
@@ -125,9 +123,9 @@ router.post('/import', async (req, res) => {
             try {
                 await query(
                     `INSERT INTO domain_knowledge (
-                        domain, topic, subtopic, content_text, content_structured,
+                        knowledge_id, domain, topic, subtopic, content_text, content_structured,
                         source_type, source_ref, visibility, difficulty_band, tags, content_hash, user_id
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+                    ) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
                     [
                         dk.domain, dk.topic, dk.subtopic, dk.content_text,
                         JSON.stringify(dk.content_structured),
@@ -183,25 +181,29 @@ router.post('/import', async (req, res) => {
             }
         }
 
-        // 4. Import memory cards
+        // 4. Import memory cards (direct DB insert — shared PostgreSQL)
         for (const card of (bundle.memory_cards || [])) {
             try {
-                await axios.post(`${MEMORY_SERVICE_URL}/cards`, {
-                    owner_type: 'user',
-                    owner_id: user_id,
-                    tier: card.tier || 2,
-                    kind: card.kind || 'migrated',
-                    content: card.content,
-                    tags: card.tags || ['payments', 'categorization'],
-                    utility_weight: card.utility_weight || 0.5,
-                    reliability: card.reliability || 0.7
-                }, {
-                    timeout: 5000,
-                    headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
-                });
+                // tags is text[] in PostgreSQL — pass as JS array for pg driver to handle
+                const tags = Array.isArray(card.tags) ? card.tags : ['payments', 'categorization'];
+                await query(
+                    `INSERT INTO memory_cards (owner_type, owner_id, tier, kind, content, tags, utility_weight, reliability)
+                     VALUES ('user', $1, $2, $3, $4, $5, $6, $7)`,
+                    [
+                        user_id,
+                        card.tier || 2,
+                        card.kind || 'migrated',
+                        JSON.stringify(card.content),
+                        tags,
+                        card.utility_weight || 0.5,
+                        card.reliability || 0.7
+                    ]
+                );
                 results.memory_cards++;
             } catch (err) {
-                results.errors.push(`memory_card: ${err.message}`);
+                if (err.code !== '23505') {
+                    results.errors.push(`memory_card: ${err.message}`);
+                }
             }
         }
 
@@ -237,4 +239,4 @@ router.post('/import', async (req, res) => {
     }
 });
 
-module.exports = router;
+module.exports = { migrationExportRouter: exportRouter, migrationImportRouter: importRouter };

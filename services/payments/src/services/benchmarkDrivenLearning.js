@@ -12,13 +12,16 @@
 
 const sealedBenchmarkEvaluator = require('./sealedBenchmarkEvaluator');
 const weaknessAnalyzer = require('./weaknessAnalyzer');
-const selfDrivenLearning = require('./selfDrivenLearning'); // Singleton instance
+const selfDrivenLearning = require('./selfDrivenLearning'); // { getInstance }
 const categoryRulesManager = require('./categoryRulesManager');
 const logger = require('../utils/logger');
 
 class BenchmarkDrivenLearning {
     constructor() {
-        this.selfDrivenLearning = selfDrivenLearning;
+    }
+
+    _getSdl(userId) {
+        return selfDrivenLearning.getInstance(userId);
     }
 
     /**
@@ -144,20 +147,20 @@ class BenchmarkDrivenLearning {
                         training_mix: weaknessAnalysis.recommendations.training_mix
                     });
 
-                    this.selfDrivenLearning.setTargetedLearning(
+                    this._getSdl(user_id).setTargetedLearning(
                         weaknessAnalysis.recommendations.training_mix,
                         weaknessAnalysis.recommendations.focus_categories,
                         topConfusionPatterns
                     );
                 } else {
                     logger.info(`Cycle ${cycle + 1}: No weaknesses - using BALANCED training`, { user_id });
-                    this.selfDrivenLearning.clearTargetedLearning();
+                    this._getSdl(user_id).clearTargetedLearning();
                 }
 
                 // STEP 4: Run targeted training
                 logger.info(`Cycle ${cycle + 1}: Starting ${training_duration_seconds}s training`, { user_id });
 
-                this.selfDrivenLearning.start(user_id, {
+                this._getSdl(user_id).start(user_id, {
                     interval: training_interval_ms,
                     practiceCount: practice_count_per_session,
                     enabled: true
@@ -167,9 +170,9 @@ class BenchmarkDrivenLearning {
                 await this._sleep(training_duration_seconds * 1000);
 
                 // Stop training
-                this.selfDrivenLearning.stop();
+                this._getSdl(user_id).stop();
 
-                const trainingStats = this.selfDrivenLearning.getStats();
+                const trainingStats = this._getSdl(user_id).getStats();
                 logger.info(`Cycle ${cycle + 1}: Training complete`, {
                     user_id,
                     attempts: trainingStats.total_attempts,

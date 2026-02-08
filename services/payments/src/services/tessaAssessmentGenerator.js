@@ -12,7 +12,7 @@ const { query } = require('../utils/db');
 const logger = require('../utils/logger');
 const circuitBreakerRegistry = require('../utils/circuitBreakerRegistry');
 const retryHandler = require('../utils/retry');
-const { adaptiveDifficultyScaler, DIFFICULTY_TIERS } = require('./adaptiveDifficultyScaler');
+const { getInstance: getAdsInstance, DIFFICULTY_TIERS } = require('./adaptiveDifficultyScaler');
 const { parallelMap } = require('../utils/parallel');
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -144,7 +144,7 @@ SCALE 5 COMPLEXITY REQUIREMENTS:
             if (scaleContext && scaleContext.scale >= 2) {
                 prompt = this._buildScaleAwarePrompt(category, tier, scaleContext);
             } else {
-                prompt = adaptiveDifficultyScaler.buildTessaPrompt(category, tier);
+                prompt = getAdsInstance(options.userId || 'oggy').buildTessaPrompt(category, tier);
             }
 
             const scenario = await this.openaiCircuitBreaker.execute(async () => {
@@ -168,7 +168,7 @@ SCALE 5 COMPLEXITY REQUIREMENTS:
             }
 
             // Add to domain knowledge for future learning
-            await this._addToDomainKnowledge(scenario, tier);
+            await this._addToDomainKnowledge(scenario, tier, options.userId);
 
             logger.info('Tessa generated novel scenario', {
                 category: scenario.category,
@@ -177,7 +177,7 @@ SCALE 5 COMPLEXITY REQUIREMENTS:
                 tier_level: tier.tier_level,
                 scale: scaleContext?.scale,
                 scale_name: scaleContext?.scaleConfig?.name,
-                baseline_scale: adaptiveDifficultyScaler.baselineDifficultyScale,
+                baseline_scale: getAdsInstance(options.userId || 'oggy').baselineDifficultyScale,
                 knowledge_id: scenario.knowledge_id
             });
 
@@ -382,7 +382,7 @@ Return ONLY valid JSON:
      * Add generated scenario to domain_knowledge
      * This expands Oggy's knowledge base automatically
      */
-    async _addToDomainKnowledge(scenario, tier) {
+    async _addToDomainKnowledge(scenario, tier, userId) {
         const knowledge_id = uuidv4();
 
         const tierInfo = tier ? `\n**Difficulty Tier:** ${tier.name} (Level ${tier.tier_level}/5)` : '';
@@ -429,8 +429,9 @@ This is a realistic example for training categorization AI.`;
                 visibility,
                 difficulty_band,
                 tags,
-                content_hash
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                content_hash,
+                user_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         `, [
             knowledge_id,
             'payments',
@@ -443,7 +444,8 @@ This is a realistic example for training categorization AI.`;
             'shareable',
             tier ? tier.tier_level : 3, // Use tier level as difficulty band (1-5)
             JSON.stringify(['categorization', 'ai_generated', scenario.category, 'tessa', tier ? tier.name : 'standard']),
-            content_hash
+            content_hash,
+            userId || 'oggy'
         ]);
 
         scenario.knowledge_id = knowledge_id;

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oggy - Admin</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <nav class="nav" id="nav"></nav>
+
+    <div class="container" style="max-width:900px">
+        <h1 class="page-title">User Management</h1>
+
+        <!-- Add User Form -->
+        <div class="admin-card">
+            <h3 class="admin-card-title">Add User</h3>
+            <div class="admin-form-row">
+                <input type="email" id="add-email" class="admin-input" placeholder="Email address" required>
+                <input type="text" id="add-display-name" class="admin-input" placeholder="Display name (optional)">
+                <select id="add-role" class="admin-select">
+                    <option value="user">Regular User</option>
+                    <option value="admin">Admin</option>
+                </select>
+                <button class="btn btn-primary btn-sm" onclick="addUser()">Add</button>
+            </div>
+            <div id="add-status" class="admin-status" style="display:none"></div>
+        </div>
+
+        <!-- Users Table -->
+        <div class="admin-card">
+            <h3 class="admin-card-title">Allowed Users</h3>
+            <div id="users-loading" class="admin-loading">Loading users...</div>
+            <table class="admin-table" id="users-table" style="display:none">
+                <thead>
+                    <tr>
+                        <th>Email</th>
+                        <th>Display Name</th>
+                        <th>Role</th>
+                        <th>Added</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="users-body"></tbody>
+            </table>
+            <div id="users-empty" class="admin-empty" style="display:none">No users found.</div>
+        </div>
+    </div>
+
+    <!-- Edit Modal -->
+    <div class="admin-modal-overlay" id="edit-modal" style="display:none" onclick="if(event.target===this)closeEditModal()">
+        <div class="admin-modal">
+            <h3 class="admin-modal-title">Edit User</h3>
+            <input type="hidden" id="edit-email">
+            <div class="admin-modal-field">
+                <label>Email</label>
+                <div id="edit-email-display" class="admin-modal-value"></div>
+            </div>
+            <div class="admin-modal-field">
+                <label>Display Name</label>
+                <input type="text" id="edit-display-name" class="admin-input">
+            </div>
+            <div class="admin-modal-field">
+                <label>Role</label>
+                <select id="edit-role" class="admin-select">
+                    <option value="user">Regular User</option>
+                    <option value="admin">Admin</option>
+                </select>
+            </div>
+            <div class="admin-modal-actions">
+                <button class="btn btn-sm" onclick="closeEditModal()">Cancel</button>
+                <button class="btn btn-primary btn-sm" onclick="saveEdit()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/app.js"></script>
+    <script src="/js/admin.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# Production overrides — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Exposes Oggy to the internet via Cloudflare Tunnel.
+# cloudflared runs natively on the host (not in Docker) for reliability.
+# See start-tunnel.bat to launch the tunnel.
+
+services:
+  # Override payments-service for production
+  payments-service:
+    environment:
+      NODE_ENV: production
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+
+  memory-service:
+    environment:
+      NODE_ENV: production

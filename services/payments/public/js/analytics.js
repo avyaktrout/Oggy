@@ -17,19 +17,37 @@
     Chart.defaults.plugins.tooltip.bodyFont = { size: 13 };
 
     let charts = {};
+    let currentRange = 15;
+
+    window.setRange = function(range) {
+        currentRange = range;
+        // Update active button
+        document.querySelectorAll('.range-btn').forEach(btn => {
+            btn.classList.remove('range-btn-active');
+            const btnRange = btn.textContent === 'All' ? 0 : parseInt(btn.textContent.replace('Last ', ''));
+            if (btnRange === range) btn.classList.add('range-btn-active');
+        });
+        loadAnalytics();
+    };
 
     window.loadAnalytics = async function() {
         try {
-            const data = await apiCall('GET', '/v0/benchmark-analytics?limit=200');
+            const limit = currentRange || 200;
+            const [data, weaknessData] = await Promise.all([
+                apiCall('GET', `/v0/benchmark-analytics?limit=${limit}`),
+                apiCall('GET', `/v0/benchmark-analytics/weakness-data?limit=${limit}`)
+            ]);
+
             if (!data.total_benchmarks) {
                 document.getElementById('total-benchmarks').textContent = '0';
                 return;
             }
             renderSummaryCards(data);
+            renderWeaknessChart(weaknessData);
+            renderConfusionChart(weaknessData);
             renderAccuracyChart(data);
             renderWinLossChart(data);
             renderAdvantageChart(data);
-            renderMemoryChart(data);
             renderByLevelChart(data);
             renderLevelTimeline(data);
         } catch (err) {
@@ -54,8 +72,137 @@
             cs.domain_knowledge.toLocaleString();
     }
 
+    function renderWeaknessChart(data) {
+        const el = document.getElementById('chart-weakness');
+        if (!el) return;
+        const ctx = el.getContext('2d');
+        if (charts.weakness) charts.weakness.destroy();
+
+        if (!data.categoryAccuracy || data.categoryAccuracy.length === 0) {
+            charts.weakness = null;
+            ctx.font = '14px sans-serif';
+            ctx.fillStyle = '#64748b';
+            ctx.textAlign = 'center';
+            ctx.fillText('No category data available', ctx.canvas.width / 2, ctx.canvas.height / 2);
+            return;
+        }
+
+        const categories = data.categoryAccuracy;
+        const labels = categories.map(c => c.category);
+        const accuracies = categories.map(c => parseFloat(c.accuracy));
+        const barColors = accuracies.map(acc =>
+            acc < 60 ? 'rgba(239,68,68,0.75)' :
+            acc < 80 ? 'rgba(245,158,11,0.75)' :
+            'rgba(34,197,94,0.75)'
+        );
+
+        charts.weakness = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Accuracy %',
+                    data: accuracies,
+                    backgroundColor: barColors,
+                    borderRadius: 4,
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y',
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                const cat = categories[ctx.dataIndex];
+                                return ` ${cat.accuracy}% (${cat.correct}/${cat.total})`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        min: 0,
+                        max: 100,
+                        ticks: { callback: v => v + '%', font: { size: 12 } },
+                        grid: { color: '#f1f5f9' }
+                    },
+                    y: {
+                        ticks: { font: { size: 13, weight: '500' } },
+                        grid: { display: false }
+                    }
+                }
+            }
+        });
+    }
+
+    function renderConfusionChart(data) {
+        const el = document.getElementById('chart-confusion');
+        if (!el) return;
+        const ctx = el.getContext('2d');
+        if (charts.confusion) charts.confusion.destroy();
+
+        if (!data.confusionPairs || data.confusionPairs.length === 0) {
+            charts.confusion = null;
+            ctx.font = '14px sans-serif';
+            ctx.fillStyle = '#64748b';
+            ctx.textAlign = 'center';
+            ctx.fillText('No confusion pairs detected', ctx.canvas.width / 2, ctx.canvas.height / 2);
+            return;
+        }
+
+        const pairs = data.confusionPairs.slice(0, 8);
+        const labels = pairs.map(p => p.pair.replace('->', ' \u2192 '));
+        const counts = pairs.map(p => p.count);
+
+        charts.confusion = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Confusion Count',
+                    data: counts,
+                    backgroundColor: 'rgba(239,68,68,0.6)',
+                    borderRadius: 4,
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y',
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                return ` Confused ${ctx.parsed.x} times`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { font: { size: 12 }, stepSize: 1 },
+                        grid: { color: '#f1f5f9' },
+                        title: { display: true, text: 'Times Confused', font: { size: 12, weight: '600' } }
+                    },
+                    y: {
+                        ticks: { font: { size: 12, weight: '500' } },
+                        grid: { display: false }
+                    }
+                }
+            }
+        });
+    }
+
     function renderAccuracyChart(data) {
-        const ctx = document.getElementById('chart-accuracy').getContext('2d');
+        const el = document.getElementById('chart-accuracy');
+        if (!el) return;
+        const ctx = el.getContext('2d');
         if (charts.accuracy) charts.accuracy.destroy();
 
         const ts = data.time_series;
@@ -128,7 +275,9 @@
     }
 
     function renderWinLossChart(data) {
-        const ctx = document.getElementById('chart-winloss').getContext('2d');
+        const el = document.getElementById('chart-winloss');
+        if (!el) return;
+        const ctx = el.getContext('2d');
         if (charts.winloss) charts.winloss.destroy();
 
         const s = data.summary;
@@ -168,7 +317,9 @@
     }
 
     function renderAdvantageChart(data) {
-        const ctx = document.getElementById('chart-advantage').getContext('2d');
+        const el = document.getElementById('chart-advantage');
+        if (!el) return;
+        const ctx = el.getContext('2d');
         if (charts.advantage) charts.advantage.destroy();
 
         const ts = data.time_series;
@@ -239,74 +390,12 @@
         });
     }
 
-    function renderMemoryChart(data) {
-        const ctx = document.getElementById('chart-memory').getContext('2d');
-        if (charts.memory) charts.memory.destroy();
-
-        const ts = data.time_series;
-        const labels = ts.map(r => '#' + r.index);
-
-        charts.memory = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels,
-                datasets: [
-                    {
-                        label: 'Memory Cards',
-                        data: ts.map(r => r.memory_cards),
-                        borderColor: '#8b5cf6',
-                        backgroundColor: 'rgba(139,92,246,0.08)',
-                        fill: true,
-                        tension: 0.35,
-                        pointRadius: 2,
-                        borderWidth: 2.5,
-                        yAxisID: 'y'
-                    },
-                    {
-                        label: 'Domain Knowledge',
-                        data: ts.map(r => r.domain_knowledge),
-                        borderColor: '#06b6d4',
-                        backgroundColor: 'rgba(6,182,212,0.08)',
-                        fill: true,
-                        tension: 0.35,
-                        pointRadius: 2,
-                        borderWidth: 2.5,
-                        yAxisID: 'y1'
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: { legend: { position: 'top', labels: { font: { size: 14 } } } },
-                scales: {
-                    y: {
-                        position: 'left',
-                        title: { display: true, text: 'Memory Cards', font: { size: 13, weight: '600' } },
-                        ticks: { font: { size: 12 } },
-                        grid: { color: '#f1f5f9' }
-                    },
-                    y1: {
-                        position: 'right',
-                        title: { display: true, text: 'Domain Knowledge', font: { size: 13, weight: '600' } },
-                        ticks: { font: { size: 12 } },
-                        grid: { drawOnChartArea: false }
-                    },
-                    x: {
-                        ticks: { font: { size: 11 }, maxTicksLimit: 20 },
-                        grid: { display: false }
-                    }
-                }
-            }
-        });
-    }
-
     function renderByLevelChart(data) {
-        const ctx = document.getElementById('chart-by-level').getContext('2d');
+        const el = document.getElementById('chart-by-level');
+        if (!el) return;
+        const ctx = el.getContext('2d');
         if (charts.byLevel) charts.byLevel.destroy();
 
-        // Filter out 'unknown' level for cleaner display
         const levels = data.per_level_stats.filter(l => l.level !== 'unknown');
         const labels = levels.map(l => l.level);
 
@@ -369,10 +458,8 @@
             return;
         }
 
-        // Filter out 'unknown' from timeline
         const progression = data.level_progression.filter(lp => lp.level !== 'unknown');
 
-        // Append actual current level if different from last benchmark level
         const actualLevel = data.current_state.level;
         if (progression.length > 0 && progression[progression.length - 1].level !== actualLevel) {
             progression.push({

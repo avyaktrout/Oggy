@@ -12,7 +12,7 @@ const { query } = require('../utils/db');
 const logger = require('../utils/logger');
 const OggyCategorizer = require('./oggyCategorizer');
 const sealedBenchmarkGenerator = require('./sealedBenchmarkGenerator');
-const { adaptiveDifficultyScaler } = require('./adaptiveDifficultyScaler');
+const adaptiveDifficultyScaler = require('./adaptiveDifficultyScaler');
 const { parallelMap } = require('../utils/parallel');
 
 const BENCHMARK_UPGRADE_THRESHOLD = parseFloat(process.env.BENCHMARK_UPGRADE_THRESHOLD || '0.90');
@@ -37,7 +37,7 @@ class SealedBenchmarkEvaluator {
             user_id
         });
 
-        await adaptiveDifficultyScaler.loadBaselineScale(user_id);
+        await adaptiveDifficultyScaler.getInstance(user_id).loadBaselineScale(user_id);
 
         // Get sealed benchmark
         const benchmark = await sealedBenchmarkGenerator.getSealedBenchmark(benchmark_identifier);
@@ -368,7 +368,7 @@ class SealedBenchmarkEvaluator {
             `);
 
             // Get adaptive difficulty scale info
-            const scale_info = adaptiveDifficultyScaler.getScaleInfo();
+            const scale_info = adaptiveDifficultyScaler.getInstance(user_id).getScaleInfo();
 
             // Get memory card count
             const memoryResult = await query(`
@@ -410,7 +410,7 @@ class SealedBenchmarkEvaluator {
         }
 
         await this._saveScaleAndLevel(userId, next.scale, next.level);
-        await adaptiveDifficultyScaler.bumpBaselineScale(userId, { reason: 'benchmark' });
+        await adaptiveDifficultyScaler.getInstance(userId).bumpBaselineScale(userId, { reason: 'benchmark' });
 
         return {
             upgraded: true,

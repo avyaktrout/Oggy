@@ -22,7 +22,8 @@ router.post('/start', async (req, res) => {
             });
         }
 
-        selfDrivenLearning.start(user_id, {
+        const sdl = selfDrivenLearning.getInstance(user_id);
+        sdl.start(user_id, {
             interval: interval || 300000, // 5 minutes default
             practiceCount: practice_count || 5,
             enabled: enabled !== false
@@ -40,7 +41,7 @@ router.post('/start', async (req, res) => {
                 interval: interval || 300000,
                 practice_count: practice_count || 5
             },
-            stats: selfDrivenLearning.getStats()
+            stats: sdl.getStats()
         });
     } catch (error) {
         logger.logError(error, {
@@ -60,8 +61,10 @@ router.post('/start', async (req, res) => {
  */
 router.post('/stop', async (req, res) => {
     try {
-        const stats = selfDrivenLearning.getStats();
-        selfDrivenLearning.stop();
+        const { user_id } = req.body;
+        const sdl = selfDrivenLearning.getInstance(user_id);
+        const stats = sdl.getStats();
+        sdl.stop();
 
         logger.info('Self-driven learning stopped via API', {
             requestId: req.requestId,
@@ -90,7 +93,8 @@ router.post('/stop', async (req, res) => {
  */
 router.get('/stats', (req, res) => {
     try {
-        const stats = selfDrivenLearning.getStats();
+        const { user_id } = req.query;
+        const stats = selfDrivenLearning.getInstance(user_id).getStats();
 
         res.json({
             stats,
@@ -115,11 +119,13 @@ router.get('/stats', (req, res) => {
 router.post('/practice', async (req, res) => {
     try {
         const startTime = Date.now();
+        const { user_id } = req.body;
+        const sdl = selfDrivenLearning.getInstance(user_id);
 
-        await selfDrivenLearning.runLearningSession();
+        await sdl.runLearningSession();
 
         const duration = Date.now() - startTime;
-        const stats = selfDrivenLearning.getStats();
+        const stats = sdl.getStats();
 
         logger.info('Manual practice session completed', {
             requestId: req.requestId,

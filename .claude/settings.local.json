@@ -8,7 +8,17 @@
       "Bash(docker exec:*)",
       "Bash(findstr:*)",
       "Bash(ping:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(ipconfig:*)",
+      "Bash(cmd /c \"ipconfig /all\")",
+      "Bash(docker compose:*)",
+      "Bash(docker network ls:*)",
+      "Bash(for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)",
+      "Bash(do curl -s -o /dev/null -w \"%{http_code} \" https://oggy-v1.com/health)",
+      "Bash(done)",
+      "Bash(for i in 1 2 3 4 5 6 7 8 9 10)",
+      "Bash(where:*)",
+      "Bash(winget show:*)"
     ]
   }
 }

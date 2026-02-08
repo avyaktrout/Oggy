@@ -1,10 +1,13 @@
 /**
  * Training Reporter - Sends email reports during and after training sessions
  * Supports: after each benchmark, timed intervals, or end-of-session only
+ * Includes weakness analysis, confusion pairs, and recommendations
  */
 
 const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
+const { query } = require('../utils/db');
+const weaknessAnalyzer = require('./weaknessAnalyzer');
 
 class TrainingReporter {
     constructor() {
@@ -19,12 +22,13 @@ class TrainingReporter {
      * @param {string} email - Recipient email
      * @param {string} interval - 'end_only', 'benchmark', or minute interval ('5','10','15')
      * @param {number} durationMinutes - Training duration for context
+     * @param {string} userId - User ID for scoped weakness queries
      */
-    configure(email, interval, durationMinutes) {
+    configure(email, interval, durationMinutes, userId) {
         this.stop(); // Clear any previous session
         if (!email) return;
 
-        this.config = { email, interval, duration_minutes: durationMinutes };
+        this.config = { email, interval, duration_minutes: durationMinutes, userId: userId || 'oggy' };
         this.lastReportTime = Date.now();
         this._initTransporter();
 
@@ -100,7 +104,7 @@ class TrainingReporter {
     }
 
     async _sendReport(subject, stats, benchmarkResult) {
-        const html = this._buildReportHtml(subject, stats, benchmarkResult);
+        const html = await this._buildReportHtml(subject, stats, benchmarkResult);
         const fullSubject = `Oggy Training: ${subject}`;
 
         if (this.transporter) {
@@ -132,7 +136,32 @@ class TrainingReporter {
         this.lastReportTime = Date.now();
     }
 
-    _buildReportHtml(title, stats, benchmarkResult) {
+    /**
+     * Get weakness analysis data for a benchmark result
+     */
+    async _getWeaknessData(benchmarkResult) {
+        try {
+            if (!benchmarkResult || !benchmarkResult.benchmark_id) return null;
+
+            // Look up result_id from sealed_benchmark_results
+            const resultRow = await query(
+                `SELECT result_id FROM sealed_benchmark_results
+                 WHERE benchmark_id = $1 ORDER BY tested_at DESC LIMIT 1`,
+                [benchmarkResult.benchmark_id]
+            );
+            if (resultRow.rows.length === 0) return null;
+
+            const analysis = await weaknessAnalyzer.analyzeWeaknesses({
+                result_id: resultRow.rows[0].result_id
+            });
+            return analysis;
+        } catch (err) {
+            logger.warn('Weakness analysis for report failed (non-blocking)', { error: err.message });
+            return null;
+        }
+    }
+
+    async _buildReportHtml(title, stats, benchmarkResult) {
         const bmRows = (stats.benchmark_results || []).map((bm, i) => `
             <tr>
                 <td style="padding:6px 12px;border-bottom:1px solid #e2e8f0">${i + 1}</td>
@@ -151,6 +180,80 @@ class TrainingReporter {
                 &mdash; ${latestBm.oggy_passed ? 'PASSED' : 'NEEDS IMPROVEMENT'}
             </div>
         ` : '';
+
+        // Get weakness analysis for the latest benchmark
+        const analysis = await this._getWeaknessData(latestBm);
+        let weaknessSection = '';
+
+        if (analysis && analysis.category_performance) {
+            // Category accuracy bars
+            const catEntries = Object.entries(analysis.category_performance)
+                .sort((a, b) => a[1].accuracy - b[1].accuracy);
+
+            if (catEntries.length > 0) {
+                const catRows = catEntries.map(([cat, perf]) => {
+                    const pct = (perf.accuracy * 100).toFixed(0);
+                    const barColor = perf.accuracy < 0.60 ? '#ef4444' :
+                                     perf.accuracy < 0.80 ? '#f59e0b' : '#22c55e';
+                    const barWidth = Math.max(pct, 5);
+                    return `
+                        <tr>
+                            <td style="padding:4px 8px;font-size:13px;font-weight:500;white-space:nowrap">${cat}</td>
+                            <td style="padding:4px 8px;width:100%">
+                                <div style="background:#f1f5f9;border-radius:4px;height:18px;position:relative;overflow:hidden">
+                                    <div style="background:${barColor};height:100%;width:${barWidth}%;border-radius:4px;min-width:20px"></div>
+                                </div>
+                            </td>
+                            <td style="padding:4px 8px;font-size:13px;color:#64748b;white-space:nowrap">${pct}% (${perf.correct}/${perf.total})</td>
+                        </tr>`;
+                }).join('');
+
+                weaknessSection += `
+                    <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Category Accuracy</h3>
+                    <table style="width:100%;border-collapse:collapse">${catRows}</table>`;
+            }
+
+            // Confusion pairs
+            if (analysis.confusion_patterns && analysis.confusion_patterns.length > 0) {
+                const confusionRows = analysis.confusion_patterns.slice(0, 5).map(p => `
+                    <tr>
+                        <td style="padding:4px 8px;font-size:13px">
+                            <span style="color:#ef4444;font-weight:600">${p.actual}</span>
+                            <span style="color:#94a3b8"> misclassified as </span>
+                            <span style="font-weight:600">${p.predicted}</span>
+                        </td>
+                        <td style="padding:4px 8px;font-size:13px;color:#64748b;text-align:right">${p.count} times</td>
+                    </tr>
+                `).join('');
+
+                weaknessSection += `
+                    <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Top Confusion Pairs</h3>
+                    <table style="width:100%;border-collapse:collapse">${confusionRows}</table>`;
+            }
+
+            // Recommendations
+            if (analysis.recommendations && analysis.recommendations.priority === 'targeted') {
+                const focusCats = analysis.recommendations.focus_categories.join(', ');
+                weaknessSection += `
+                    <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:14px;margin-top:16px">
+                        <strong style="color:#92400e;font-size:13px">Recommendation</strong>
+                        <p style="margin:6px 0 0;font-size:13px;color:#78350f">
+                            ${analysis.recommendations.message}. Focus categories: <strong>${focusCats}</strong>
+                        </p>
+                    </div>`;
+            }
+
+            // Strengths (categories >80%)
+            const strengths = catEntries.filter(([_, perf]) => perf.accuracy >= 0.80);
+            if (strengths.length > 0) {
+                const strongList = strengths.reverse().map(([cat, perf]) =>
+                    `<span style="display:inline-block;background:#dcfce7;color:#166534;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600;margin:2px">${cat} ${(perf.accuracy * 100).toFixed(0)}%</span>`
+                ).join(' ');
+                weaknessSection += `
+                    <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Strong Categories</h3>
+                    <div>${strongList}</div>`;
+            }
+        }
 
         return `
         <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:600px;margin:0 auto;color:#1e293b">
@@ -180,6 +283,8 @@ class TrainingReporter {
                 </table>
 
                 ${latestSection}
+
+                ${weaknessSection}
 
                 ${bmRows ? `
                 <h3 style="font-size:14px;color:#64748b;margin:16px 0 8px">Benchmark History</h3>

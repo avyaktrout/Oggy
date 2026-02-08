@@ -54,8 +54,11 @@ router.get('/export-weaknesses', async (req, res) => {
 
 // GET /v0/observer/export-rules
 router.get('/export-rules', async (req, res) => {
+    const { user_id } = req.query;
+    if (!user_id) return res.status(400).json({ error: 'user_id is required' });
+
     try {
-        const rules = await observerService.exportRules();
+        const rules = await observerService.exportRules(user_id);
         res.json({ rules, count: rules.length });
     } catch (error) {
         logger.logError(error, { operation: 'export-rules', requestId: req.requestId });

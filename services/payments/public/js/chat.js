@@ -575,6 +575,70 @@
         } catch(e) {}
     })();
 
+    // --- Audit Chat Panel ---
+    window.toggleAuditPanel = function() {
+        const body = document.getElementById('audit-body');
+        const arrow = document.getElementById('audit-arrow');
+        if (body.style.display === 'none') {
+            body.style.display = 'block';
+            arrow.innerHTML = '&#9660;';
+        } else {
+            body.style.display = 'none';
+            arrow.innerHTML = '&#9654;';
+        }
+    };
+
+    window.sendAuditQuestion = async function() {
+        const input = document.getElementById('audit-input');
+        const question = input.value.trim();
+        if (!question) return;
+        input.value = '';
+
+        const container = document.getElementById('audit-messages');
+        const sendBtn = document.getElementById('audit-send-btn');
+        sendBtn.disabled = true;
+
+        // Show user question
+        const userDiv = document.createElement('div');
+        userDiv.className = 'audit-msg audit-msg-user';
+        userDiv.textContent = question;
+        container.appendChild(userDiv);
+
+        // Show typing indicator
+        const typingDiv = document.createElement('div');
+        typingDiv.className = 'audit-msg audit-msg-bot';
+        typingDiv.innerHTML = '<span class="spinner"></span> Analyzing...';
+        container.appendChild(typingDiv);
+        container.scrollTop = container.scrollHeight;
+
+        try {
+            const data = await apiCall('POST', '/v0/benchmark-analytics/audit-chat', { question });
+            typingDiv.remove();
+
+            const answerDiv = document.createElement('div');
+            answerDiv.className = 'audit-msg audit-msg-bot';
+            answerDiv.textContent = data.answer;
+            if (data.sources) {
+                const srcDiv = document.createElement('div');
+                srcDiv.className = 'audit-msg-source';
+                srcDiv.textContent = `Based on ${data.sources.benchmarks_analyzed} benchmarks, ${data.sources.total_scenarios} scenarios (${data.sources.overall_accuracy}% overall)`;
+                answerDiv.appendChild(srcDiv);
+            }
+            container.appendChild(answerDiv);
+        } catch (err) {
+            typingDiv.remove();
+            const errDiv = document.createElement('div');
+            errDiv.className = 'audit-msg audit-msg-bot';
+            errDiv.textContent = 'Error: ' + (err.message || 'Failed to get answer');
+            errDiv.style.color = 'var(--danger)';
+            container.appendChild(errDiv);
+        } finally {
+            sendBtn.disabled = false;
+            container.scrollTop = container.scrollHeight;
+            input.focus();
+        }
+    };
+
     // Restore chat and load inquiry preferences on page load
     restoreChat();
     loadInquiryPreferences();

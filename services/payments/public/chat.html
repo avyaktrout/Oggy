@@ -195,6 +195,34 @@
             <button class="btn btn-sm" onclick="resetPreferences()" title="Reset learned response preferences"
                     style="margin-left:8px;font-size:11px;padding:6px 10px;background:var(--bg-secondary);border:1px solid var(--border)">Reset Preferences</button>
         </div>
+
+        <!-- Performance Audit Panel -->
+        <div class="audit-chat-panel" id="audit-panel">
+            <div class="audit-chat-header" onclick="toggleAuditPanel()">
+                <div>
+                    <div class="audit-chat-title">Performance Audit</div>
+                    <div class="audit-chat-subtitle">Ask questions about Oggy's accuracy, weaknesses, and trends</div>
+                </div>
+                <span class="audit-toggle-arrow" id="audit-arrow">&#9654;</span>
+            </div>
+            <div class="audit-chat-body" id="audit-body" style="display:none">
+                <div class="audit-chat-messages" id="audit-messages">
+                    <div class="audit-msg audit-msg-bot">Ask me anything about Oggy's performance. Try:
+                        <ul style="margin:6px 0 0 16px;padding:0;font-size:12px;color:var(--text-muted)">
+                            <li>What are Oggy's weakest categories?</li>
+                            <li>How has accuracy changed over time?</li>
+                            <li>What categories get confused most?</li>
+                            <li>How does Oggy compare to the base model?</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="audit-chat-input-row">
+                    <input type="text" id="audit-input" placeholder="Ask about performance..."
+                           onkeydown="if(event.key==='Enter')sendAuditQuestion()">
+                    <button class="btn btn-primary btn-sm" onclick="sendAuditQuestion()" id="audit-send-btn">Ask</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="/js/app.js"></script>

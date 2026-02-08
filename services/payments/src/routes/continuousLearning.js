@@ -5,7 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
-const continuousLearningLoop = require('../services/continuousLearningLoop');
+const { getInstance } = require('../services/continuousLearningLoop');
 const benchmarkValidator = require('../services/benchmarkValidator');
 const trainingReporter = require('../services/trainingReporter');
 const { query } = require('../utils/db');
@@ -32,10 +32,12 @@ router.post('/start', async (req, res) => {
             report_interval = 'end_only'
         } = req.body;
 
+        const loop = getInstance(user_id);
+
         // Configure email reporting if requested
         if (report_email) {
-            trainingReporter.configure(report_email, report_interval, duration_minutes);
-            trainingReporter.setStatsProvider(() => continuousLearningLoop.getStats());
+            trainingReporter.configure(report_email, report_interval, duration_minutes, user_id);
+            trainingReporter.setStatsProvider(() => loop.getStats());
         }
 
         logger.info('Starting continuous learning via API', {
@@ -51,7 +53,7 @@ router.post('/start', async (req, res) => {
         });
 
         // Start the loop (this will run in the background)
-        const resultPromise = continuousLearningLoop.start(user_id, {
+        const resultPromise = loop.start(user_id, {
             duration_minutes,
             questions_per_benchmark,
             accuracy_threshold,
@@ -126,7 +128,7 @@ router.post('/start-and-wait', async (req, res) => {
             upgrade_threshold
         });
 
-        const results = await continuousLearningLoop.start(user_id, {
+        const results = await getInstance(user_id).start(user_id, {
             duration_minutes,
             questions_per_benchmark,
             accuracy_threshold,
@@ -158,8 +160,10 @@ router.post('/start-and-wait', async (req, res) => {
  */
 router.post('/stop', async (req, res) => {
     try {
-        continuousLearningLoop.stop();
-        const stats = continuousLearningLoop.getStats();
+        const { user_id } = req.body;
+        const loop = getInstance(user_id);
+        loop.stop();
+        const stats = loop.getStats();
 
         res.json({
             message: 'Continuous learning stopped',
@@ -183,7 +187,8 @@ router.post('/stop', async (req, res) => {
  */
 router.get('/status', async (req, res) => {
     try {
-        const stats = continuousLearningLoop.getStats();
+        const { user_id } = req.query;
+        const stats = getInstance(user_id).getStats();
         res.json(stats);
     } catch (error) {
         logger.logError(error, {

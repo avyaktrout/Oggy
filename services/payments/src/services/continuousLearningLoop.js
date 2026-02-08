@@ -14,7 +14,7 @@
  * Week 8+: Advanced autonomous learning
  */
 
-const selfDrivenLearning = require('./selfDrivenLearning');
+const selfDrivenLearning = require('./selfDrivenLearning'); // { getInstance }
 const sealedBenchmarkEvaluator = require('./sealedBenchmarkEvaluator');
 const sealedBenchmarkGenerator = require('./sealedBenchmarkGenerator');
 const benchmarkValidator = require('./benchmarkValidator');
@@ -22,7 +22,7 @@ const sessionCleanupManager = require('./sessionCleanupManager');
 const serviceHealthManager = require('./serviceHealthManager');
 const categoryRulesManager = require('./categoryRulesManager');
 const tessaAssessmentGenerator = require('./tessaAssessmentGenerator');
-const { adaptiveDifficultyScaler } = require('./adaptiveDifficultyScaler');
+const adaptiveDifficultyScaler = require('./adaptiveDifficultyScaler'); // { getInstance }
 const logger = require('../utils/logger');
 const correctionValidator = require('../utils/correctionValidator');
 const trainingReporter = require('./trainingReporter');
@@ -151,6 +151,11 @@ class ContinuousLearningLoop {
             multi_step: scale >= 4
         };
     }
+
+    /** Get per-user selfDrivenLearning instance */
+    _getSdl() { return selfDrivenLearning.getInstance(this.userId); }
+    /** Get per-user adaptiveDifficultyScaler instance */
+    _getAds() { return adaptiveDifficultyScaler.getInstance(this.userId); }
 
     /**
      * Start the continuous learning loop
@@ -284,7 +289,7 @@ class ContinuousLearningLoop {
     async stop() {
         this.isRunning = false;
         this.stats.session_duration_ms = Date.now() - this.stats.session_start;
-        selfDrivenLearning.stop();
+        this._getSdl().stop();
 
         // Cleanup session - log completion and clear transient state
         try {
@@ -384,7 +389,7 @@ class ContinuousLearningLoop {
         const trainingLimitMs = this.config.duration_minutes ? this.config.duration_minutes * 60 * 1000 : null;
 
         // Start self-driven learning
-        selfDrivenLearning.start(this.userId, {
+        this._getSdl().start(this.userId, {
             interval: this.config.training_interval_ms,
             practiceCount: this.config.practice_count_per_session,
             enabled: true
@@ -448,7 +453,7 @@ class ContinuousLearningLoop {
             await this._sleep(this.config.training_interval_ms + 1000);
 
             // Update stats from self-driven learning
-            const learningStats = selfDrivenLearning.getStats();
+            const learningStats = this._getSdl().getStats();
             const newQuestions = learningStats.total_attempts - this.stats.total_questions;
 
             if (newQuestions > 0) {
@@ -520,7 +525,7 @@ class ContinuousLearningLoop {
             });
 
             // Pause training during benchmark
-            selfDrivenLearning.stop();
+            this._getSdl().stop();
 
             try {
                 // Pre-benchmark health check - ensure memory service is available
@@ -558,7 +563,7 @@ class ContinuousLearningLoop {
                     });
 
                     await this._advanceDifficulty();
-                    await adaptiveDifficultyScaler.bumpBaselineScale(this.userId, { reason: 'benchmark' });
+                    await this._getAds().bumpBaselineScale(this.userId, { reason: 'benchmark' });
                 }
 
                 // Count as passed if Oggy beats or matches base
@@ -610,7 +615,7 @@ class ContinuousLearningLoop {
             });
 
             // Resume training
-            selfDrivenLearning.start(this.userId, {
+            this._getSdl().start(this.userId, {
                 interval: this.config.training_interval_ms,
                 practiceCount: this.config.practice_count_per_session,
                 enabled: true
@@ -1071,7 +1076,7 @@ class ContinuousLearningLoop {
             topPatterns: topPatterns.map(p => `${p.actual}→${p.predicted} (${(p.confusion_rate * 100).toFixed(0)}%)`)
         });
 
-        selfDrivenLearning.setTargetedLearning(
+        this._getSdl().setTargetedLearning(
             weightMap,
             focusCategories,
             topPatterns,
@@ -1291,7 +1296,7 @@ class ContinuousLearningLoop {
                 actual,
                 predicted,
                 confusion_rate: Math.min(1, item.count / 10)
-            }, hint);
+            }, hint, this.userId);
             if (ruleId) created++;
         }
 
@@ -1596,7 +1601,7 @@ class ContinuousLearningLoop {
 
         // Apply baseline scale if available
         if (baselineScale !== null) {
-            adaptiveDifficultyScaler.setBaselineScale(parseInt(baselineScale, 10));
+            this._getAds().setBaselineScale(parseInt(baselineScale, 10));
         }
 
         // Always save the initial state to ensure it's persisted
@@ -1604,7 +1609,7 @@ class ContinuousLearningLoop {
         if (!loadedFromDb || startingScale !== null || startingLevel !== null) {
             const initialBaseline = baselineScale !== null
                 ? parseInt(baselineScale, 10)
-                : adaptiveDifficultyScaler.getBaselineScale();
+                : this._getAds().getBaselineScale();
             await this._saveScaleAndLevel(userId, scale, level, initialBaseline);
             logger.info('Saved initial scale and level', {
                 user_id: userId,
@@ -1735,7 +1740,24 @@ class ContinuousLearningLoop {
     }
 }
 
-// Singleton instance
-const continuousLearningLoop = new ContinuousLearningLoop();
+// Per-user instance registry (replaces singleton for tenant isolation)
+const instances = new Map();
 
-module.exports = continuousLearningLoop;
+function getInstance(userId) {
+    if (!instances.has(userId)) {
+        instances.set(userId, new ContinuousLearningLoop());
+    }
+    return instances.get(userId);
+}
+
+function removeInstance(userId) {
+    const inst = instances.get(userId);
+    if (inst && inst.isRunning) inst.stop();
+    instances.delete(userId);
+}
+
+function getAllInstances() {
+    return instances;
+}
+
+module.exports = { getInstance, removeInstance, getAllInstances, ContinuousLearningLoop };

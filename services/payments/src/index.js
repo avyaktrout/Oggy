@@ -31,7 +31,7 @@ const inquiriesRouter = require('./routes/inquiries');
 const preferencesRouter = require('./routes/preferences');
 const benchmarkAnalyticsRouter = require('./routes/benchmarkAnalytics');
 const observerRouter = require('./routes/observer');
-const migrationRouter = require('./routes/migration');
+// migrationRouter split into export/import — loaded below near mount points
 
 const authRouter = require('./routes/auth');
 const authService = require('./services/authService');
@@ -182,9 +182,18 @@ app.use('/v0/auth', authRouter);
 
 // Serve login page and static assets without auth
 const publicDir = path.join(__dirname, '..', 'public');
-app.get('/login.html', (req, res) => res.sendFile(path.join(publicDir, 'login.html')));
-app.use('/css', express.static(path.join(publicDir, 'css')));
-app.use('/js', express.static(path.join(publicDir, 'js')));
+const noCacheStatic = { setHeaders: (res) => { res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate'); } };
+app.get('/login.html', (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.sendFile(path.join(publicDir, 'login.html'));
+});
+app.use('/css', express.static(path.join(publicDir, 'css'), noCacheStatic));
+app.use('/js', express.static(path.join(publicDir, 'js'), noCacheStatic));
+
+// Migration export (before auth — allows local instances to export without login)
+// Import is still protected by auth middleware below.
+const { migrationExportRouter, migrationImportRouter } = require('./routes/migration');
+app.use('/v0/migration', migrationExportRouter);
 
 // Auth middleware — everything below requires authentication
 app.use(requireAuth);
@@ -192,7 +201,7 @@ app.use(requireCSRF);
 app.use(injectUserId);
 
 // Serve static frontend files (authenticated)
-app.use(express.static(publicDir));
+app.use(express.static(publicDir, noCacheStatic));
 
 // API Routes
 app.use('/v0/expenses', expensesRouter);
@@ -279,8 +288,8 @@ app.use('/v0/benchmark-analytics', benchmarkAnalyticsRouter);
 // Observer (federated learning) routes
 app.use('/v0/observer', observerRouter);
 
-// Migration (tenant data export/import)
-app.use('/v0/migration', migrationRouter);
+// Migration import (behind auth — requires authentication)
+app.use('/v0/migration', migrationImportRouter);
 
 // Event processing endpoint (for manual trigger or webhook)
 app.post('/v0/process-events', async (req, res) => {

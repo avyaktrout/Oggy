@@ -1,0 +1,4 @@
+{$DOMAIN:localhost} {
+    reverse_proxy payments-service:3001
+    encode gzip
+}

@@ -3,6 +3,7 @@ const API_BASE = window.location.origin;
 let USER_ID = null;
 let CSRF_TOKEN = null;
 let USER_DISPLAY_NAME = null;
+let USER_ROLE = null;
 
 const CATEGORIES = [
     'dining', 'groceries', 'transportation', 'utilities',
@@ -25,6 +26,7 @@ async function initAuth() {
         USER_ID = data.user_id;
         CSRF_TOKEN = data.csrf_token;
         USER_DISPLAY_NAME = data.display_name || data.user_id;
+        USER_ROLE = data.role || 'user';
         return true;
     } catch (e) {
         if (!window.location.pathname.includes('login.html')) {
@@ -116,12 +118,16 @@ function showToast(message, type = 'success') {
 function renderNav(activePage) {
     const nav = document.getElementById('nav');
     if (!nav) return;
+    const adminLink = USER_ROLE === 'admin'
+        ? `<a href="/admin.html" class="${activePage === 'admin' ? 'active' : ''}">Admin</a>`
+        : '';
     nav.innerHTML = `
         <a href="/" class="nav-brand">Oggy</a>
         <a href="/" class="${activePage === 'enter' ? 'active' : ''}">Enter Payment</a>
         <a href="/payments.html" class="${activePage === 'view' ? 'active' : ''}">View Payments</a>
         <a href="/chat.html" class="${activePage === 'chat' ? 'active' : ''}">Chat</a>
         <a href="/analytics.html" class="${activePage === 'analytics' ? 'active' : ''}">Analytics</a>
+        ${adminLink}
         <div class="nav-right">
             <span id="inquiry-nav-badge" style="display:none;cursor:pointer" onclick="window.location='/chat.html'"
                   title="Oggy has questions for you">

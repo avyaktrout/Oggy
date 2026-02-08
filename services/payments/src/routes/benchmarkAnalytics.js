@@ -1,12 +1,24 @@
 /**
  * Benchmark Analytics Routes
  * Compiles Oggy's benchmark performance data for dashboard visualization
+ * Includes audit chat (LLM-powered Q&A) and weakness data endpoints
  */
 
 const express = require('express');
 const router = express.Router();
+const axios = require('axios');
 const { query } = require('../utils/db');
 const logger = require('../utils/logger');
+const weaknessAnalyzer = require('../services/weaknessAnalyzer');
+const circuitBreakerRegistry = require('../utils/circuitBreakerRegistry');
+const { costGovernor } = require('../middleware/costGovernor');
+
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const openaiBreaker = circuitBreakerRegistry.getOrCreate('openai-api', {
+    failureThreshold: 3,
+    timeout: 30000
+});
 
 /**
  * GET /v0/benchmark-analytics
@@ -125,8 +137,10 @@ router.get('/', async (req, res) => {
         // Get the ACTUAL current level from DB (benchmark names reflect pre-benchmark level)
         let actualLevel = latest.level;
         try {
+            const userId = req.query.user_id || 'oggy';
             const stateResult = await query(
-                `SELECT scale, difficulty_level FROM continuous_learning_state WHERE user_id = 'oggy' LIMIT 1`
+                `SELECT scale, difficulty_level FROM continuous_learning_state WHERE user_id = $1 LIMIT 1`,
+                [userId]
             );
             if (stateResult.rows.length > 0) {
                 const s = stateResult.rows[0];
@@ -250,6 +264,218 @@ router.get('/prometheus', async (req, res) => {
     } catch (error) {
         logger.logError(error, { operation: 'benchmark-analytics-prometheus' });
         res.status(500).send('# Error generating metrics\n');
+    }
+});
+
+/**
+ * Aggregate per-category accuracy and confusion pairs across multiple benchmark results
+ */
+function _aggregateConfusionAcrossBenchmarks(rows) {
+    const categoryStats = {}; // { category: { correct: N, total: N } }
+    const confusionCounts = {}; // { "actual->predicted": N }
+
+    for (const row of rows) {
+        const detailed = row.detailed_results;
+        const scenarios = detailed?.oggy || [];
+
+        for (const s of scenarios) {
+            const cat = s.correct_category;
+            if (!cat) continue;
+
+            if (!categoryStats[cat]) categoryStats[cat] = { correct: 0, total: 0 };
+            categoryStats[cat].total++;
+            if (s.correct) {
+                categoryStats[cat].correct++;
+            } else if (s.predicted_category && s.predicted_category !== cat) {
+                const pair = `${cat}->${s.predicted_category}`;
+                confusionCounts[pair] = (confusionCounts[pair] || 0) + 1;
+            }
+        }
+    }
+
+    const categoryAccuracy = Object.entries(categoryStats)
+        .map(([category, s]) => ({
+            category,
+            accuracy: s.total > 0 ? (s.correct / s.total * 100).toFixed(1) : '0.0',
+            correct: s.correct,
+            total: s.total
+        }))
+        .sort((a, b) => parseFloat(a.accuracy) - parseFloat(b.accuracy));
+
+    const confusionPairs = Object.entries(confusionCounts)
+        .map(([pair, count]) => ({ pair, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 15);
+
+    const totalCorrect = Object.values(categoryStats).reduce((s, c) => s + c.correct, 0);
+    const totalScenarios = Object.values(categoryStats).reduce((s, c) => s + c.total, 0);
+
+    return {
+        categoryAccuracy,
+        confusionPairs,
+        totalScenarios,
+        overallAccuracy: totalScenarios > 0 ? (totalCorrect / totalScenarios * 100).toFixed(1) : '0.0'
+    };
+}
+
+/**
+ * Build context string for the audit chat LLM prompt
+ */
+function _buildAuditContext(benchmarkRows, aggregated) {
+    let ctx = `=== Oggy Performance Audit Data ===\n`;
+    ctx += `Benchmarks analyzed: ${benchmarkRows.length}\n`;
+    ctx += `Overall accuracy: ${aggregated.overallAccuracy}% across ${aggregated.totalScenarios} scenarios\n\n`;
+
+    ctx += `--- Per-Category Accuracy (sorted weakest first) ---\n`;
+    for (const c of aggregated.categoryAccuracy) {
+        const bar = parseFloat(c.accuracy) < 60 ? '[WEAK]' : parseFloat(c.accuracy) < 80 ? '[OK]' : '[STRONG]';
+        ctx += `${c.category}: ${c.accuracy}% (${c.correct}/${c.total}) ${bar}\n`;
+    }
+
+    if (aggregated.confusionPairs.length > 0) {
+        ctx += `\n--- Top Confusion Pairs ---\n`;
+        for (const p of aggregated.confusionPairs.slice(0, 10)) {
+            ctx += `${p.pair}: ${p.count} times\n`;
+        }
+    }
+
+    ctx += `\n--- Recent Benchmark Trend ---\n`;
+    for (const r of benchmarkRows.slice(-10)) {
+        const ts = new Date(r.tested_at).toLocaleDateString();
+        ctx += `${ts}: Oggy ${parseFloat(r.oggy_accuracy * 100).toFixed(1)}% vs Base ${parseFloat(r.base_accuracy * 100).toFixed(1)}% (delta: ${(r.advantage_delta * 100).toFixed(1)}pp)\n`;
+    }
+
+    return ctx;
+}
+
+/**
+ * GET /v0/benchmark-analytics/weakness-data
+ * Returns aggregated per-category accuracy and confusion pairs across last N benchmarks
+ */
+router.get('/weakness-data', async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit) || 15;
+        const userId = req.body?.user_id || req.query.user_id || 'oggy';
+
+        const results = await query(`
+            SELECT r.detailed_results, r.oggy_accuracy, r.base_accuracy,
+                   r.advantage_delta, r.tested_at
+            FROM sealed_benchmark_results r
+            WHERE r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
+            ORDER BY r.tested_at DESC
+            LIMIT $1
+        `, [limit]);
+
+        if (results.rows.length === 0) {
+            return res.json({
+                categoryAccuracy: [],
+                confusionPairs: [],
+                benchmarksAnalyzed: 0,
+                totalScenarios: 0,
+                overallAccuracy: '0.0'
+            });
+        }
+
+        const aggregated = _aggregateConfusionAcrossBenchmarks(results.rows);
+
+        res.json({
+            ...aggregated,
+            benchmarksAnalyzed: results.rows.length
+        });
+    } catch (error) {
+        logger.logError(error, { operation: 'benchmark-analytics-weakness-data' });
+        res.status(500).json({ error: 'Failed to compile weakness data', message: error.message });
+    }
+});
+
+/**
+ * POST /v0/benchmark-analytics/audit-chat
+ * LLM-powered Q&A about Oggy's benchmark performance
+ * Body: { question: "What are Oggy's weakest categories?" }
+ */
+router.post('/audit-chat', async (req, res) => {
+    try {
+        const { question } = req.body;
+        if (!question || question.trim().length === 0) {
+            return res.status(400).json({ error: 'question is required' });
+        }
+
+        // Budget check (~1200 tokens for context + response)
+        await costGovernor.checkBudget(8000);
+
+        // Get last 15 benchmarks with detailed_results
+        const benchmarkRows = await query(`
+            SELECT r.result_id, r.detailed_results, r.oggy_accuracy, r.base_accuracy,
+                   r.advantage_delta, r.tested_at, r.total_scenarios,
+                   b.benchmark_name, b.difficulty_mix
+            FROM sealed_benchmark_results r
+            JOIN sealed_benchmarks b ON r.benchmark_id = b.benchmark_id
+            WHERE r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
+            ORDER BY r.tested_at DESC
+            LIMIT 15
+        `);
+
+        if (benchmarkRows.rows.length === 0) {
+            return res.json({
+                answer: 'No benchmark data available yet. Run a training session with benchmarks first to generate performance data.',
+                sources: []
+            });
+        }
+
+        // Aggregate confusion data across benchmarks
+        const aggregated = _aggregateConfusionAcrossBenchmarks(benchmarkRows.rows);
+
+        // Build context for the LLM
+        const auditContext = _buildAuditContext(benchmarkRows.rows, aggregated);
+
+        const systemPrompt = `You are Oggy's performance analyst. You analyze benchmark results to answer questions about Oggy's categorization accuracy, weaknesses, strengths, and trends.
+
+You have access to the following performance data:
+${auditContext}
+
+Rules:
+- Answer concisely and specifically based on the data above
+- Use exact numbers and percentages from the data
+- If asked about weaknesses, focus on categories with <60% accuracy
+- If asked about trends, describe whether accuracy is improving or declining
+- If asked about confusion, explain which categories get mixed up and why
+- Keep answers under 200 words
+- Don't make up data not present in the context`;
+
+        const response = await openaiBreaker.execute(() =>
+            axios.post('https://api.openai.com/v1/chat/completions', {
+                model: OPENAI_MODEL,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: question }
+                ],
+                temperature: 0.3,
+                max_tokens: 800
+            }, {
+                headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+                timeout: 15000
+            })
+        );
+
+        costGovernor.recordUsage(6000);
+
+        const answer = response.data.choices[0].message.content.trim();
+
+        res.json({
+            answer,
+            sources: {
+                benchmarks_analyzed: benchmarkRows.rows.length,
+                overall_accuracy: aggregated.overallAccuracy,
+                total_scenarios: aggregated.totalScenarios
+            }
+        });
+
+    } catch (error) {
+        if (error.budgetExceeded) {
+            return res.status(429).json({ error: 'Daily token budget exceeded. Try again tomorrow.' });
+        }
+        logger.logError(error, { operation: 'audit-chat' });
+        res.status(500).json({ error: 'Audit chat failed', message: error.message });
     }
 });
 
