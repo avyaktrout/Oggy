@@ -126,6 +126,8 @@ function renderNav(activePage) {
         <a href="/" class="${activePage === 'enter' ? 'active' : ''}">Enter Payment</a>
         <a href="/payments.html" class="${activePage === 'view' ? 'active' : ''}">View Payments</a>
         <a href="/chat.html" class="${activePage === 'chat' ? 'active' : ''}">Chat</a>
+        <a href="/v2-chat.html" class="${activePage === 'v2' ? 'active' : ''}">V2</a>
+        <a href="/v3-chat.html" class="${activePage === 'v3' ? 'active' : ''}">V3</a>
         <a href="/analytics.html" class="${activePage === 'analytics' ? 'active' : ''}">Analytics</a>
         ${adminLink}
         <div class="nav-right">

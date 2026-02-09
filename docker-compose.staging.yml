@@ -1,0 +1,167 @@
+# EC2 Staging/Production Compose
+# Usage: docker compose -f docker-compose.staging.yml up -d
+#
+# Differences from dev compose:
+#   - No source code volume mounts (uses baked-in COPY from Dockerfile)
+#   - No OTEL collector (reduces resource usage on t3.small)
+#   - Production NODE_ENV
+#   - Resource limits for t3.small (2 vCPU, 2GB RAM)
+#   - Restart policies
+#   - Named volumes for persistence
+#   - No host port exposure for postgres/redis (only accessible within Docker network)
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: oggy-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-oggy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-oggy_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./services/memory/db/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-oggy} -d ${POSTGRES_DB:-oggy_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+  redis:
+    image: redis:7-alpine
+    container_name: oggy-redis
+    restart: always
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 192M
+          cpus: "0.25"
+
+  memory-service:
+    build:
+      context: ./services/memory
+      dockerfile: Dockerfile
+    container_name: oggy-memory-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-oggy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-oggy_db}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: npm start
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: "0.5"
+
+  payments-service:
+    build:
+      context: ./services/payments
+      dockerfile: Dockerfile
+    container_name: oggy-payments-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-oggy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-oggy_db}
+      MEMORY_SERVICE_URL: http://memory-service:3000
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      DAILY_TOKEN_BUDGET: "20000000"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@oggy.local}
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://oggy-v1.com}
+      SYNC_API_KEY: ${SYNC_API_KEY:-}
+      REMOTE_OGGY_URL: ${REMOTE_OGGY_URL:-}
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      memory-service:
+        condition: service_started
+    command: npm start
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+  learning-service:
+    build:
+      context: ./services/learning
+      dockerfile: Dockerfile
+    container_name: oggy-learning-service
+    restart: always
+    environment:
+      PYTHONUNBUFFERED: 1
+      MEMORY_SERVICE_URL: http://memory-service:3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-oggy}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-oggy_db}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_URL: redis://redis:6379/0
+      LEARNING_GATE_STATE: ${LEARNING_GATE_STATE:-GATE_OPEN_LIMITED}
+      MIN_OBSERVATIONS_FOR_UPDATE: ${MIN_OBSERVATIONS_FOR_UPDATE:-3}
+      STABILITY_THRESHOLD: ${STABILITY_THRESHOLD:-0.7}
+      MAX_ITEMS_PER_CYCLE: ${MAX_ITEMS_PER_CYCLE:-10}
+      ENABLE_SELF_DRIVEN: ${ENABLE_SELF_DRIVEN:-true}
+      PRACTICE_PACKS_DIR: /app/data/practice_packs
+      SEALED_BENCHMARKS_DIR: /app/data/sealed_benchmarks
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - memory-service
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: "0.5"
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: oggy-network

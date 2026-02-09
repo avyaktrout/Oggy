@@ -1,6 +1,10 @@
 # Environment
 .env
 .env.local
+.env.staging
+
+# Backups
+*.sql.gz
 
 # Node.js
 node_modules/

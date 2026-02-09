@@ -31,6 +31,8 @@ const inquiriesRouter = require('./routes/inquiries');
 const preferencesRouter = require('./routes/preferences');
 const benchmarkAnalyticsRouter = require('./routes/benchmarkAnalytics');
 const observerRouter = require('./routes/observer');
+const generalChatRouter = require('./routes/generalChat');
+const dietRouter = require('./routes/diet');
 // migrationRouter split into export/import — loaded below near mount points
 
 const authRouter = require('./routes/auth');
@@ -290,6 +292,12 @@ app.use('/v0/benchmark-analytics', benchmarkAnalyticsRouter);
 
 // Observer (federated learning) routes
 app.use('/v0/observer', observerRouter);
+
+// V2: General Conversation routes
+app.use('/v0/general', generalChatRouter);
+
+// V3: Diet Agent routes
+app.use('/v0/diet', dietRouter);
 
 // Migration import (behind auth — requires authentication)
 app.use('/v0/migration', migrationImportRouter);

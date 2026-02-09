@@ -9,6 +9,10 @@ const { query } = require('../utils/db');
 const logger = require('../utils/logger');
 const { costGovernor } = require('../middleware/costGovernor');
 const { suggestionGate } = require('./suggestionGate');
+const OggyCategorizer = require('./oggyCategorizer');
+
+const categorizer = new OggyCategorizer();
+const HIGH_CONFIDENCE_THRESHOLD = 0.80;
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
@@ -118,6 +122,8 @@ class InquiryGenerator {
 
     /**
      * Clarification sources — always available (uncategorized, ambiguous).
+     * High-confidence uncategorized expenses get a "Is this correct?" confirmation
+     * instead of an open-ended category question.
      */
     async _findClarificationSources(userId) {
         const sources = [];
@@ -125,7 +131,7 @@ class InquiryGenerator {
         // Priority 1: Uncategorized expenses
         try {
             const uncategorized = await query(
-                `SELECT DISTINCT merchant, description
+                `SELECT DISTINCT merchant, description, amount
                  FROM expenses
                  WHERE user_id = $1 AND status = 'active'
                    AND (category IS NULL OR category = 'uncategorized')
@@ -134,12 +140,36 @@ class InquiryGenerator {
                 [userId]
             );
             for (const row of uncategorized.rows) {
-                sources.push({
-                    type: 'uncategorized_expense',
-                    response_type: 'clarification',
-                    merchant: row.merchant,
-                    description: row.description
-                });
+                // Try to categorize first — if high confidence, use confirmation prompt
+                let suggestion = null;
+                try {
+                    suggestion = await categorizer.suggestCategory(userId, {
+                        merchant: row.merchant,
+                        description: row.description || '',
+                        amount: row.amount || 0
+                    });
+                } catch (err) {
+                    logger.debug('Categorizer unavailable for inquiry pre-check', { error: err.message });
+                }
+
+                if (suggestion && suggestion.confidence >= HIGH_CONFIDENCE_THRESHOLD && suggestion.suggested_category !== 'other') {
+                    sources.push({
+                        type: 'high_confidence_confirmation',
+                        response_type: 'clarification',
+                        merchant: row.merchant,
+                        description: row.description,
+                        suggested_category: suggestion.suggested_category,
+                        confidence: suggestion.confidence,
+                        reasoning: suggestion.reasoning
+                    });
+                } else {
+                    sources.push({
+                        type: 'uncategorized_expense',
+                        response_type: 'clarification',
+                        merchant: row.merchant,
+                        description: row.description
+                    });
+                }
             }
         } catch (err) {
             logger.warn('Inquiry: uncategorized query failed', { error: err.message });
@@ -214,7 +244,19 @@ class InquiryGenerator {
         let questionText, questionType, context;
         const responseType = source.response_type || 'clarification';
 
-        if (source.type === 'ambiguous_merchant') {
+        if (source.type === 'high_confidence_confirmation') {
+            questionType = 'high_confidence_confirmation';
+            const cat = source.suggested_category.replace(/_/g, ' ');
+            context = {
+                merchant: source.merchant,
+                description: source.description,
+                suggested_category: source.suggested_category,
+                confidence: source.confidence,
+                reasoning: source.reasoning,
+                options: [source.suggested_category]
+            };
+            questionText = `I'm fairly confident "${source.merchant}" should be categorized as "${cat}". Is this correct?`;
+        } else if (source.type === 'ambiguous_merchant') {
             questionType = 'ambiguous_merchant';
             context = { merchant: source.merchant, options: source.categories };
 
@@ -396,7 +438,7 @@ class InquiryGenerator {
             });
 
             // Also update uncategorized expenses for this merchant
-            if (merchant && inquiry.question_type === 'uncategorized_expense') {
+            if (merchant && (inquiry.question_type === 'uncategorized_expense' || inquiry.question_type === 'high_confidence_confirmation')) {
                 try {
                     const updated = await query(
                         `UPDATE expenses SET category = $1

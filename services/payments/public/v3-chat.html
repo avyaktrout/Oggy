@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oggy V3 - Diet Agent</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <nav class="nav" id="nav"></nav>
+
+    <div class="container">
+        <!-- Diet Entry Panel -->
+        <div class="diet-entry-panel" id="diet-entry-panel">
+            <div class="diet-entry-header">
+                <div class="diet-entry-title">Track Food & Nutrition</div>
+            </div>
+            <div class="diet-entry-form">
+                <div class="diet-entry-row">
+                    <select id="diet-entry-type" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;min-width:100px">
+                        <option value="food">Food</option>
+                        <option value="liquid">Liquid</option>
+                        <option value="vitamin">Vitamin</option>
+                        <option value="supplement">Supplement</option>
+                    </select>
+                    <select id="diet-meal-type" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;min-width:100px">
+                        <option value="breakfast">Breakfast</option>
+                        <option value="lunch">Lunch</option>
+                        <option value="dinner">Dinner</option>
+                        <option value="snack">Snack</option>
+                        <option value="other">Other</option>
+                    </select>
+                    <input type="text" id="diet-description" placeholder="What did you eat/drink?"
+                           style="flex:1;padding:6px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px"
+                           onkeydown="if(event.key==='Enter')addDietEntry()">
+                    <input type="number" id="diet-quantity" placeholder="Qty" step="0.1"
+                           style="width:60px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+                    <input type="text" id="diet-unit" placeholder="Unit" value="serving"
+                           style="width:70px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+                    <button class="btn btn-primary btn-sm" onclick="addDietEntry()">Add</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Nutrition Summary -->
+        <div class="nutrition-summary" id="nutrition-summary">
+            <div class="nutrition-header">
+                <div class="nutrition-title">Today's Nutrition</div>
+                <input type="date" id="diet-date" style="padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px"
+                       onchange="loadDietData()">
+            </div>
+            <div class="nutrition-cards" id="nutrition-cards">
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-calories">0</div>
+                    <div class="nutrition-card-label">Calories</div>
+                </div>
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-protein">0g</div>
+                    <div class="nutrition-card-label">Protein</div>
+                </div>
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-carbs">0g</div>
+                    <div class="nutrition-card-label">Carbs</div>
+                </div>
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-fat">0g</div>
+                    <div class="nutrition-card-label">Fat</div>
+                </div>
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-fiber">0g</div>
+                    <div class="nutrition-card-label">Fiber</div>
+                </div>
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-entries">0</div>
+                    <div class="nutrition-card-label">Entries</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Today's Entries -->
+        <div class="diet-entries-list" id="diet-entries-list">
+            <div style="color:var(--text-muted);font-size:13px;padding:12px 0">No entries yet today. Add food above or tell Oggy what you ate!</div>
+        </div>
+
+        <!-- Diet Rules Panel -->
+        <div class="diet-rules-panel" id="diet-rules-panel">
+            <div class="diet-rules-header" onclick="toggleRulesPanel()">
+                <div class="diet-rules-title">Diet Rules & Goals</div>
+                <span class="diet-rules-arrow" id="rules-arrow">&#9654;</span>
+            </div>
+            <div class="diet-rules-body" id="rules-body" style="display:none">
+                <div class="diet-rules-list" id="diet-rules-list">
+                    <div style="color:var(--text-muted);font-size:13px;padding:8px 0">No rules set yet.</div>
+                </div>
+                <div class="diet-rules-add" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+                    <select id="rule-type" style="padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+                        <option value="goal">Goal</option>
+                        <option value="limit">Limit</option>
+                        <option value="preference">Preference</option>
+                        <option value="allergy">Allergy</option>
+                        <option value="avoid">Avoid</option>
+                    </select>
+                    <input type="text" id="rule-description" placeholder="e.g., Stay under 2000 calories"
+                           style="flex:1;padding:6px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px"
+                           onkeydown="if(event.key==='Enter')addDietRule()">
+                    <button class="btn btn-sm btn-primary" onclick="addDietRule()">Add Rule</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat -->
+        <div class="chat-title-row">
+            <h1 class="page-title" style="margin-bottom:0">Diet Chat</h1>
+            <div class="chat-controls">
+                <label class="toggle-label" title="When enabled, Oggy learns from this conversation">
+                    <input type="checkbox" id="learn-toggle" onchange="shellToggleLearning(this.checked)">
+                    <span class="toggle-switch"></span>
+                    <span class="toggle-text">Learn from chat</span>
+                </label>
+                <button class="btn btn-sm btn-outline" onclick="shellClearChat()" title="Clear conversation history">Clear Chat</button>
+            </div>
+        </div>
+
+        <div class="chat-container" style="grid-template-columns:1fr">
+            <!-- Oggy column only (no comparison for diet) -->
+            <div class="chat-column">
+                <div class="chat-header">
+                    <span class="dot dot-oggy"></span>
+                    Oggy Diet Agent
+                    <span class="learning-indicator" id="learning-indicator" style="display:none" title="Learning from this conversation">learning</span>
+                </div>
+                <div class="chat-messages" id="oggy-messages">
+                    <div class="chat-msg chat-msg-bot">Hi! I'm Oggy, your diet and nutrition assistant. Tell me what you ate, ask about nutrition, or get personalized diet advice!</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-input-row" style="margin-top:12px">
+            <input type="text" id="chat-input" placeholder="Tell me what you ate, or ask about nutrition..."
+                   onkeydown="if(event.key==='Enter')shellSendChat()">
+            <button class="btn btn-primary" onclick="shellSendChat()" id="chat-send-btn">Send</button>
+        </div>
+    </div>
+
+    <script src="/js/app.js"></script>
+    <script src="/js/agent-shell.js"></script>
+    <script>
+        // V3 Diet Agent — domain config
+        const shell = new AgentShell({
+            domain: 'diet',
+            label: 'Diet Agent',
+            chatEndpoint: '/v0/diet/chat',
+            trainingEndpoint: '/v0/continuous-learning',
+            chatPlaceholder: 'Tell me what you ate, or ask about nutrition...',
+            welcomeMessage: 'Hi! I\'m Oggy, your diet and nutrition assistant. Tell me what you ate, ask about nutrition, or get personalized diet advice!',
+            contextProvider: async () => ({}),
+            capabilities: {
+                training: false,
+                comparison: false,
+                inquiries: false,
+                observer: false,
+                audit: false
+            }
+        });
+
+        shell.init();
+
+        // Set today's date in the date picker
+        document.getElementById('diet-date').value = new Date().toISOString().split('T')[0];
+
+        // --- Diet Entry ---
+        window.addDietEntry = async function() {
+            const description = document.getElementById('diet-description').value.trim();
+            if (!description) return;
+
+            const entry = {
+                user_id: USER_ID,
+                entry_type: document.getElementById('diet-entry-type').value,
+                description,
+                quantity: parseFloat(document.getElementById('diet-quantity').value) || null,
+                unit: document.getElementById('diet-unit').value || null,
+                meal_type: document.getElementById('diet-meal-type').value,
+                entry_date: document.getElementById('diet-date').value
+            };
+
+            try {
+                await apiCall('POST', '/v0/diet/entries', entry);
+                document.getElementById('diet-description').value = '';
+                document.getElementById('diet-quantity').value = '';
+                showToast('Entry added! Analyzing nutrition...');
+                loadDietData();
+            } catch (err) {
+                showToast('Failed: ' + err.message, 'error');
+            }
+        };
+
+        // --- Load Diet Data ---
+        window.loadDietData = async function() {
+            const date = document.getElementById('diet-date').value;
+            await Promise.all([loadNutritionSummary(date), loadEntries(date)]);
+        };
+
+        async function loadNutritionSummary(date) {
+            try {
+                const data = await apiCall('GET', `/v0/diet/nutrition?user_id=${USER_ID}&date=${date}`);
+                document.getElementById('nc-calories').textContent = Math.round(data.total_calories || 0);
+                document.getElementById('nc-protein').textContent = Math.round(data.total_protein || 0) + 'g';
+                document.getElementById('nc-carbs').textContent = Math.round(data.total_carbs || 0) + 'g';
+                document.getElementById('nc-fat').textContent = Math.round(data.total_fat || 0) + 'g';
+                document.getElementById('nc-fiber').textContent = Math.round(data.total_fiber || 0) + 'g';
+                document.getElementById('nc-entries').textContent = data.total_entries || 0;
+            } catch (e) { /* ignore */ }
+        }
+
+        async function loadEntries(date) {
+            const container = document.getElementById('diet-entries-list');
+            try {
+                const data = await apiCall('GET', `/v0/diet/entries?user_id=${USER_ID}&date=${date}`);
+                if (!data.entries || data.entries.length === 0) {
+                    container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0">No entries yet today.</div>';
+                    return;
+                }
+                container.innerHTML = data.entries.map(e => {
+                    const items = e.items && e.items[0] ? e.items : [];
+                    const cal = items.length > 0 ? Math.round(items[0].calories || 0) : '?';
+                    return `
+                        <div class="diet-entry-card">
+                            <div class="diet-entry-info">
+                                <span class="diet-entry-type-badge">${e.entry_type}</span>
+                                <span class="diet-entry-desc">${e.description}</span>
+                                ${e.quantity ? `<span class="diet-entry-qty">${e.quantity} ${e.unit || ''}</span>` : ''}
+                            </div>
+                            <div class="diet-entry-nutrition">
+                                <span class="diet-entry-cal">${cal} kcal</span>
+                                <span class="diet-entry-meal">${e.meal_type || ''}</span>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (e) {
+                container.innerHTML = '<div style="color:var(--text-muted);font-size:13px">Failed to load entries</div>';
+            }
+        }
+
+        // --- Diet Rules ---
+        window.toggleRulesPanel = function() {
+            const body = document.getElementById('rules-body');
+            const arrow = document.getElementById('rules-arrow');
+            if (body.style.display === 'none') {
+                body.style.display = 'block';
+                arrow.innerHTML = '&#9660;';
+                loadRules();
+            } else {
+                body.style.display = 'none';
+                arrow.innerHTML = '&#9654;';
+            }
+        };
+
+        async function loadRules() {
+            const container = document.getElementById('diet-rules-list');
+            try {
+                const data = await apiCall('GET', `/v0/diet/rules?user_id=${USER_ID}`);
+                if (!data.rules || data.rules.length === 0) {
+                    container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px 0">No rules set yet.</div>';
+                    return;
+                }
+                container.innerHTML = data.rules.map(r => `
+                    <div class="diet-rule-card">
+                        <span class="diet-rule-type-badge">${r.rule_type}</span>
+                        <span class="diet-rule-desc">${r.description}</span>
+                        <button class="btn btn-sm" onclick="deleteDietRule('${r.rule_id}')" style="padding:2px 8px;font-size:11px;background:none;color:var(--danger);border:1px solid var(--danger)">x</button>
+                    </div>
+                `).join('');
+            } catch (e) {
+                container.innerHTML = '<div style="color:var(--text-muted);font-size:13px">Failed to load rules</div>';
+            }
+        }
+
+        window.addDietRule = async function() {
+            const description = document.getElementById('rule-description').value.trim();
+            if (!description) return;
+            try {
+                await apiCall('POST', '/v0/diet/rules', {
+                    user_id: USER_ID,
+                    rule_type: document.getElementById('rule-type').value,
+                    description
+                });
+                document.getElementById('rule-description').value = '';
+                showToast('Rule added');
+                loadRules();
+            } catch (err) {
+                showToast('Failed: ' + err.message, 'error');
+            }
+        };
+
+        window.deleteDietRule = async function(ruleId) {
+            try {
+                await apiCall('DELETE', `/v0/diet/rules/${ruleId}?user_id=${USER_ID}`);
+                showToast('Rule removed');
+                loadRules();
+            } catch (err) {
+                showToast('Failed: ' + err.message, 'error');
+            }
+        };
+
+        // Load on init
+        loadDietData();
+    </script>
+</body>
+</html>
