@@ -21,47 +21,36 @@ body {
     line-height: 1.6;
 }
 
-/* Navigation */
-.nav {
+/* Top Bar */
+.topbar {
     background: var(--primary);
-    padding: 0 24px;
     display: flex;
     align-items: center;
-    height: 56px;
-    gap: 8px;
+    height: 48px;
+    padding: 0 16px;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
 }
 
-.nav-brand {
+.topbar-brand {
     color: white;
     font-weight: 700;
     font-size: 18px;
-    margin-right: 24px;
     text-decoration: none;
+    margin-right: 16px;
 }
 
-.nav a {
-    color: rgba(255,255,255,0.8);
-    text-decoration: none;
-    padding: 8px 16px;
-    border-radius: var(--radius);
-    font-size: 14px;
-    font-weight: 500;
-    transition: all 0.2s;
-}
-
-.nav a:hover, .nav a.active {
-    color: white;
-    background: rgba(255,255,255,0.15);
-}
-
-.nav-right {
+.topbar-right {
     margin-left: auto;
     display: flex;
     align-items: center;
     gap: 8px;
 }
 
-.nav-user {
+.topbar-user {
     color: rgba(255,255,255,0.7);
     font-size: 13px;
     font-weight: 500;
@@ -71,18 +60,115 @@ body {
     white-space: nowrap;
 }
 
-.nav-logout {
-    color: rgba(255,255,255,0.6) !important;
-    font-size: 12px !important;
-    padding: 4px 10px !important;
+.topbar-logout {
+    color: rgba(255,255,255,0.6);
+    font-size: 12px;
+    padding: 4px 10px;
     border: 1px solid rgba(255,255,255,0.2);
     border-radius: var(--radius);
+    text-decoration: none;
+    cursor: pointer;
+    background: none;
 }
 
-.nav-logout:hover {
-    color: white !important;
+.topbar-logout:hover {
+    color: white;
     border-color: rgba(255,255,255,0.4);
 }
+
+.topbar-hamburger {
+    display: none;
+    background: none;
+    border: none;
+    color: white;
+    font-size: 22px;
+    cursor: pointer;
+    padding: 4px 8px;
+    margin-right: 8px;
+}
+
+/* Sidebar */
+.sidebar {
+    background: #1e293b;
+    color: #cbd5e1;
+    width: 240px;
+    position: fixed;
+    top: 48px;
+    bottom: 0;
+    left: 0;
+    overflow-y: auto;
+    z-index: 90;
+    padding: 12px 0;
+}
+
+.sidebar-section { margin-bottom: 2px; }
+
+.sidebar-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #94a3b8;
+    transition: color 0.15s, background 0.15s;
+    user-select: none;
+}
+
+.sidebar-section-header:hover { color: white; background: rgba(255,255,255,0.05); }
+.sidebar-section-header.active { color: white; }
+
+.sidebar-arrow { font-size: 10px; transition: transform 0.2s; }
+
+.sidebar-section-links { display: none; }
+.sidebar-section-links.expanded { display: block; }
+
+.sidebar-link {
+    display: block;
+    padding: 8px 16px 8px 36px;
+    color: #94a3b8;
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.15s;
+    border-left: 3px solid transparent;
+}
+
+.sidebar-link:hover { color: white; background: rgba(255,255,255,0.05); }
+
+.sidebar-link.active {
+    color: white;
+    background: rgba(79, 70, 229, 0.15);
+    border-left-color: var(--primary);
+}
+
+.sidebar-divider {
+    margin: 12px 16px;
+    border-top: 1px solid rgba(255,255,255,0.1);
+}
+
+/* Sidebar overlay for mobile */
+.sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 80;
+}
+
+.sidebar-overlay.show { display: block; }
+
+/* App Layout */
+.app-layout {
+    padding-top: 48px;
+    padding-left: 240px;
+}
+
+/* Legacy .nav support — hidden but keeps old pages from breaking */
+.nav { display: none; }
 
 .inquiry-badge {
     background: var(--danger);
@@ -329,7 +415,7 @@ tr:hover td { background: var(--bg); }
 /* Toast */
 .toast-container {
     position: fixed;
-    top: 72px;
+    top: 60px;
     right: 24px;
     z-index: 1000;
     display: flex;
@@ -1564,6 +1650,13 @@ tr:hover td { background: var(--bg); }
 
 /* Responsive */
 @media (max-width: 768px) {
+    .topbar-hamburger { display: block; }
+    .app-layout { padding-left: 0; }
+    .sidebar {
+        transform: translateX(-100%);
+        transition: transform 0.3s ease;
+    }
+    .sidebar.open { transform: translateX(0); }
     .form-row, .form-row-3, .chat-container { grid-template-columns: 1fr; }
     .chat-container { height: auto; }
     .chat-column { min-height: 300px; }

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oggy - Projects</title>
+    <link rel="stylesheet" href="/css/style.css?v=2">
+</head>
+<body class="app-layout">
+    <header class="topbar" id="topbar"></header>
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+    <main class="main-content">
+    <div class="container">
+        <h1 class="page-title">Projects</h1>
+
+        <div class="card" style="margin-bottom:24px">
+            <div class="card-title">Create New Project</div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Project Name</label>
+                    <input type="text" id="new-project-name" placeholder="e.g., ML Research">
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <input type="text" id="new-project-desc" placeholder="Optional description">
+                </div>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="createProject()">Create Project</button>
+        </div>
+
+        <div id="projects-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">
+            <div style="color:var(--text-muted);font-size:14px;padding:24px">Loading projects...</div>
+        </div>
+    </div>
+    </main>
+
+    <script src="/js/app.js?v=2"></script>
+    <script src="/js/general-projects.js?v=2"></script>
+</body>
+</html>

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oggy - View Nutrition</title>
+    <link rel="stylesheet" href="/css/style.css?v=2">
+</head>
+<body class="app-layout">
+    <header class="topbar" id="topbar"></header>
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+    <main class="main-content">
+    <div class="container">
+        <h1 class="page-title">View Nutrition</h1>
+
+        <!-- Date Controls -->
+        <div class="card" style="margin-bottom:16px">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                <label style="font-size:13px;font-weight:600;color:var(--text-muted)">DATE:</label>
+                <input type="date" id="nutrition-date" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px"
+                       onchange="loadNutritionPage()">
+                <button class="btn btn-outline btn-sm" onclick="changeDate(-1)">Previous Day</button>
+                <button class="btn btn-outline btn-sm" onclick="setToday()">Today</button>
+                <button class="btn btn-outline btn-sm" onclick="changeDate(1)">Next Day</button>
+            </div>
+        </div>
+
+        <!-- Daily Totals -->
+        <div class="nutrition-summary">
+            <div class="nutrition-header">
+                <div class="nutrition-title" id="nutrition-date-label">Nutrition Summary</div>
+            </div>
+            <div class="nutrition-cards">
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-calories">0</div>
+                    <div class="nutrition-card-label">Calories</div>
+                </div>
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-protein">0g</div>
+                    <div class="nutrition-card-label">Protein</div>
+                </div>
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-carbs">0g</div>
+                    <div class="nutrition-card-label">Carbs</div>
+                </div>
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-fat">0g</div>
+                    <div class="nutrition-card-label">Fat</div>
+                </div>
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-fiber">0g</div>
+                    <div class="nutrition-card-label">Fiber</div>
+                </div>
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-entries">0</div>
+                    <div class="nutrition-card-label">Entries</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Entries List -->
+        <div class="diet-entries-list" id="entries-list">
+            <div style="color:var(--text-muted);font-size:13px;padding:12px 0">Loading...</div>
+        </div>
+
+        <!-- Diet Rules -->
+        <div class="diet-rules-panel">
+            <div class="diet-rules-header" onclick="toggleRulesPanel()">
+                <div class="diet-rules-title">Diet Rules &amp; Goals</div>
+                <span class="diet-rules-arrow" id="rules-arrow">&#9654;</span>
+            </div>
+            <div class="diet-rules-body" id="rules-body" style="display:none">
+                <div class="diet-rules-list" id="diet-rules-list">
+                    <div style="color:var(--text-muted);font-size:13px;padding:8px 0">No rules set yet.</div>
+                </div>
+                <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+                    <select id="rule-type" style="padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+                        <option value="goal">Goal</option>
+                        <option value="limit">Limit</option>
+                        <option value="preference">Preference</option>
+                        <option value="allergy">Allergy</option>
+                        <option value="avoid">Avoid</option>
+                    </select>
+                    <input type="text" id="rule-description" placeholder="e.g., Stay under 2000 calories"
+                           style="flex:1;padding:6px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px"
+                           onkeydown="if(event.key==='Enter')addDietRule()">
+                    <button class="btn btn-sm btn-primary" onclick="addDietRule()">Add Rule</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    </main>
+
+    <script src="/js/app.js?v=2"></script>
+    <script src="/js/diet-nutrition.js?v=2"></script>
+</body>
+</html>

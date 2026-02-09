@@ -4,11 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Oggy - Chat & Training</title>
-    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/style.css?v=2">
 </head>
-<body>
-    <nav class="nav" id="nav"></nav>
+<body class="app-layout">
+    <header class="topbar" id="topbar"></header>
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
 
+    <main class="main-content">
     <div id="inquiry-banner-container"></div>
 
     <div class="container">
@@ -244,9 +247,10 @@
             </div>
         </div>
     </div>
+    </main>
 
-    <script src="/js/app.js"></script>
-    <script src="/js/inquiries.js"></script>
-    <script src="/js/chat.js"></script>
+    <script src="/js/app.js?v=2"></script>
+    <script src="/js/inquiries.js?v=2"></script>
+    <script src="/js/chat.js?v=2"></script>
 </body>
 </html>

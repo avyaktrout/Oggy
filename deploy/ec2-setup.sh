@@ -127,7 +127,7 @@ echo "Hardening SSH..."
 # Disable password auth (use key-based only)
 sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-systemctl restart sshd
+systemctl restart ssh
 
 # --- Swap file (helpful for t3.small with 2GB RAM) ---
 echo "Setting up 2GB swap file..."

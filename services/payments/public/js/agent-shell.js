@@ -98,34 +98,8 @@ class AgentShell {
     }
 
     _renderNav() {
-        const activePage = this.config.domain === 'payments' ? 'chat'
-            : this.config.domain === 'general' ? 'v2'
-            : 'v3';
-        const nav = document.getElementById('nav');
-        if (!nav) return;
-
-        const adminLink = USER_ROLE === 'admin'
-            ? `<a href="/admin.html" class="${activePage === 'admin' ? 'active' : ''}">Admin</a>`
-            : '';
-
-        nav.innerHTML = `
-            <a href="/" class="nav-brand">Oggy</a>
-            <a href="/" class="${activePage === 'enter' ? 'active' : ''}">Enter Payment</a>
-            <a href="/payments.html" class="${activePage === 'view' ? 'active' : ''}">View Payments</a>
-            <a href="/chat.html" class="${activePage === 'chat' ? 'active' : ''}">Chat</a>
-            <a href="/v2-chat.html" class="${activePage === 'v2' ? 'active' : ''}">V2</a>
-            <a href="/v3-chat.html" class="${activePage === 'v3' ? 'active' : ''}">V3</a>
-            <a href="/analytics.html" class="${activePage === 'analytics' ? 'active' : ''}">Analytics</a>
-            ${adminLink}
-            <div class="nav-right">
-                <span id="inquiry-nav-badge" style="display:none;cursor:pointer" onclick="window.location='/chat.html'"
-                      title="Oggy has questions for you">
-                    <span class="inquiry-badge" id="inquiry-count">0</span>
-                </span>
-                <span class="nav-user" title="${USER_DISPLAY_NAME || ''}">${USER_DISPLAY_NAME || ''}</span>
-                <a href="#" onclick="logout();return false" class="nav-logout">Sign out</a>
-            </div>
-        `;
+        renderTopbar();
+        renderSidebar(this.config.domain, 'chat');
     }
 
     _bindEvents() {

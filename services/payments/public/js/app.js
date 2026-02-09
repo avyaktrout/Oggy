@@ -115,30 +115,96 @@ function showToast(message, type = 'success') {
 }
 
 // --- Navigation ---
-function renderNav(activePage) {
-    const nav = document.getElementById('nav');
-    if (!nav) return;
-    const adminLink = USER_ROLE === 'admin'
-        ? `<a href="/admin.html" class="${activePage === 'admin' ? 'active' : ''}">Admin</a>`
-        : '';
-    nav.innerHTML = `
-        <a href="/" class="nav-brand">Oggy</a>
-        <a href="/" class="${activePage === 'enter' ? 'active' : ''}">Enter Payment</a>
-        <a href="/payments.html" class="${activePage === 'view' ? 'active' : ''}">View Payments</a>
-        <a href="/chat.html" class="${activePage === 'chat' ? 'active' : ''}">Chat</a>
-        <a href="/v2-chat.html" class="${activePage === 'v2' ? 'active' : ''}">V2</a>
-        <a href="/v3-chat.html" class="${activePage === 'v3' ? 'active' : ''}">V3</a>
-        <a href="/analytics.html" class="${activePage === 'analytics' ? 'active' : ''}">Analytics</a>
-        ${adminLink}
-        <div class="nav-right">
+const SIDEBAR_APPS = [
+    {
+        id: 'payments', label: 'Payments',
+        pages: [
+            { id: 'enter', label: 'Enter Payment', href: '/' },
+            { id: 'view', label: 'View Payments', href: '/payments.html' },
+            { id: 'chat', label: 'Chat & Training', href: '/chat.html' },
+            { id: 'analytics', label: 'Analytics', href: '/analytics.html' }
+        ]
+    },
+    {
+        id: 'general', label: 'General Assistant',
+        pages: [
+            { id: 'chat', label: 'Chat', href: '/general-chat.html' },
+            { id: 'projects', label: 'Projects', href: '/general-projects.html' },
+            { id: 'analytics', label: 'Analytics', href: '/general-analytics.html' }
+        ]
+    },
+    {
+        id: 'diet', label: 'Diet Agent',
+        pages: [
+            { id: 'enter', label: 'Enter Food', href: '/diet-enter.html' },
+            { id: 'nutrition', label: 'View Nutrition', href: '/diet-nutrition.html' },
+            { id: 'chat', label: 'Chat', href: '/diet-chat.html' },
+            { id: 'analytics', label: 'Analytics', href: '/diet-analytics.html' }
+        ]
+    }
+];
+
+function renderTopbar() {
+    const topbar = document.getElementById('topbar');
+    if (!topbar) return;
+    topbar.innerHTML = `
+        <button class="topbar-hamburger" onclick="toggleSidebar()">&#9776;</button>
+        <a href="/" class="topbar-brand">Oggy</a>
+        <div class="topbar-right">
             <span id="inquiry-nav-badge" style="display:none;cursor:pointer" onclick="window.location='/chat.html'"
                   title="Oggy has questions for you">
                 <span class="inquiry-badge" id="inquiry-count">0</span>
             </span>
-            <span class="nav-user" title="${USER_DISPLAY_NAME || ''}">${USER_DISPLAY_NAME || ''}</span>
-            <a href="#" onclick="logout();return false" class="nav-logout">Sign out</a>
+            <span class="topbar-user" title="${USER_DISPLAY_NAME || ''}">${USER_DISPLAY_NAME || ''}</span>
+            <a href="#" onclick="logout();return false" class="topbar-logout">Sign out</a>
         </div>
     `;
+}
+
+function renderSidebar(appName, activePage) {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) return;
+    let html = '';
+    for (const app of SIDEBAR_APPS) {
+        const isActive = app.id === appName;
+        html += `<div class="sidebar-section">
+            <div class="sidebar-section-header ${isActive ? 'active' : ''}" onclick="toggleSidebarSection(this)">
+                <span>${app.label}</span>
+                <span class="sidebar-arrow">${isActive ? '&#9660;' : '&#9654;'}</span>
+            </div>
+            <div class="sidebar-section-links ${isActive ? 'expanded' : ''}">
+                ${app.pages.map(p => `<a href="${p.href}" class="sidebar-link ${isActive && p.id === activePage ? 'active' : ''}">${p.label}</a>`).join('')}
+            </div>
+        </div>`;
+    }
+    if (USER_ROLE === 'admin') {
+        html += `<div class="sidebar-divider"></div>
+            <a href="/admin.html" class="sidebar-link ${appName === 'admin' ? 'active' : ''}" style="padding-left:16px">Admin</a>`;
+    }
+    sidebar.innerHTML = html;
+}
+
+function toggleSidebarSection(header) {
+    const links = header.nextElementSibling;
+    const arrow = header.querySelector('.sidebar-arrow');
+    const isExpanded = links.classList.contains('expanded');
+    links.classList.toggle('expanded');
+    arrow.innerHTML = isExpanded ? '&#9654;' : '&#9660;';
+}
+
+function toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebar-overlay');
+    if (sidebar) sidebar.classList.toggle('open');
+    if (overlay) overlay.classList.toggle('show');
+}
+
+// Deprecated — kept for backward compatibility
+function renderNav(activePage) {
+    renderTopbar();
+    const map = { enter: 'payments', view: 'payments', chat: 'payments', analytics: 'payments', v2: 'general', v3: 'diet', admin: 'admin' };
+    const pageMap = { v2: 'chat', v3: 'enter' };
+    renderSidebar(map[activePage] || 'payments', pageMap[activePage] || activePage);
 }
 
 // --- Inquiry polling (shared across all pages) ---

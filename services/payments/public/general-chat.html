@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oggy - General Chat</title>
+    <link rel="stylesheet" href="/css/style.css?v=2">
+</head>
+<body class="app-layout">
+    <header class="topbar" id="topbar"></header>
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+    <main class="main-content">
+    <div class="container">
+        <!-- Training Panel -->
+        <div class="training-panel" id="training-panel">
+            <div class="training-panel-header">
+                <div class="training-panel-title">Train Oggy (General)</div>
+                <div class="training-controls">
+                    <select id="train-duration" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+                        <option value="5">5 minutes</option>
+                        <option value="10" selected>10 minutes</option>
+                        <option value="15">15 minutes</option>
+                        <option value="30">30 minutes</option>
+                        <option value="60">1 hour</option>
+                    </select>
+                    <button class="btn btn-success btn-sm" id="train-start" onclick="shellStartTraining()">Start Training</button>
+                    <button class="btn btn-danger btn-sm" id="train-stop" onclick="shellStopTraining()" style="display:none">Stop</button>
+                </div>
+            </div>
+            <div class="report-row" id="training-report-options">
+                <div class="form-group" style="margin-bottom:0;flex:1;min-width:180px">
+                    <label>Email for reports</label>
+                    <input type="email" id="train-email" placeholder="you@example.com">
+                </div>
+                <div class="form-group" style="margin-bottom:0;min-width:160px">
+                    <label>Send reports</label>
+                    <select id="train-report-interval">
+                        <option value="end_only">After session ends</option>
+                        <option value="5">Every 5 minutes</option>
+                        <option value="10">Every 10 minutes</option>
+                    </select>
+                </div>
+            </div>
+            <div class="training-status" id="training-status" style="display:none">
+                <div class="training-stat">
+                    <div class="training-stat-label">Level</div>
+                    <div class="training-stat-value" id="ts-level">-</div>
+                </div>
+                <div class="training-stat">
+                    <div class="training-stat-label">Accuracy</div>
+                    <div class="training-stat-value" id="ts-accuracy">-</div>
+                </div>
+                <div class="training-stat">
+                    <div class="training-stat-label">Questions</div>
+                    <div class="training-stat-value" id="ts-questions">-</div>
+                </div>
+                <div class="training-stat">
+                    <div class="training-stat-label">Benchmarks</div>
+                    <div class="training-stat-value" id="ts-benchmarks">-</div>
+                </div>
+                <div class="training-stat">
+                    <div class="training-stat-label">Time Left</div>
+                    <div class="training-stat-value" id="ts-remaining">-</div>
+                </div>
+                <div class="training-stat">
+                    <div class="training-stat-label">Status</div>
+                    <div class="training-stat-value" id="ts-status">-</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Project Selector -->
+        <div style="margin-bottom:12px;display:flex;align-items:center;gap:12px">
+            <label style="font-size:13px;font-weight:600;color:var(--text-muted)">PROJECT:</label>
+            <select id="project-select" onchange="selectProject(this.value)" style="padding:6px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;min-width:200px">
+                <option value="">No project (general)</option>
+            </select>
+            <a href="/general-projects.html" class="btn btn-outline btn-sm">Manage Projects</a>
+        </div>
+
+        <!-- Chat -->
+        <div class="chat-title-row">
+            <h1 class="page-title" style="margin-bottom:0">General Chat</h1>
+            <div class="chat-controls">
+                <label class="toggle-label" title="When enabled, Oggy learns from this conversation">
+                    <input type="checkbox" id="learn-toggle" onchange="shellToggleLearning(this.checked)">
+                    <span class="toggle-switch"></span>
+                    <span class="toggle-text">Learn from chat</span>
+                </label>
+                <button class="btn btn-sm btn-outline" onclick="shellClearChat()" title="Clear conversation history">Clear Chat</button>
+            </div>
+        </div>
+
+        <div class="chat-container">
+            <div class="chat-column">
+                <div class="chat-header">
+                    <span class="dot dot-oggy"></span>
+                    Oggy <span style="font-weight:400;color:var(--text-muted);font-size:12px">(with memory)</span>
+                    <span class="learning-indicator" id="learning-indicator" style="display:none" title="Learning from this conversation">learning</span>
+                </div>
+                <div class="chat-messages" id="oggy-messages">
+                    <div class="chat-msg chat-msg-bot">Hi! I&#39;m Oggy, your general-purpose assistant. I remember our conversations and learn from them. Ask me anything!</div>
+                </div>
+            </div>
+            <div class="chat-column">
+                <div class="chat-header">
+                    <span class="dot dot-base"></span>
+                    Base Model <span style="font-weight:400;color:var(--text-muted);font-size:12px">(no memory)</span>
+                </div>
+                <div class="chat-messages" id="base-messages">
+                    <div class="chat-msg chat-msg-bot">Hi! I&#39;m the base model without memory. Compare my answers with Oggy&#39;s.</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-input-row" style="margin-top:12px">
+            <input type="text" id="chat-input" placeholder="Ask Oggy anything..."
+                   onkeydown="if(event.key===&#39;Enter&#39;)shellSendChat()">
+            <button class="btn btn-primary" onclick="shellSendChat()" id="chat-send-btn">Send</button>
+        </div>
+
+        <!-- Performance Audit Panel -->
+        <div class="audit-chat-panel" id="audit-panel">
+            <div class="audit-chat-header" onclick="shellToggleAudit()">
+                <div>
+                    <div class="audit-chat-title">Performance Audit</div>
+                    <div class="audit-chat-subtitle">Ask questions about Oggy&#39;s performance</div>
+                </div>
+                <span class="audit-toggle-arrow" id="audit-arrow">&#9654;</span>
+            </div>
+            <div class="audit-chat-body" id="audit-body" style="display:none">
+                <div class="audit-chat-messages" id="audit-messages">
+                    <div class="audit-msg audit-msg-bot">Ask me anything about Oggy&#39;s general chat performance.</div>
+                </div>
+                <div class="audit-chat-input-row">
+                    <input type="text" id="audit-input" placeholder="Ask about performance..."
+                           onkeydown="if(event.key===&#39;Enter&#39;)shellSendAudit()">
+                    <button class="btn btn-primary btn-sm" onclick="shellSendAudit()" id="audit-send-btn">Ask</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    </main>
+
+    <script src="/js/app.js?v=2"></script>
+    <script src="/js/inquiries.js?v=2"></script>
+    <script src="/js/agent-shell.js?v=2"></script>
+    <script src="/js/general-chat.js?v=2"></script>
+</body>
+</html>

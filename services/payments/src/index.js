@@ -184,7 +184,12 @@ app.use('/v0/auth', authRouter);
 
 // Serve login page and static assets without auth
 const publicDir = path.join(__dirname, '..', 'public');
-const noCacheStatic = { setHeaders: (res) => { res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate'); } };
+const noCacheStatic = { setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
+} };
 app.get('/login.html', (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.sendFile(path.join(publicDir, 'login.html'));

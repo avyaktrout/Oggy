@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oggy - Enter Food</title>
+    <link rel="stylesheet" href="/css/style.css?v=2">
+</head>
+<body class="app-layout">
+    <header class="topbar" id="topbar"></header>
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+    <main class="main-content">
+    <div class="container">
+        <h1 class="page-title">Track Food &amp; Nutrition</h1>
+
+        <!-- Diet Entry Form -->
+        <div class="diet-entry-panel">
+            <div class="diet-entry-form">
+                <div class="diet-entry-row">
+                    <select id="diet-entry-type" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;min-width:100px">
+                        <option value="food">Food</option>
+                        <option value="liquid">Liquid</option>
+                        <option value="vitamin">Vitamin</option>
+                        <option value="supplement">Supplement</option>
+                    </select>
+                    <select id="diet-meal-type" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;min-width:100px">
+                        <option value="breakfast">Breakfast</option>
+                        <option value="lunch">Lunch</option>
+                        <option value="dinner">Dinner</option>
+                        <option value="snack">Snack</option>
+                        <option value="other">Other</option>
+                    </select>
+                    <input type="text" id="diet-description" placeholder="What did you eat/drink?"
+                           style="flex:1;padding:6px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px"
+                           onkeydown="if(event.key==='Enter')addDietEntry()">
+                    <input type="number" id="diet-quantity" placeholder="Qty" step="0.1"
+                           style="width:60px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+                    <input type="text" id="diet-unit" placeholder="Unit" value="serving"
+                           style="width:70px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+                    <button class="btn btn-primary btn-sm" onclick="addDietEntry()">Add</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Nutrition Summary -->
+        <div class="nutrition-summary">
+            <div class="nutrition-header">
+                <div class="nutrition-title">Today's Nutrition</div>
+                <input type="date" id="diet-date" style="padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px"
+                       onchange="loadDietData()">
+            </div>
+            <div class="nutrition-cards" id="nutrition-cards">
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-calories">0</div>
+                    <div class="nutrition-card-label">Calories</div>
+                </div>
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-protein">0g</div>
+                    <div class="nutrition-card-label">Protein</div>
+                </div>
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-carbs">0g</div>
+                    <div class="nutrition-card-label">Carbs</div>
+                </div>
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-fat">0g</div>
+                    <div class="nutrition-card-label">Fat</div>
+                </div>
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-fiber">0g</div>
+                    <div class="nutrition-card-label">Fiber</div>
+                </div>
+                <div class="nutrition-card">
+                    <div class="nutrition-card-value" id="nc-entries">0</div>
+                    <div class="nutrition-card-label">Entries</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Today's Entries -->
+        <div class="diet-entries-list" id="diet-entries-list">
+            <div style="color:var(--text-muted);font-size:13px;padding:12px 0">No entries yet today. Add food above!</div>
+        </div>
+    </div>
+    </main>
+
+    <script src="/js/app.js?v=2"></script>
+    <script src="/js/diet-enter.js?v=2"></script>
+</body>
+</html>

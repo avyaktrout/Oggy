@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oggy - Diet Chat</title>
+    <link rel="stylesheet" href="/css/style.css?v=2">
+</head>
+<body class="app-layout">
+    <header class="topbar" id="topbar"></header>
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+    <main class="main-content">
+    <div class="container">
+        <div class="chat-title-row">
+            <h1 class="page-title" style="margin-bottom:0">Diet Chat</h1>
+            <div class="chat-controls">
+                <label class="toggle-label" title="When enabled, Oggy learns from this conversation">
+                    <input type="checkbox" id="learn-toggle" onchange="shellToggleLearning(this.checked)">
+                    <span class="toggle-switch"></span>
+                    <span class="toggle-text">Learn from chat</span>
+                </label>
+                <button class="btn btn-sm btn-outline" onclick="shellClearChat()" title="Clear conversation history">Clear Chat</button>
+            </div>
+        </div>
+
+        <div class="chat-container" style="grid-template-columns:1fr">
+            <div class="chat-column">
+                <div class="chat-header">
+                    <span class="dot dot-oggy"></span>
+                    Oggy Diet Agent
+                    <span class="learning-indicator" id="learning-indicator" style="display:none" title="Learning from this conversation">learning</span>
+                </div>
+                <div class="chat-messages" id="oggy-messages">
+                    <div class="chat-msg chat-msg-bot">Hi! I'm Oggy, your diet and nutrition assistant. Tell me what you ate, ask about nutrition, or get personalized diet advice!</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-input-row" style="margin-top:12px">
+            <input type="text" id="chat-input" placeholder="Tell me what you ate, or ask about nutrition..."
+                   onkeydown="if(event.key==='Enter')shellSendChat()">
+            <button class="btn btn-primary" onclick="shellSendChat()" id="chat-send-btn">Send</button>
+        </div>
+    </div>
+    </main>
+
+    <script src="/js/app.js?v=2"></script>
+    <script src="/js/agent-shell.js?v=2"></script>
+    <script src="/js/diet-chat.js?v=2"></script>
+</body>
+</html>
