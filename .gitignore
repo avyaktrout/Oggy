@@ -5,6 +5,7 @@
 
 # Backups
 *.sql.gz
+*.sql
 
 # Node.js
 node_modules/
