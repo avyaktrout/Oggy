@@ -5,7 +5,7 @@ const shell = new AgentShell({
     chatEndpoint: '/v0/diet/chat',
     trainingEndpoint: '/v0/continuous-learning',
     chatPlaceholder: 'Tell me what you ate, or ask about nutrition...',
-    welcomeMessage: 'Hi! I'm Oggy, your diet and nutrition assistant. Tell me what you ate, ask about nutrition, or get personalized diet advice!',
+    welcomeMessage: "Hi! I'm Oggy, your diet and nutrition assistant. Tell me what you ate, ask about nutrition, or get personalized diet advice!",
     contextProvider: async () => ({}),
     capabilities: {
         training: false,
