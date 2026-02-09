@@ -95,6 +95,29 @@ class AgentShell {
         if (this.config.capabilities.training) {
             this._checkRunningTraining();
         }
+
+        // Load inquiry preferences
+        if (this.config.capabilities.inquiries) {
+            this._loadInquiryPreferences();
+        }
+    }
+
+    async _loadInquiryPreferences() {
+        try {
+            const prefs = await apiCall('GET', `/v0/inquiries/preferences?user_id=${USER_ID}`);
+            const toggle = document.getElementById('inquiry-toggle');
+            const limitSelect = document.getElementById('inquiry-limit');
+            if (toggle) toggle.checked = prefs.enabled !== false;
+            if (limitSelect) limitSelect.value = String(prefs.max_questions_per_day || 5);
+        } catch (e) { /* Inquiry system may not be ready */ }
+
+        try {
+            const settings = await apiCall('GET', `/v0/inquiries/suggestion-settings?user_id=${USER_ID}`);
+            const sugToggle = document.getElementById('suggestion-toggle');
+            const sugInterval = document.getElementById('suggestion-interval');
+            if (sugToggle) sugToggle.checked = settings.receive_suggestions === true;
+            if (sugInterval) sugInterval.value = String(settings.suggestion_interval_seconds || 900);
+        } catch (e) { /* Suggestion system may not be ready */ }
     }
 
     _renderNav() {
@@ -134,6 +157,189 @@ class AgentShell {
         if (this.config.capabilities.training) {
             window.shellStartTraining = () => self.startTraining();
             window.shellStopTraining = () => self.stopTraining();
+        }
+
+        // Reset Preferences
+        window.resetPreferences = async function() {
+            if (!confirm('Reset all non-pinned preferences? Pinned preferences (from explicit statements) will be kept.')) return;
+            try {
+                const result = await apiCall('POST', '/v0/preferences/reset', { user_id: USER_ID });
+                showToast(`Preferences reset (${result.reset_count} signals cleared)`);
+            } catch (err) {
+                showToast('Failed to reset: ' + err.message, 'error');
+            }
+        };
+
+        // Inquiry Settings
+        if (this.config.capabilities.inquiries) {
+            window.toggleInquiries = async function(enabled) {
+                try {
+                    await apiCall('PUT', '/v0/inquiries/preferences', { user_id: USER_ID, enabled: enabled });
+                    showToast(enabled ? 'Self-driven inquiries enabled' : 'Self-driven inquiries disabled');
+                } catch (err) { showToast('Failed to update: ' + err.message, 'error'); }
+            };
+            window.updateInquiryLimit = async function(limit) {
+                const val = parseInt(limit);
+                try {
+                    await apiCall('PUT', '/v0/inquiries/preferences', { user_id: USER_ID, max_questions_per_day: val, enabled: val > 0 });
+                    const toggle = document.getElementById('inquiry-toggle');
+                    if (toggle) toggle.checked = val > 0;
+                    showToast(`Daily inquiry limit set to ${val}`);
+                } catch (err) { showToast('Failed to update: ' + err.message, 'error'); }
+            };
+            window.toggleSuggestions = async function(enabled) {
+                try {
+                    await apiCall('PUT', '/v0/inquiries/suggestion-settings', { user_id: USER_ID, receive_suggestions: enabled });
+                    showToast(enabled ? 'Suggestions enabled' : 'Suggestions disabled');
+                } catch (err) { showToast('Failed to update: ' + err.message, 'error'); }
+            };
+            window.updateSuggestionInterval = async function(seconds) {
+                try {
+                    await apiCall('PUT', '/v0/inquiries/suggestion-settings', { user_id: USER_ID, suggestion_interval_seconds: parseInt(seconds) });
+                    showToast('Suggestion frequency updated');
+                } catch (err) { showToast('Failed to update: ' + err.message, 'error'); }
+            };
+        }
+
+        // Observer
+        if (this.config.capabilities.observer) {
+            const loadObserverConfig = async () => {
+                try {
+                    const config = await apiCall('GET', `/v0/observer/config?user_id=${USER_ID}`);
+                    const shareEl = document.getElementById('observer-share');
+                    const sugEl = document.getElementById('observer-suggestions');
+                    const merchEl = document.getElementById('observer-merchant');
+                    if (shareEl) shareEl.checked = config.share_learning === true;
+                    if (sugEl) sugEl.checked = config.receive_observer_suggestions === true;
+                    if (merchEl) merchEl.checked = config.receive_merchant_packs === true;
+                } catch (e) { /* Observer may not be ready */ }
+            };
+            const loadObserverPacks = async () => {
+                const container = document.getElementById('observer-packs');
+                if (!container) return;
+                try {
+                    const data = await apiCall('GET', '/v0/observer/packs');
+                    if (!data.packs || data.packs.length === 0) {
+                        container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px 0">No packs available yet. Run an observer job to generate packs.</div>';
+                        return;
+                    }
+                    container.innerHTML = data.packs.map(pack => {
+                        const riskColor = pack.risk_level === 'low' ? 'var(--success)' : pack.risk_level === 'medium' ? 'var(--warning)' : 'var(--danger)';
+                        const rules = pack.rules || [];
+                        const isApplied = pack.status === 'applied';
+                        const isRolledBack = pack.status === 'rolled_back';
+                        return `<div class="observer-pack-card">
+                            <div class="observer-pack-header"><strong>${pack.name}</strong><span class="observer-risk-badge" style="background:${riskColor}">${pack.risk_level}</span></div>
+                            <div class="observer-pack-meta">${rules.length} rules | ${(pack.categories_covered || []).join(', ') || 'various'} | +${pack.expected_lift || 0}% expected lift</div>
+                            <div class="observer-pack-actions">${isApplied ? `<button class="btn btn-sm btn-danger" onclick="rollbackPack('${pack.pack_id}')">Rollback</button><span style="color:var(--success);font-size:12px">Applied</span>` : isRolledBack ? `<span style="color:var(--text-muted);font-size:12px">Rolled back</span>` : `<button class="btn btn-sm btn-success" onclick="applyPack('${pack.pack_id}')">Apply</button>`}</div>
+                        </div>`;
+                    }).join('');
+                } catch (e) { container.innerHTML = '<div style="color:var(--text-muted);font-size:13px">Failed to load packs</div>'; }
+            };
+            const timeSince = (date) => {
+                const s = Math.floor((Date.now() - date.getTime()) / 1000);
+                if (s < 60) return 'just now';
+                if (s < 3600) return Math.floor(s / 60) + 'm ago';
+                if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+                return Math.floor(s / 86400) + 'd ago';
+            };
+            const loadObserverJobStatus = async () => {
+                try {
+                    const status = await apiCall('GET', '/v0/observer/job-status');
+                    const btn = document.getElementById('observer-run-btn');
+                    const dot = document.querySelector('.observer-status-dot');
+                    const text = document.getElementById('observer-status-text');
+                    const meta = document.getElementById('observer-job-meta');
+                    const autoRunEl = document.getElementById('observer-auto-run');
+                    if (autoRunEl) autoRunEl.checked = status.auto_run_active;
+                    if (status.is_running) {
+                        if (dot) dot.className = 'observer-status-dot observer-status-running';
+                        if (text) text.textContent = 'Running...';
+                        if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+                    } else if (status.ready) {
+                        if (dot) dot.className = 'observer-status-dot observer-status-ready';
+                        if (text) text.textContent = 'Ready';
+                        if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+                    } else {
+                        if (dot) dot.className = 'observer-status-dot observer-status-unavailable';
+                        if (text) text.textContent = 'Unavailable';
+                        if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+                    }
+                    const parts = [];
+                    parts.push(`${status.sharing_tenants} tenant${status.sharing_tenants !== 1 ? 's' : ''} sharing`);
+                    if (status.last_run) {
+                        parts.push(`last run ${timeSince(new Date(status.last_run))}`);
+                        if (status.last_packs_generated > 0) parts.push(`${status.last_packs_generated} packs`);
+                    } else { parts.push('never run'); }
+                    if (status.reason && !status.ready) parts.push(status.reason);
+                    if (meta) meta.textContent = parts.join(' · ');
+                } catch (e) { /* Observer may not be ready */ }
+            };
+            window.toggleObserverPanel = function() {
+                const body = document.getElementById('observer-body');
+                const arrow = document.getElementById('observer-arrow');
+                if (body.style.display === 'none') {
+                    body.style.display = 'block';
+                    arrow.innerHTML = '&#9660;';
+                    loadObserverConfig();
+                    loadObserverJobStatus();
+                    loadObserverPacks();
+                } else {
+                    body.style.display = 'none';
+                    arrow.innerHTML = '&#9654;';
+                }
+            };
+            window.updateObserverConfig = async function(field, value) {
+                try {
+                    const update = { user_id: USER_ID };
+                    update[field] = value;
+                    await apiCall('PUT', '/v0/observer/config', update);
+                    showToast('Observer setting updated');
+                } catch (err) { showToast('Failed to update: ' + err.message, 'error'); }
+            };
+            window.toggleObserverAutoRun = async function(enabled) {
+                try {
+                    if (enabled) {
+                        await apiCall('POST', '/v0/observer/run-job', { start_schedule: true });
+                        showToast('Observer auto-run enabled (every 6h)');
+                    } else {
+                        await apiCall('POST', '/v0/observer/run-job', { stop_schedule: true });
+                        showToast('Observer auto-run disabled');
+                    }
+                    loadObserverJobStatus();
+                } catch (err) { showToast('Failed: ' + err.message, 'error'); }
+            };
+            window.runObserverJob = async function() {
+                try {
+                    const btn = document.getElementById('observer-run-btn');
+                    if (btn) { btn.disabled = true; btn.textContent = 'Running...'; }
+                    const result = await apiCall('POST', '/v0/observer/run-job', {});
+                    showToast(`Observer job complete: ${result.packs_generated} packs generated`);
+                    if (btn) btn.textContent = 'Run Now';
+                    loadObserverPacks();
+                    loadObserverJobStatus();
+                } catch (err) {
+                    showToast('Observer job failed: ' + err.message, 'error');
+                    const btn = document.getElementById('observer-run-btn');
+                    if (btn) btn.textContent = 'Run Now';
+                    loadObserverJobStatus();
+                }
+            };
+            window.applyPack = async function(packId) {
+                try {
+                    const result = await apiCall('POST', '/v0/observer/import-pack', { pack_id: packId, user_id: USER_ID });
+                    showToast(`Pack applied: ${result.rules_applied} rules, ${result.cards_created} memory cards created`);
+                    loadObserverPacks();
+                } catch (err) { showToast('Failed to apply pack: ' + err.message, 'error'); }
+            };
+            window.rollbackPack = async function(packId) {
+                if (!confirm('Rollback this observer pack? This will zero out the memory cards it created.')) return;
+                try {
+                    const result = await apiCall('POST', '/v0/observer/rollback-pack', { pack_id: packId, user_id: USER_ID });
+                    showToast(`Pack rolled back: ${result.cards_rolled_back} cards affected`);
+                    loadObserverPacks();
+                } catch (err) { showToast('Failed to rollback: ' + err.message, 'error'); }
+            };
         }
 
         // Audit

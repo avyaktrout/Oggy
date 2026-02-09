@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS domain_knowledge (
     content_structured JSONB,  -- optional structured representation
 
     -- Provenance
-    source_type TEXT NOT NULL,  -- 'user_note' | 'system_spec' | 'doc_extract' | 'app_event' | 'external_ref'
+    source_type TEXT NOT NULL,  -- 'user_note' | 'system_spec' | 'doc_extract' | 'app_event' | 'external_ref' | 'tessa_ai'
     source_ref TEXT NOT NULL,  -- pointer to source (e.g., 'app_event:uuid', 'file:hash', 'doc:anchor')
 
     -- Assessment generation metadata
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS domain_knowledge (
 
     -- Constraints
     CONSTRAINT valid_domain CHECK (domain IN ('payments', 'diet', 'conversation', 'system')),
-    CONSTRAINT valid_source_type CHECK (source_type IN ('user_note', 'system_spec', 'doc_extract', 'app_event', 'external_ref')),
+    CONSTRAINT valid_source_type CHECK (source_type IN ('user_note', 'system_spec', 'doc_extract', 'app_event', 'external_ref', 'tessa_ai')),
     CONSTRAINT valid_visibility CHECK (visibility IN ('tessa_only', 'shareable')),
     CONSTRAINT valid_difficulty CHECK (difficulty_band BETWEEN 1 AND 5)
 );

@@ -17,7 +17,7 @@ const shell = new AgentShell({
         training: true,
         comparison: true,
         inquiries: true,
-        observer: false,
+        observer: true,
         audit: true
     }
 });
