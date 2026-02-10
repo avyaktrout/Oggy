@@ -94,6 +94,20 @@ class AuthService {
     }
 
     /**
+     * Check if a magic link token is still valid (without consuming it).
+     * Used by GET /verify to show the sign-in page vs expired page.
+     */
+    async checkMagicLinkValid(token) {
+        const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+        const result = await query(
+            `SELECT 1 FROM auth_magic_links
+             WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()`,
+            [tokenHash]
+        );
+        return result.rows.length > 0;
+    }
+
+    /**
      * Verify a magic link token and create a session.
      * Returns session info or error.
      */

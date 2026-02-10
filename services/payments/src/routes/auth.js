@@ -42,23 +42,75 @@ router.post('/request-magic-link', async (req, res) => {
     }
 });
 
-// GET /v0/auth/verify?token=xxx
+// GET /v0/auth/verify?token=xxx — landing page (safe for email prefetchers)
 router.get('/verify', async (req, res) => {
     const { token } = req.query;
     if (!token) return res.status(400).send('Missing token');
+
+    // Check if token is still valid WITHOUT consuming it
+    const valid = await authService.checkMagicLinkValid(token);
+
+    if (!valid) {
+        return res.send(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Oggy - Login</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8fafc}
+  .card{background:#fff;border-radius:16px;padding:40px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.08);max-width:400px;width:90%}
+  h2{color:#1e293b;margin-bottom:8px}
+  p{color:#64748b;margin-bottom:24px}
+  a{display:inline-block;padding:12px 32px;background:#3b82f6;color:#fff;text-decoration:none;border-radius:8px;font-weight:600}
+  a:hover{background:#2563eb}
+</style></head><body><div class="card">
+  <h2>Link Expired</h2>
+  <p>This login link has expired or already been used.</p>
+  <a href="/login.html">Request a New Link</a>
+</div></body></html>`);
+    }
+
+    // Show sign-in button — token is only consumed when the button is clicked (POST)
+    res.send(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Oggy - Sign In</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8fafc}
+  .card{background:#fff;border-radius:16px;padding:40px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.08);max-width:400px;width:90%}
+  h2{color:#1e293b;margin-bottom:8px}
+  p{color:#64748b;margin-bottom:24px}
+  button{padding:14px 40px;background:#3b82f6;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;width:100%}
+  button:hover{background:#2563eb}
+  button:disabled{background:#94a3b8;cursor:not-allowed}
+  .error{color:#ef4444;margin-top:16px;display:none}
+</style></head><body><div class="card">
+  <h2>Welcome to Oggy</h2>
+  <p>Tap the button below to sign in.</p>
+  <button id="btn" onclick="signIn()">Sign In</button>
+  <p class="error" id="err"></p>
+</div>
+<script>
+async function signIn(){
+  var btn=document.getElementById('btn'),err=document.getElementById('err');
+  btn.disabled=true;btn.textContent='Signing in...';err.style.display='none';
+  try{
+    var r=await fetch('/v0/auth/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:'${token}'}),credentials:'include'});
+    if(r.ok){window.location.href='/';}
+    else{var d=await r.json();err.textContent=d.error||'Login failed';err.style.display='block';btn.disabled=false;btn.textContent='Sign In';}
+  }catch(e){err.textContent='Network error. Please try again.';err.style.display='block';btn.disabled=false;btn.textContent='Sign In';}
+}
+</script></body></html>`);
+});
+
+// POST /v0/auth/verify — actually consume token and set cookie
+router.post('/verify', async (req, res) => {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'Missing token' });
 
     try {
         const ip = req.ip || req.connection.remoteAddress;
         const result = await authService.verifyMagicLink(token, ip);
 
         if (result.error) {
-            return res.status(400).send(`
-                <html><body style="font-family:sans-serif;text-align:center;padding:60px">
-                    <h2>Link Invalid or Expired</h2>
-                    <p>This login link has expired or already been used.</p>
-                    <a href="/login.html">Request a new link</a>
-                </body></html>
-            `);
+            return res.status(400).json({ error: 'Link expired or already used. Please request a new one.' });
         }
 
         // Set session cookie
@@ -70,16 +122,15 @@ router.get('/verify', async (req, res) => {
             `Max-Age=${7 * 24 * 60 * 60}` // 7 days
         ];
 
-        // Add Secure flag in production
         if (req.protocol === 'https' || process.env.NODE_ENV === 'production') {
             cookieOpts.push('Secure');
         }
 
         res.setHeader('Set-Cookie', cookieOpts.join('; '));
-        res.redirect('/');
+        res.json({ success: true });
     } catch (error) {
         logger.logError(error, { operation: 'verify-magic-link', requestId: req.requestId });
-        res.status(500).send('Verification failed');
+        res.status(500).json({ error: 'Verification failed' });
     }
 });
 
