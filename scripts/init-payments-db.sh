@@ -24,7 +24,7 @@ done
 echo "✅ PostgreSQL is ready"
 
 # Apply schema files in order
-SCHEMA_DIR="./services/payments/db/init"
+SCHEMA_DIR="./services/applications/db/init"
 
 for sql_file in $(ls -1 $SCHEMA_DIR/*.sql | sort); do
     echo "📝 Applying: $(basename $sql_file)"

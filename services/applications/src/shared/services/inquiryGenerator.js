@@ -133,7 +133,7 @@ class InquiryGenerator {
                 `SELECT DISTINCT merchant, description, amount
                  FROM expenses
                  WHERE user_id = $1 AND status = 'active'
-                   AND (category IS NULL OR category = 'uncategorized')
+                   AND (category IS NULL OR category = '' OR category = 'uncategorized')
                    AND merchant IS NOT NULL
                  LIMIT 5`,
                 [userId]
@@ -214,7 +214,7 @@ class InquiryGenerator {
                         AVG(amount) as avg_amount
                  FROM expenses
                  WHERE user_id = $1 AND status = 'active'
-                   AND category IS NOT NULL AND category != 'uncategorized'
+                   AND category IS NOT NULL AND category != '' AND category != 'uncategorized'
                    AND transaction_date >= CURRENT_DATE - INTERVAL '90 days'
                  GROUP BY category
                  HAVING SUM(amount) > 100
@@ -440,7 +440,7 @@ class InquiryGenerator {
                     const updated = await query(
                         `UPDATE expenses SET category = $1
                          WHERE user_id = $2 AND merchant = $3
-                           AND (category IS NULL OR category = 'uncategorized')
+                           AND (category IS NULL OR category = '' OR category = 'uncategorized')
                            AND status = 'active'`,
                         [answer, userId, merchant]
                     );

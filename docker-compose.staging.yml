@@ -82,7 +82,7 @@ services:
 
   application-service:
     build:
-      context: ./services/payments
+      context: ./services/applications
       dockerfile: Dockerfile
     container_name: oggy-application-service
     restart: always

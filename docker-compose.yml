@@ -87,7 +87,7 @@ services:
   # Application Service (Node.js) - Payments, General Assistant, Diet Agent
   application-service:
     build:
-      context: ./services/payments
+      context: ./services/applications
       dockerfile: Dockerfile
     container_name: oggy-application-service
     restart: unless-stopped
@@ -123,7 +123,7 @@ services:
     ports:
       - "3001:3001"
     volumes:
-      - ./services/payments:/app
+      - ./services/applications:/app
       - /app/node_modules
     depends_on:
       postgres:

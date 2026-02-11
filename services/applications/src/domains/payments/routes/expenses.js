@@ -25,10 +25,11 @@ router.post('/', async (req, res) => {
             description,
             merchant,
             transaction_date,
-            category = null,
+            category: rawCategory = null,
             tags = [],
             notes = null
         } = req.body;
+        const category = rawCategory || null; // Normalize empty string to null
 
         // Validation
         if (!user_id || !amount || !description || !transaction_date) {
