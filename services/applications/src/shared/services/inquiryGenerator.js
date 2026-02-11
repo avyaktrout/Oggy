@@ -325,12 +325,17 @@ class InquiryGenerator {
         }
 
         // Check for duplicate questions (use merchant or category as dedup key)
+        // For uncategorized/confirmation types: only dedup against pending (not answered),
+        // because a previous answer may not have taken effect (expense still uncategorized)
         const dedupKey = source.merchant || source.category || questionType;
+        const dedupStatuses = (questionType === 'uncategorized_expense' || questionType === 'high_confidence_confirmation')
+            ? "('pending')"
+            : "('pending', 'answered')";
         const existing = await query(
             `SELECT 1 FROM oggy_inquiries
              WHERE user_id = $1 AND question_type = $2
              AND (context->>'merchant' = $3 OR context->>'category' = $3)
-             AND status IN ('pending', 'answered') AND created_at > now() - INTERVAL '30 days'`,
+             AND status IN ${dedupStatuses} AND created_at > now() - INTERVAL '30 days'`,
             [userId, questionType, dedupKey]
         );
         if (existing.rows.length > 0) return null;
@@ -374,12 +379,31 @@ class InquiryGenerator {
         const merchant = inquiry.context?.merchant;
         const category = inquiry.context?.category;
 
-        // Always create memory card from the answer
+        // Update uncategorized expenses FIRST (independent of memory service)
+        if (merchant && (inquiry.question_type === 'uncategorized_expense' || inquiry.question_type === 'high_confidence_confirmation')) {
+            try {
+                const updated = await query(
+                    `UPDATE expenses SET category = $1
+                     WHERE user_id = $2 AND merchant = $3
+                       AND (category IS NULL OR category = '' OR category = 'uncategorized')
+                       AND status = 'active'`,
+                    [answer, userId, merchant]
+                );
+                if (updated.rowCount > 0) {
+                    logger.info('Updated uncategorized expenses from inquiry', {
+                        merchant, category: answer, count: updated.rowCount
+                    });
+                }
+            } catch (updateErr) {
+                logger.warn('Failed to update expenses from inquiry', { error: updateErr.message });
+            }
+        }
+
+        // Create memory card from the answer (optional, doesn't block expense update)
         try {
             let cardContent, cardKind, cardTags;
 
             if (merchant && answer) {
-                // Merchant-specific memory (categorization preference)
                 cardKind = 'expense_category_correction';
                 cardContent = {
                     type: 'BENCHMARK_CORRECTION',
@@ -392,7 +416,6 @@ class InquiryGenerator {
                 };
                 cardTags = ['payments', 'categorization', 'user_preference', answer, merchant.toLowerCase()];
             } else {
-                // General preference memory (cost-cutting, spending patterns, etc.)
                 cardKind = 'user_preference';
                 cardContent = {
                     type: 'PATTERN',
@@ -433,26 +456,6 @@ class InquiryGenerator {
                 inquiry_id: inquiryId, merchant, category, answer, card_id: cardId,
                 question_type: inquiry.question_type
             });
-
-            // Also update uncategorized expenses for this merchant
-            if (merchant && (inquiry.question_type === 'uncategorized_expense' || inquiry.question_type === 'high_confidence_confirmation')) {
-                try {
-                    const updated = await query(
-                        `UPDATE expenses SET category = $1
-                         WHERE user_id = $2 AND merchant = $3
-                           AND (category IS NULL OR category = '' OR category = 'uncategorized')
-                           AND status = 'active'`,
-                        [answer, userId, merchant]
-                    );
-                    if (updated.rowCount > 0) {
-                        logger.info('Updated uncategorized expenses from inquiry', {
-                            merchant, category: answer, count: updated.rowCount
-                        });
-                    }
-                } catch (updateErr) {
-                    logger.warn('Failed to update expenses from inquiry', { error: updateErr.message });
-                }
-            }
         } catch (err) {
             logger.warn('Failed to create memory from inquiry', { error: err.message });
         }

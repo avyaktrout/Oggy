@@ -31,6 +31,23 @@ CREATE TABLE IF NOT EXISTS oggy_inquiry_preferences (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Ensure constraint includes high_confidence_confirmation (CREATE TABLE IF NOT EXISTS won't update existing constraints)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'oggy_inquiries'::regclass
+        AND conname = 'valid_question_type'
+        AND pg_get_constraintdef(oid) LIKE '%high_confidence_confirmation%'
+    ) THEN
+        ALTER TABLE oggy_inquiries DROP CONSTRAINT IF EXISTS valid_question_type;
+        ALTER TABLE oggy_inquiries ADD CONSTRAINT valid_question_type CHECK (question_type IN (
+            'ambiguous_merchant', 'category_confusion', 'spending_pattern', 'preference',
+            'uncategorized_expense', 'cost_cutting', 'high_confidence_confirmation'
+        ));
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_inquiries_user_status
     ON oggy_inquiries (user_id, status) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_inquiries_user_date

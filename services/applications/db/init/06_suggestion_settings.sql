@@ -15,7 +15,7 @@ ALTER TABLE oggy_inquiries
 ALTER TABLE oggy_inquiries DROP CONSTRAINT IF EXISTS valid_question_type;
 ALTER TABLE oggy_inquiries ADD CONSTRAINT valid_question_type CHECK (question_type IN (
     'ambiguous_merchant', 'category_confusion', 'spending_pattern', 'preference',
-    'uncategorized_expense', 'cost_cutting'
+    'uncategorized_expense', 'cost_cutting', 'high_confidence_confirmation'
 ));
 
 -- Suggestion telemetry
