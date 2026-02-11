@@ -18,7 +18,7 @@ window.changeDate = function(delta) {
     const input = document.getElementById('nutrition-date');
     const d = new Date(input.value);
     d.setDate(d.getDate() + delta);
-    input.value = d.toISOString().split('T')[0];
+    input.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     loadNutritionPage();
 };
 

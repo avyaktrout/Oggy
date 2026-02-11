@@ -48,6 +48,61 @@ async function loadNutritionSummary(date) {
     } catch (e) { /* ignore */ }
 }
 
+window.deleteDietEntry = async function(entryId) {
+    if (!confirm('Delete this entry?')) return;
+    try {
+        await apiCall('DELETE', '/v0/diet/entries/' + entryId + '?user_id=' + USER_ID);
+        showToast('Entry deleted');
+        loadDietData();
+    } catch (err) {
+        showToast('Failed to delete: ' + err.message, 'error');
+    }
+};
+
+window.editDietNutrition = function(entryId, currentData) {
+    // Close any other open edit form
+    document.querySelectorAll('.diet-edit-form').forEach(el => el.remove());
+
+    const card = document.querySelector('[data-entry-id="' + entryId + '"]');
+    if (!card) return;
+
+    const form = document.createElement('div');
+    form.className = 'diet-edit-form';
+    form.innerHTML =
+        '<div class="diet-edit-fields">' +
+            '<label>Cal<input type="number" id="edit-cal-' + entryId + '" value="' + (currentData.calories || 0) + '"></label>' +
+            '<label>Protein<input type="number" id="edit-pro-' + entryId + '" value="' + (currentData.protein_g || 0) + '"></label>' +
+            '<label>Carbs<input type="number" id="edit-carb-' + entryId + '" value="' + (currentData.carbs_g || 0) + '"></label>' +
+            '<label>Fat<input type="number" id="edit-fat-' + entryId + '" value="' + (currentData.fat_g || 0) + '"></label>' +
+            '<label>Fiber<input type="number" id="edit-fib-' + entryId + '" value="' + (currentData.fiber_g || 0) + '"></label>' +
+        '</div>' +
+        '<div class="diet-edit-actions">' +
+            '<button class="diet-edit-save" onclick="saveDietNutrition(\'' + entryId + '\')">Save</button>' +
+            '<button class="diet-edit-cancel" onclick="this.closest(\'.diet-edit-form\').remove()">Cancel</button>' +
+        '</div>';
+    card.appendChild(form);
+};
+
+window.saveDietNutrition = async function(entryId) {
+    const data = {
+        user_id: USER_ID,
+        calories: parseFloat(document.getElementById('edit-cal-' + entryId).value) || 0,
+        protein_g: parseFloat(document.getElementById('edit-pro-' + entryId).value) || 0,
+        carbs_g: parseFloat(document.getElementById('edit-carb-' + entryId).value) || 0,
+        fat_g: parseFloat(document.getElementById('edit-fat-' + entryId).value) || 0,
+        fiber_g: parseFloat(document.getElementById('edit-fib-' + entryId).value) || 0,
+        sugar_g: 0,
+        sodium_mg: 0
+    };
+    try {
+        await apiCall('PUT', '/v0/diet/entries/' + entryId + '/nutrition', data);
+        showToast('Nutrition updated!');
+        loadDietData();
+    } catch (err) {
+        showToast('Failed: ' + err.message, 'error');
+    }
+};
+
 async function loadEntries(date) {
     const container = document.getElementById('diet-entries-list');
     try {
@@ -58,8 +113,14 @@ async function loadEntries(date) {
         }
         container.innerHTML = data.entries.map(e => {
             const items = e.items && e.items[0] ? e.items : [];
-            const cal = items.length > 0 ? Math.round(items[0].calories || 0) : '?';
-            return '<div class="diet-entry-card">' +
+            const item = items.length > 0 ? items[0] : {};
+            const cal = items.length > 0 ? Math.round(item.calories || 0) : '?';
+            const pro = items.length > 0 ? Math.round(item.protein_g || 0) : '?';
+            const itemJson = items.length > 0 ? JSON.stringify({
+                calories: item.calories || 0, protein_g: item.protein_g || 0,
+                carbs_g: item.carbs_g || 0, fat_g: item.fat_g || 0, fiber_g: item.fiber_g || 0
+            }).replace(/"/g, '&quot;') : '{}';
+            return '<div class="diet-entry-card" data-entry-id="' + e.entry_id + '">' +
                 '<div class="diet-entry-info">' +
                     '<span class="diet-entry-type-badge">' + e.entry_type + '</span>' +
                     '<span class="diet-entry-desc">' + e.description + '</span>' +
@@ -67,7 +128,10 @@ async function loadEntries(date) {
                 '</div>' +
                 '<div class="diet-entry-nutrition">' +
                     '<span class="diet-entry-cal">' + cal + ' kcal</span>' +
+                    '<span class="diet-entry-pro">' + pro + 'g pro</span>' +
+                    '<button class="diet-entry-edit" onclick="editDietNutrition(\'' + e.entry_id + '\', ' + itemJson + ')" title="Edit nutrition">&#9998;</button>' +
                     '<span class="diet-entry-meal">' + (e.meal_type || '') + '</span>' +
+                    '<button class="diet-entry-delete" onclick="deleteDietEntry(\'' + e.entry_id + '\')" title="Delete">&times;</button>' +
                 '</div>' +
             '</div>';
         }).join('');

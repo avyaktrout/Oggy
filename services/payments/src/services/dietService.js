@@ -113,6 +113,29 @@ class DietService {
         return result.rows[0];
     }
 
+    async updateNutrition(userId, entryId, nutritionData) {
+        // Verify entry belongs to user
+        const check = await query('SELECT entry_id FROM v3_diet_entries WHERE entry_id = $1 AND user_id = $2', [entryId, userId]);
+        if (check.rows.length === 0) throw new Error('Entry not found');
+
+        const { calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg } = nutritionData;
+        const result = await query(
+            `UPDATE v3_diet_items SET calories = $1, protein_g = $2, carbs_g = $3, fat_g = $4,
+             fiber_g = $5, sugar_g = $6, sodium_mg = $7, source = 'user_corrected'
+             WHERE entry_id = $8 RETURNING *`,
+            [calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, entryId]
+        );
+        if (result.rowCount === 0) throw new Error('No nutrition item found for this entry');
+        return result.rows[0];
+    }
+
+    async deleteEntry(userId, entryId) {
+        // Delete items first (FK), then entry — scoped by user_id for safety
+        await query(`DELETE FROM v3_diet_items WHERE entry_id = $1 AND entry_id IN (SELECT entry_id FROM v3_diet_entries WHERE user_id = $2)`, [entryId, userId]);
+        const result = await query(`DELETE FROM v3_diet_entries WHERE entry_id = $1 AND user_id = $2`, [entryId, userId]);
+        if (result.rowCount === 0) throw new Error('Entry not found');
+    }
+
     // --- Rules Management ---
     async addRule(userId, ruleData) {
         const { rule_type, description, target_nutrient, target_value, target_unit } = ruleData;
@@ -144,15 +167,29 @@ class DietService {
         const { conversation_history = [], learn_from_chat = false } = options;
         const startTime = Date.now();
 
-        // Get today's nutrition summary
-        const today = new Date().toISOString().split('T')[0];
+        // Get today's nutrition summary (check today + yesterday to handle UTC vs local timezone)
+        const now = new Date();
+        const today = now.toISOString().split('T')[0];
+        const yesterday = new Date(now.getTime() - 86400000).toISOString().split('T')[0];
         let nutritionContext = '';
         try {
-            const summary = await this.getNutritionSummary(userId, today);
-            const entries = await this.getEntries(userId, today);
+            let summary = await this.getNutritionSummary(userId, today);
+            let entries = await this.getEntries(userId, today);
+            let dateLabel = today;
+
+            // If no entries for UTC today, check yesterday (user may be in an earlier timezone)
+            if ((!entries || entries.length === 0) && yesterday !== today) {
+                const ySummary = await this.getNutritionSummary(userId, yesterday);
+                const yEntries = await this.getEntries(userId, yesterday);
+                if (yEntries && yEntries.length > 0) {
+                    summary = ySummary;
+                    entries = yEntries;
+                    dateLabel = yesterday;
+                }
+            }
             const rules = await this.getRules(userId);
 
-            nutritionContext = `\n# Today's Nutrition (${today})
+            nutritionContext = `\n# Today's Nutrition (${dateLabel})
 Entries: ${summary.total_entries}
 Calories: ${Math.round(summary.total_calories)} kcal
 Protein: ${Math.round(summary.total_protein)}g | Carbs: ${Math.round(summary.total_carbs)}g | Fat: ${Math.round(summary.total_fat)}g
@@ -202,44 +239,70 @@ ${memoryContext}
 
 Be helpful, encourage healthy choices, and use the user's tracked data when relevant.`;
 
-        await costGovernor.checkBudget(3000);
+        await costGovernor.checkBudget(6000);
 
-        const messages = [
+        const oggyMessages = [
             { role: 'system', content: systemPrompt },
             ...conversation_history.slice(-10),
             { role: 'user', content: message }
         ];
 
-        const oggyResolved = await providerResolver.getAdapter(userId, 'oggy');
-        const oggyResult = await this.openaiBreaker.execute(() =>
-            oggyResolved.adapter.chatCompletion({
-                model: oggyResolved.model,
-                messages,
-                temperature: 0.7,
-                max_tokens: 1000
-            })
-        );
+        const baseMessages = [
+            { role: 'system', content: `You are a diet and nutrition assistant. Help users with food tracking and nutrition advice. Be concise and helpful.${nutritionContext}` },
+            ...conversation_history.slice(-10),
+            { role: 'user', content: message }
+        ];
 
-        const oggyText = oggyResult.text;
-        costGovernor.recordUsage(oggyResult.tokens_used || Math.ceil((systemPrompt.length + message.length + oggyText.length) / 4));
-        providerResolver.logRequest(userId, oggyResolved.provider, oggyResolved.model, 'oggy', 'dietChat', oggyResult.tokens_used, oggyResult.latency_ms, true, null);
+        // Run Oggy and Base in parallel
+        const [oggyResult, baseResult] = await Promise.all([
+            (async () => {
+                const oggyResolved = await providerResolver.getAdapter(userId, 'oggy');
+                return this.openaiBreaker.execute(() =>
+                    oggyResolved.adapter.chatCompletion({
+                        model: oggyResolved.model,
+                        messages: oggyMessages,
+                        temperature: 0.7,
+                        max_tokens: 1000
+                    })
+                ).then(r => {
+                    costGovernor.recordUsage(r.tokens_used || 800);
+                    providerResolver.logRequest(userId, oggyResolved.provider, oggyResolved.model, 'oggy', 'dietChat', r.tokens_used, r.latency_ms, true, null);
+                    return { text: r.text, used_memory: memoryCards.length > 0 };
+                });
+            })(),
+            (async () => {
+                try {
+                    const baseResolved = await providerResolver.getAdapter(userId, 'base');
+                    const r = await baseResolved.adapter.chatCompletion({
+                        model: baseResolved.model,
+                        messages: baseMessages,
+                        temperature: 0.7,
+                        max_tokens: 1000
+                    });
+                    costGovernor.recordUsage(r.tokens_used || 800);
+                    providerResolver.logRequest(userId, baseResolved.provider, baseResolved.model, 'base', 'dietChat', r.tokens_used, r.latency_ms, true, null);
+                    return { text: r.text };
+                } catch (err) {
+                    logger.debug('Base diet chat failed', { error: err.message });
+                    return { text: 'Sorry, I encountered an error. Please try again.' };
+                }
+            })()
+        ]);
 
         // Store chat message
         try {
             await query(
                 `INSERT INTO v3_diet_chat_messages (user_id, role, content, oggy_response, used_memory, trace_id)
                  VALUES ($1, 'user', $2, false, false, NULL), ($1, 'assistant', $3, true, $4, $5)`,
-                [userId, message, oggyText, memoryCards.length > 0, traceId]
+                [userId, message, oggyResult.text, memoryCards.length > 0, traceId]
             );
         } catch (err) {
             logger.debug('Failed to store diet chat message', { error: err.message });
         }
 
         return {
-            oggy_response: {
-                text: oggyText,
-                used_memory: memoryCards.length > 0
-            },
+            oggy_response: oggyResult,
+            base_response: baseResult,
             trace_id: traceId,
             latency_ms: Date.now() - startTime
         };
@@ -248,9 +311,26 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
     // --- Nutrition Analysis (AI) ---
     async _analyzeNutrition(description, quantity, unit, userId) {
         try {
+            // Check for previous user-corrected entry with same description
+            if (userId) {
+                const prev = await query(
+                    `SELECT i.calories, i.protein_g, i.carbs_g, i.fat_g, i.fiber_g, i.sugar_g, i.sodium_mg
+                     FROM v3_diet_items i
+                     JOIN v3_diet_entries e ON i.entry_id = e.entry_id
+                     WHERE e.user_id = $1 AND i.source = 'user_corrected' AND LOWER(e.description) = LOWER($2)
+                     ORDER BY e.created_at DESC LIMIT 1`,
+                    [userId, description]
+                );
+                if (prev.rows.length > 0) {
+                    logger.debug('Using user-corrected nutrition for: ' + description);
+                    return prev.rows[0];
+                }
+            }
+
             await costGovernor.checkBudget(1000);
 
             const prompt = `Estimate the nutritional content of: "${description}"${quantity ? ` (${quantity} ${unit || 'serving'})` : ''}.
+If this matches a known brand product (e.g. Core Power, Fairlife, Muscle Milk, Premier Protein, etc.), use the actual nutritional facts from that product. Use real data over estimates whenever possible.
 Respond in JSON only (no markdown):
 {"calories":0,"protein_g":0,"carbs_g":0,"fat_g":0,"fiber_g":0,"sugar_g":0,"sodium_mg":0}`;
 
@@ -261,7 +341,7 @@ Respond in JSON only (no markdown):
             const result = await resolved.adapter.chatCompletion({
                 model: resolved.model,
                 messages: [
-                    { role: 'system', content: 'You are a nutrition expert. Estimate nutritional values accurately. Respond with JSON only.' },
+                    { role: 'system', content: 'You are a nutrition expert with knowledge of popular food brands and their exact nutritional labels. When a food matches a known brand or product, use the actual nutrition facts from the label. Only estimate when the food is homemade or unbranded. Respond with JSON only.' },
                     { role: 'user', content: prompt }
                 ],
                 temperature: 0.2,

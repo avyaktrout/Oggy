@@ -77,6 +77,30 @@ router.delete('/rules/:id', async (req, res) => {
     }
 });
 
+// Update nutrition on a diet entry
+router.put('/entries/:id/nutrition', async (req, res) => {
+    try {
+        const userId = req.userId || req.query.user_id || req.body.user_id;
+        const item = await dietService.updateNutrition(userId, req.params.id, req.body);
+        res.json({ success: true, item });
+    } catch (err) {
+        logger.logError(err, { operation: 'v3-update-nutrition' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Delete a diet entry
+router.delete('/entries/:id', async (req, res) => {
+    try {
+        const userId = req.userId || req.query.user_id;
+        await dietService.deleteEntry(userId, req.params.id);
+        res.json({ success: true });
+    } catch (err) {
+        logger.logError(err, { operation: 'v3-delete-entry' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Diet chat
 router.post('/chat', async (req, res) => {
     try {

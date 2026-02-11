@@ -96,7 +96,8 @@ function formatCategory(cat) {
 }
 
 function todayStr() {
-    return new Date().toISOString().split('T')[0];
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 // --- Toast notifications ---
@@ -128,7 +129,7 @@ const SIDEBAR_APPS = [
     {
         id: 'general', label: 'General Assistant',
         pages: [
-            { id: 'chat', label: 'Chat', href: '/general-chat.html' },
+            { id: 'chat', label: 'Chat & Training', href: '/general-chat.html' },
             { id: 'projects', label: 'Projects', href: '/general-projects.html' },
             { id: 'analytics', label: 'Analytics', href: '/general-analytics.html' }
         ]
@@ -138,7 +139,7 @@ const SIDEBAR_APPS = [
         pages: [
             { id: 'enter', label: 'Enter Food', href: '/diet-enter.html' },
             { id: 'nutrition', label: 'View Nutrition', href: '/diet-nutrition.html' },
-            { id: 'chat', label: 'Chat', href: '/diet-chat.html' },
+            { id: 'chat', label: 'Chat & Training', href: '/diet-chat.html' },
             { id: 'analytics', label: 'Analytics', href: '/diet-analytics.html' }
         ]
     }
