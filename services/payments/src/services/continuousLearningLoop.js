@@ -23,6 +23,24 @@ const serviceHealthManager = require('./serviceHealthManager');
 const categoryRulesManager = require('./categoryRulesManager');
 const tessaAssessmentGenerator = require('./tessaAssessmentGenerator');
 const adaptiveDifficultyScaler = require('./adaptiveDifficultyScaler'); // { getInstance }
+
+// Domain-specific training modules (lazy-loaded to avoid circular deps)
+let dietSelfDrivenLearning, dietBenchmarkGenerator, dietBenchmarkEvaluator;
+let conversationSelfDrivenLearning, conversationBenchmarkGenerator, conversationBenchmarkEvaluator;
+function _loadDietModules() {
+    if (!dietSelfDrivenLearning) {
+        dietSelfDrivenLearning = require('./dietSelfDrivenLearning');
+        dietBenchmarkGenerator = require('./dietBenchmarkGenerator');
+        dietBenchmarkEvaluator = require('./dietBenchmarkEvaluator');
+    }
+}
+function _loadConversationModules() {
+    if (!conversationSelfDrivenLearning) {
+        conversationSelfDrivenLearning = require('./conversationSelfDrivenLearning');
+        conversationBenchmarkGenerator = require('./conversationBenchmarkGenerator');
+        conversationBenchmarkEvaluator = require('./conversationBenchmarkEvaluator');
+    }
+}
 const logger = require('../utils/logger');
 const correctionValidator = require('../utils/correctionValidator');
 const { getReporter } = require('./trainingReporter');
@@ -38,6 +56,7 @@ class ContinuousLearningLoop {
     constructor() {
         this.isRunning = false;
         this.userId = null;
+        this.domain = 'payments';  // Training domain: 'payments', 'diet', 'general'
         this.sessionGeneration = 0;  // Prevents old async loops from affecting new sessions
         this.stats = {
             total_questions: 0,
@@ -128,6 +147,24 @@ class ContinuousLearningLoop {
                 complexity_factors: ['multi_valid_categories', 'temporal_context', 'user_intent_inference', 'chained_transactions']
             }
         };
+
+        // Diet-specific scale complexity
+        this.dietScaleComplexity = {
+            1: { name: 'Foundation', description: 'Simple whole foods', complexity_factors: ['single_ingredient', 'standard_portions', 'common_foods'] },
+            2: { name: 'Intermediate', description: 'Branded products and portions', complexity_factors: ['branded_products', 'serving_size_variations', 'common_drinks'] },
+            3: { name: 'Advanced', description: 'Multi-ingredient meals', complexity_factors: ['combination_meals', 'restaurant_dishes', 'mixed_ingredients'] },
+            4: { name: 'Expert', description: 'Restaurant and preparation variance', complexity_factors: ['cooking_method_impact', 'regional_variations', 'hidden_ingredients'] },
+            5: { name: 'Master', description: 'Ambiguous and complex descriptions', complexity_factors: ['vague_descriptions', 'portion_ambiguity', 'preparation_unknowns'] }
+        };
+
+        // Conversation-specific scale complexity
+        this.conversationScaleComplexity = {
+            1: { name: 'Foundation', description: 'Simple factual recall', complexity_factors: ['direct_recall', 'explicit_preferences', 'simple_instructions'] },
+            2: { name: 'Intermediate', description: 'Multi-turn context', complexity_factors: ['conversation_continuity', 'preference_application', 'context_switching'] },
+            3: { name: 'Advanced', description: 'Implicit preferences and nuance', complexity_factors: ['implicit_preferences', 'subtle_references', 'tone_matching'] },
+            4: { name: 'Expert', description: 'Complex reasoning with context', complexity_factors: ['conflicting_instructions', 'nuanced_preferences', 'multi_source_context'] },
+            5: { name: 'Master', description: 'Ambiguous requests requiring inference', complexity_factors: ['user_intent_inference', 'preference_conflicts', 'unstated_expectations'] }
+        };
     }
 
     /**
@@ -135,7 +172,10 @@ class ContinuousLearningLoop {
      */
     getDifficultyConfig(scale, level) {
         const baseConfig = this.baseDifficultySettings[level];
-        const scaleConfig = this.scaleComplexity[Math.min(scale, 5)] || this.scaleComplexity[5];
+        const complexityMap = this.domain === 'diet' ? this.dietScaleComplexity
+            : this.domain === 'general' ? this.conversationScaleComplexity
+            : this.scaleComplexity;
+        const scaleConfig = complexityMap[Math.min(scale, 5)] || complexityMap[5];
 
         return {
             ...baseConfig,
@@ -152,8 +192,18 @@ class ContinuousLearningLoop {
         };
     }
 
-    /** Get per-user selfDrivenLearning instance */
-    _getSdl() { return selfDrivenLearning.getInstance(this.userId); }
+    /** Get per-user selfDrivenLearning instance (domain-aware) */
+    _getSdl() {
+        if (this.domain === 'diet') {
+            _loadDietModules();
+            return dietSelfDrivenLearning.getInstance(this.userId);
+        }
+        if (this.domain === 'general') {
+            _loadConversationModules();
+            return conversationSelfDrivenLearning.getInstance(this.userId);
+        }
+        return selfDrivenLearning.getInstance(this.userId);
+    }
     /** Get per-user adaptiveDifficultyScaler instance */
     _getAds() { return adaptiveDifficultyScaler.getInstance(this.userId); }
 
@@ -184,13 +234,15 @@ class ContinuousLearningLoop {
             training_interval_ms = 10000,
             practice_count = 3,
             starting_difficulty = null,  // null = load from DB, or use specified level
-            starting_scale = null        // null = load from DB, or use specified scale
+            starting_scale = null,       // null = load from DB, or use specified scale
+            domain = 'payments'          // Training domain: 'payments', 'diet', 'general'
         } = options;
 
         // Increment session generation - any old async loops will see this and stop
         const myGeneration = ++this.sessionGeneration;
 
         this.userId = userId;
+        this.domain = domain;
         this.isRunning = true;
         this.currentGeneration = myGeneration;  // Store for this session
         this.config.questions_per_benchmark = questions_per_benchmark;
@@ -378,7 +430,9 @@ class ContinuousLearningLoop {
             upgrade_threshold: (this.config.both_models_threshold_for_upgrade * 100) + '%',
             // Reporter config (so UI can restore after page refresh)
             report_email: this._getReporterConfig()?.email || null,
-            report_interval: this._getReporterConfig()?.interval || null
+            report_interval: this._getReporterConfig()?.interval || null,
+            // Training domain
+            domain: this.domain || 'payments'
         };
     }
 
@@ -732,86 +786,109 @@ class ContinuousLearningLoop {
             scenario_count: this.config.benchmark_scenario_count
         });
 
-        // Generate benchmark using Claude (Anthropic) for out-of-distribution scenarios
-        // This prevents overfitting to Tessa's GPT-4o-mini generation patterns
-        const generationResult = await sealedBenchmarkGenerator.createSealedBenchmark({
-            name: benchmarkName,
-            description: `Auto-generated benchmark at S${scale} L${level} (${difficultyConfig.scale_name})`,
-            count: this.config.benchmark_scenario_count,
-            difficulty_mix: difficultyConfig.effective_mix,
-            use_ood: true,  // Use Claude for truly independent OOD test sets
-            // Pass scale-specific complexity requirements
-            scale: scale,
-            level: level,
-            complexity_factors: difficultyConfig.complexity_factors,
-            require_context: difficultyConfig.require_context,
-            require_reasoning: difficultyConfig.require_reasoning,
-            multi_step: difficultyConfig.multi_step
-        });
-
-        // Validate the generated scenarios
-        const benchmark = await sealedBenchmarkGenerator.getSealedBenchmark(benchmarkName);
-
-        // Always apply cheap reasoning-based auto-fix (no LLM)
-        const reasoningFix = benchmarkValidator.applyReasoningAutoFix(benchmark.scenarios);
-        if (reasoningFix.fixedCount > 0) {
-            logger.info('Applied reasoning-based auto-fix to benchmark scenarios', {
-                fixed_count: reasoningFix.fixedCount
-            });
-            await this._updateBenchmarkScenarios(benchmark.benchmark_id, reasoningFix.scenarios);
-            benchmark.scenarios = reasoningFix.scenarios;
-        }
-
-        // Quick validation to check for obvious mislabels
+        // Domain-specific benchmark generation and evaluation
+        let generationResult, benchmark, testResult, mistakes_learned = 0;
         const validationIssues = [];
-        for (const scenario of benchmark.scenarios) {
-            const quickCheck = benchmarkValidator.quickValidate(scenario);
-            if (quickCheck.has_flags) {
-                validationIssues.push({
-                    scenario_id: scenario.scenario_id,
-                    flags: quickCheck.flags
-                });
-            }
-        }
 
-        if (validationIssues.length > 0) {
-            logger.warn('Benchmark has potential labeling issues', {
-                issue_count: validationIssues.length,
-                issues: validationIssues.slice(0, 3)
+        if (this.domain === 'diet') {
+            // --- DIET DOMAIN: Nutrition estimation benchmarks ---
+            _loadDietModules();
+            generationResult = await dietBenchmarkGenerator.createDietBenchmark({
+                name: benchmarkName,
+                count: Math.min(this.config.benchmark_scenario_count, 30),
+                difficulty_mix: difficultyConfig.effective_mix,
+                scale, level, userId: this.userId
+            });
+            benchmark = await dietBenchmarkGenerator.getDietBenchmark(benchmarkName);
+
+            logger.info('Running diet benchmark test', { benchmark_name: benchmarkName });
+            testResult = await dietBenchmarkEvaluator.testOnDietBenchmark({
+                benchmark_identifier: benchmarkName,
+                user_id: this.userId
             });
 
-            // Only validate flagged scenarios (not ALL scenarios) to avoid over-correction
-            const flaggedIds = new Set(validationIssues.map(v => v.scenario_id));
-            const flaggedScenarios = benchmark.scenarios.filter(s => flaggedIds.has(s.scenario_id));
-            const validated = await benchmarkValidator.validateAndFixScenarios(flaggedScenarios);
+        } else if (this.domain === 'general') {
+            // --- GENERAL DOMAIN: Conversation quality benchmarks ---
+            _loadConversationModules();
+            const convBenchGen = conversationBenchmarkGenerator.getInstance(this.userId);
+            generationResult = await convBenchGen.createConversationBenchmark({
+                name: benchmarkName,
+                count: Math.min(this.config.benchmark_scenario_count, 20),
+                difficulty_mix: difficultyConfig.effective_mix,
+                scale, level, userId: this.userId
+            });
+            benchmark = await convBenchGen.getConversationBenchmark(benchmarkName);
 
-            // Update only the corrected scenarios in database
-            const corrected = validated.filter(s => s.auto_corrected);
-            if (corrected.length > 0) {
-                logger.info('Auto-corrected benchmark scenarios', {
-                    flagged: flaggedScenarios.length,
-                    fixed_count: corrected.length
+            logger.info('Running conversation benchmark test', { benchmark_name: benchmarkName });
+            const convBenchEval = conversationBenchmarkEvaluator.getInstance(this.userId);
+            testResult = await convBenchEval.testOnConversationBenchmark({
+                benchmark_identifier: benchmarkName,
+                user_id: this.userId
+            });
+
+        } else {
+            // --- PAYMENTS DOMAIN: Expense categorization benchmarks (original) ---
+            generationResult = await sealedBenchmarkGenerator.createSealedBenchmark({
+                name: benchmarkName,
+                description: `Auto-generated benchmark at S${scale} L${level} (${difficultyConfig.scale_name})`,
+                count: this.config.benchmark_scenario_count,
+                difficulty_mix: difficultyConfig.effective_mix,
+                use_ood: true,
+                scale, level,
+                complexity_factors: difficultyConfig.complexity_factors,
+                require_context: difficultyConfig.require_context,
+                require_reasoning: difficultyConfig.require_reasoning,
+                multi_step: difficultyConfig.multi_step
+            });
+
+            benchmark = await sealedBenchmarkGenerator.getSealedBenchmark(benchmarkName);
+
+            // Payments-specific validation (not applicable to diet/general)
+            const reasoningFix = benchmarkValidator.applyReasoningAutoFix(benchmark.scenarios);
+            if (reasoningFix.fixedCount > 0) {
+                logger.info('Applied reasoning-based auto-fix to benchmark scenarios', {
+                    fixed_count: reasoningFix.fixedCount
                 });
-                await this._updateBenchmarkScenarios(benchmark.benchmark_id, corrected);
+                await this._updateBenchmarkScenarios(benchmark.benchmark_id, reasoningFix.scenarios);
+                benchmark.scenarios = reasoningFix.scenarios;
             }
-        }
 
-        // Run the benchmark
-        logger.info('Running benchmark test', { benchmark_name: benchmarkName });
+            for (const scenario of benchmark.scenarios) {
+                const quickCheck = benchmarkValidator.quickValidate(scenario);
+                if (quickCheck.has_flags) {
+                    validationIssues.push({ scenario_id: scenario.scenario_id, flags: quickCheck.flags });
+                }
+            }
 
-        const testResult = await sealedBenchmarkEvaluator.testOnSealedBenchmark({
-            benchmark_identifier: benchmarkName,
-            user_id: this.userId
-        });
+            if (validationIssues.length > 0) {
+                logger.warn('Benchmark has potential labeling issues', {
+                    issue_count: validationIssues.length,
+                    issues: validationIssues.slice(0, 3)
+                });
+                const flaggedIds = new Set(validationIssues.map(v => v.scenario_id));
+                const flaggedScenarios = benchmark.scenarios.filter(s => flaggedIds.has(s.scenario_id));
+                const validated = await benchmarkValidator.validateAndFixScenarios(flaggedScenarios);
+                const corrected = validated.filter(s => s.auto_corrected);
+                if (corrected.length > 0) {
+                    logger.info('Auto-corrected benchmark scenarios', { flagged: flaggedScenarios.length, fixed_count: corrected.length });
+                    await this._updateBenchmarkScenarios(benchmark.benchmark_id, corrected);
+                }
+            }
 
-        // Learn from Oggy's mistakes on this benchmark
-        let mistakes_learned = 0;
-        if (testResult.oggy.wrong_scenarios && testResult.oggy.wrong_scenarios.length > 0) {
-            const learningResult = await this._learnFromBenchmarkMistakes(testResult.oggy.wrong_scenarios);
-            mistakes_learned = learningResult.learned;
-            if (learningResult.confusion_summary) {
-                this._applyConfusionFocusedTraining(learningResult.confusion_summary);
-                await this._generateConfusionTrainingBatch(learningResult.confusion_summary);
+            logger.info('Running benchmark test', { benchmark_name: benchmarkName });
+            testResult = await sealedBenchmarkEvaluator.testOnSealedBenchmark({
+                benchmark_identifier: benchmarkName,
+                user_id: this.userId
+            });
+
+            // Payments-specific: learn from expense categorization mistakes
+            if (testResult.oggy.wrong_scenarios && testResult.oggy.wrong_scenarios.length > 0) {
+                const learningResult = await this._learnFromBenchmarkMistakes(testResult.oggy.wrong_scenarios);
+                mistakes_learned = learningResult.learned;
+                if (learningResult.confusion_summary) {
+                    this._applyConfusionFocusedTraining(learningResult.confusion_summary);
+                    await this._generateConfusionTrainingBatch(learningResult.confusion_summary);
+                }
             }
         }
 
@@ -1584,8 +1661,8 @@ class ContinuousLearningLoop {
             try {
                 const result = await query(`
                     SELECT scale, difficulty_level, baseline_scale FROM continuous_learning_state
-                    WHERE user_id = $1
-                `, [userId]);
+                    WHERE user_id = $1 AND domain = $2
+                `, [userId, this.domain || 'payments']);
 
                 if (result.rows.length > 0) {
                     if (scale === null) scale = result.rows[0].scale;
@@ -1641,15 +1718,16 @@ class ContinuousLearningLoop {
      */
     async _saveScaleAndLevel(userId, scale, level, baselineScale = null) {
         try {
-            // Upsert the scale and level
+            const domain = this.domain || 'payments';
+            // Upsert the scale and level (domain-scoped)
             await query(`
-                INSERT INTO continuous_learning_state (user_id, scale, difficulty_level, baseline_scale, updated_at)
-                VALUES ($1, $2, $3, COALESCE($4, 50), NOW())
-                ON CONFLICT (user_id)
+                INSERT INTO continuous_learning_state (user_id, domain, scale, difficulty_level, baseline_scale, updated_at)
+                VALUES ($1, $5, $2, $3, COALESCE($4, 50), NOW())
+                ON CONFLICT (user_id, domain)
                 DO UPDATE SET scale = $2, difficulty_level = $3,
                     baseline_scale = COALESCE($4, continuous_learning_state.baseline_scale),
                     updated_at = NOW()
-            `, [userId, scale, level, baselineScale]);
+            `, [userId, scale, level, baselineScale, domain]);
 
             logger.debug('Saved scale and level to database', {
                 user_id: userId,

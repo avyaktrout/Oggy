@@ -496,7 +496,7 @@ class AgentShell {
 
         if (startBtn) { startBtn.disabled = true; startBtn.textContent = 'Starting...'; }
 
-        const reqBody = { user_id: USER_ID, duration_minutes: duration === 0 ? null : duration, run_benchmarks: true };
+        const reqBody = { user_id: USER_ID, duration_minutes: duration === 0 ? null : duration, run_benchmarks: true, domain: this.config.domain };
         if (email) { reqBody.report_email = email; reqBody.report_interval = reportInterval; }
 
         try {

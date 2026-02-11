@@ -78,7 +78,7 @@ class AdaptiveDifficultyScaler {
             const result = await query(`
                 SELECT baseline_scale
                 FROM continuous_learning_state
-                WHERE user_id = $1
+                WHERE user_id = $1 AND domain = 'payments'
             `, [userId]);
 
             if (result.rows.length > 0 && result.rows[0].baseline_scale !== null) {
@@ -443,9 +443,9 @@ Return ONLY a JSON object:
         try {
             await this._ensureStateTable();
             await query(`
-                INSERT INTO continuous_learning_state (user_id, scale, difficulty_level, baseline_scale, updated_at)
-                VALUES ($1, 1, 3, $2, NOW())
-                ON CONFLICT (user_id)
+                INSERT INTO continuous_learning_state (user_id, domain, scale, difficulty_level, baseline_scale, updated_at)
+                VALUES ($1, 'payments', 1, 3, $2, NOW())
+                ON CONFLICT (user_id, domain)
                 DO UPDATE SET baseline_scale = $2, updated_at = NOW()
             `, [userId, baselineScale]);
         } catch (error) {
@@ -457,28 +457,20 @@ Return ONLY a JSON object:
         try {
             await query(`
                 CREATE TABLE IF NOT EXISTS continuous_learning_state (
-                    user_id VARCHAR(255) PRIMARY KEY,
+                    user_id VARCHAR(255) NOT NULL,
+                    domain TEXT NOT NULL DEFAULT 'payments',
                     scale INTEGER DEFAULT 1,
                     difficulty_level INTEGER DEFAULT 3,
                     baseline_scale INTEGER DEFAULT 50,
-                    updated_at TIMESTAMP DEFAULT NOW()
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    PRIMARY KEY (user_id, domain)
                 )
             `);
 
-            await query(`
-                ALTER TABLE continuous_learning_state
-                ADD COLUMN IF NOT EXISTS scale INTEGER DEFAULT 1
-            `);
-
-            await query(`
-                ALTER TABLE continuous_learning_state
-                ADD COLUMN IF NOT EXISTS difficulty_level INTEGER DEFAULT 3
-            `);
-
-            await query(`
-                ALTER TABLE continuous_learning_state
-                ADD COLUMN IF NOT EXISTS baseline_scale INTEGER DEFAULT 50
-            `);
+            await query(`ALTER TABLE continuous_learning_state ADD COLUMN IF NOT EXISTS scale INTEGER DEFAULT 1`);
+            await query(`ALTER TABLE continuous_learning_state ADD COLUMN IF NOT EXISTS difficulty_level INTEGER DEFAULT 3`);
+            await query(`ALTER TABLE continuous_learning_state ADD COLUMN IF NOT EXISTS baseline_scale INTEGER DEFAULT 50`);
+            await query(`ALTER TABLE continuous_learning_state ADD COLUMN IF NOT EXISTS domain TEXT DEFAULT 'payments'`);
         } catch (error) {
             logger.debug('Failed to ensure continuous_learning_state table', { error: error.message });
         }

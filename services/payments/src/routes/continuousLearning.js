@@ -34,7 +34,8 @@ router.post('/start', async (req, res) => {
             starting_difficulty = null,
             starting_scale = null,
             report_email = null,
-            report_interval = 'end_only'
+            report_interval = 'end_only',
+            domain = 'payments'
         } = req.body;
 
         const loop = getInstance(user_id);
@@ -49,6 +50,7 @@ router.post('/start', async (req, res) => {
         logger.info('Starting continuous learning via API', {
             requestId: req.requestId,
             user_id,
+            domain,
             duration_minutes,
             starting_scale,
             starting_difficulty,
@@ -68,7 +70,8 @@ router.post('/start', async (req, res) => {
             training_interval_ms,
             practice_count,
             starting_difficulty,
-            starting_scale
+            starting_scale,
+            domain
         });
 
         // Return immediately with status

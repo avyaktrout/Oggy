@@ -63,9 +63,16 @@
 
         <!-- API Keys -->
         <h2 style="margin-top:32px;font-size:18px">API Keys</h2>
-        <p style="color:var(--text-muted);margin-bottom:16px;font-size:13px">
-            Keys are encrypted at rest. If no key is set, the system default key is used (when available).
-        </p>
+        <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:20px">
+            <div style="font-weight:600;margin-bottom:8px;font-size:14px">How your keys are protected</div>
+            <ul style="margin:0;padding-left:18px;font-size:13px;color:var(--text-muted);line-height:1.7">
+                <li><strong>AES-256-GCM</strong> encryption — industry-standard authenticated encryption</li>
+                <li>Each key encrypted with a unique random IV — no two ciphertexts are alike</li>
+                <li>Keys are decrypted server-side only when making API calls — never sent to your browser</li>
+                <li>Only the last 4 characters are displayed for verification</li>
+                <li>If no personal key is set, a shared system key is used when available</li>
+            </ul>
+        </div>
         <div id="provider-keys-container"></div>
     </div>
     </main>

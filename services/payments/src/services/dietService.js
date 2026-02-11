@@ -327,10 +327,23 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
                 }
             }
 
+            // Check branded foods database for known products
+            const brandedMatch = await query(
+                `SELECT calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg
+                 FROM branded_foods
+                 WHERE LOWER($1) LIKE '%' || LOWER(brand) || '%' AND LOWER($1) LIKE '%' || LOWER(product) || '%'
+                 ORDER BY LENGTH(product) DESC LIMIT 1`,
+                [description]
+            );
+            if (brandedMatch.rows.length > 0) {
+                logger.debug('Using branded foods database for: ' + description);
+                return brandedMatch.rows[0];
+            }
+
             await costGovernor.checkBudget(1000);
 
             const prompt = `Estimate the nutritional content of: "${description}"${quantity ? ` (${quantity} ${unit || 'serving'})` : ''}.
-If this matches a known brand product (e.g. Core Power, Fairlife, Muscle Milk, Premier Protein, etc.), use the actual nutritional facts from that product. Use real data over estimates whenever possible.
+If this matches a known brand product, use the actual nutritional facts from that product. Use real data over estimates whenever possible.
 Respond in JSON only (no markdown):
 {"calories":0,"protein_g":0,"carbs_g":0,"fat_g":0,"fiber_g":0,"sugar_g":0,"sodium_mg":0}`;
 
