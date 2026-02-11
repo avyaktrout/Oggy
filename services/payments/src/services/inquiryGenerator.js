@@ -10,12 +10,11 @@ const logger = require('../utils/logger');
 const { costGovernor } = require('../middleware/costGovernor');
 const { suggestionGate } = require('./suggestionGate');
 const OggyCategorizer = require('./oggyCategorizer');
+const providerResolver = require('../providers/providerResolver');
 
 const categorizer = new OggyCategorizer();
 const HIGH_CONFIDENCE_THRESHOLD = 0.80;
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory-service:3000';
 
 class InquiryGenerator {
@@ -262,8 +261,9 @@ class InquiryGenerator {
 
             try {
                 await costGovernor.checkBudget(500);
-                const response = await axios.post('https://api.openai.com/v1/chat/completions', {
-                    model: OPENAI_MODEL,
+                const resolved = await providerResolver.getAdapter(userId, 'oggy');
+                const result = await resolved.adapter.chatCompletion({
+                    model: resolved.model,
                     messages: [{
                         role: 'system',
                         content: 'Generate a short, friendly question asking the user how they typically categorize expenses at a specific merchant. Reply with ONLY the question text, nothing else.'
@@ -272,13 +272,11 @@ class InquiryGenerator {
                         content: `Merchant: "${source.merchant}". Categories used before: ${source.categories.join(', ')}. Ask which category they prefer for this merchant.`
                     }],
                     temperature: 0.7,
-                    max_tokens: 100
-                }, {
-                    headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+                    max_tokens: 100,
                     timeout: 10000
                 });
-                questionText = response.data.choices[0].message.content.trim();
-                costGovernor.recordUsage(300);
+                questionText = result.text;
+                costGovernor.recordUsage(result.tokens_used || 300);
             } catch (err) {
                 questionText = `How do you usually categorize purchases at ${source.merchant}? (${source.categories.join(' or ')})`;
             }
@@ -301,8 +299,9 @@ class InquiryGenerator {
 
             try {
                 await costGovernor.checkBudget(500);
-                const response = await axios.post('https://api.openai.com/v1/chat/completions', {
-                    model: OPENAI_MODEL,
+                const resolved = await providerResolver.getAdapter(userId, 'oggy');
+                const result = await resolved.adapter.chatCompletion({
+                    model: resolved.model,
                     messages: [{
                         role: 'system',
                         content: 'Generate a short, friendly cost-cutting suggestion for someone who spends a lot in a particular expense category. Include the dollar amount. Reply with ONLY the suggestion text, nothing else. Keep it to 1-2 sentences.'
@@ -311,13 +310,11 @@ class InquiryGenerator {
                         content: `Category: "${source.category}". Total spent last 90 days: $${total} across ${source.txn_count} transactions (avg $${avg} each). Suggest ways to reduce spending in this category.`
                     }],
                     temperature: 0.7,
-                    max_tokens: 150
-                }, {
-                    headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+                    max_tokens: 150,
                     timeout: 10000
                 });
-                questionText = response.data.choices[0].message.content.trim();
-                costGovernor.recordUsage(300);
+                questionText = result.text;
+                costGovernor.recordUsage(result.tokens_used || 300);
             } catch (err) {
                 questionText = `You've spent $${total} on ${source.category.replace(/_/g, ' ')} in the last 90 days (${source.txn_count} transactions, avg $${avg}). Would you like tips to reduce this spending?`;
             }

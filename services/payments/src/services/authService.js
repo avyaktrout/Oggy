@@ -3,7 +3,7 @@
  * Private Domain Hosting v0.1
  *
  * - Invite-only allowlist
- * - Magic link tokens (15 min expiry)
+ * - Magic link tokens (6 hour expiry)
  * - Session cookies (7 day expiry)
  * - CSRF protection
  * - Rate limiting (5 attempts/hour)
@@ -15,7 +15,7 @@ const logger = require('../utils/logger');
 
 const RATE_LIMIT_MAX = 5;
 const RATE_LIMIT_WINDOW_HOURS = 1;
-const TOKEN_EXPIRY_MINUTES = 15;
+const TOKEN_EXPIRY_MINUTES = 360; // 6 hours
 const SESSION_EXPIRY_DAYS = 7;
 
 class AuthService {
@@ -249,7 +249,7 @@ class AuthService {
                 html: `
                     <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px">
                         <h2 style="color:#1a1a2e">Sign in to Oggy</h2>
-                        <p>Click the button below to sign in. This link expires in ${TOKEN_EXPIRY_MINUTES} minutes.</p>
+                        <p>Click the button below to sign in. This link expires in ${TOKEN_EXPIRY_MINUTES >= 60 ? (TOKEN_EXPIRY_MINUTES / 60) + ' hours' : TOKEN_EXPIRY_MINUTES + ' minutes'}.</p>
                         <a href="${magicUrl}" style="display:inline-block;background:#6366f1;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;margin:16px 0">Sign In</a>
                         <p style="color:#888;font-size:13px">If you didn't request this link, you can safely ignore this email.</p>
                     </div>

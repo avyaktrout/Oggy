@@ -8,10 +8,10 @@ const { query } = require('../utils/db');
 const logger = require('../utils/logger');
 const { costGovernor } = require('../middleware/costGovernor');
 const circuitBreakerRegistry = require('../utils/circuitBreakerRegistry');
+const providerResolver = require('../providers/providerResolver');
+const { getApplicationKnowledge, detectAppKnowledgeIntent } = require('./applicationKnowledge');
 
 const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory-service:3000';
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
 class GeneralChatService {
     constructor() {
@@ -66,43 +66,60 @@ class GeneralChatService {
             }
         }
 
+        // Check if user is asking about performance
+        let performanceContext = '';
+        if (this._detectPerformanceIntent(message)) {
+            performanceContext = await this._getPerformanceContext(userId);
+        }
+
+        // Check if user is asking about the application itself
+        let appKnowledgeContext = '';
+        if (detectAppKnowledgeIntent(message)) {
+            appKnowledgeContext = getApplicationKnowledge();
+        }
+
         const systemPrompt = `You are Oggy, a helpful AI assistant. You remember previous conversations and learn from interactions.${projectContext}
 
 # Learned Context
 ${memoryContext}
+${performanceContext}${appKnowledgeContext}
+Respond helpfully and naturally. If you recall relevant information from past conversations, use it.${performanceContext ? `
 
-Respond helpfully and naturally. If you recall relevant information from past conversations, use it.`;
+IMPORTANT: The user is asking about your performance. You MUST answer using the REAL performance data provided above in "My Performance Data". Do NOT say you don't have access to data or can't evaluate yourself — you DO have this data. Reference specific numbers, levels, accuracy percentages, and trends from the data above. If no benchmarks exist yet, say so honestly and suggest starting a training session.` : ''}${appKnowledgeContext ? `
 
-        // Call OpenAI
+IMPORTANT: The user is asking about the Oggy application, its architecture, security, or features. You MUST answer using the detailed application knowledge provided above in "About Oggy". You have comprehensive knowledge of how you work, your security model, database schema, features, and architecture. Answer confidently and accurately using the information above. Do NOT say you don't know how you work or that you can't answer questions about yourself — you CAN and you MUST use the knowledge above.` : ''}`;
+
+        // Call LLM via provider adapter
         await costGovernor.checkBudget(3000);
 
-        const messages = [
+        const chatMessages = [
             { role: 'system', content: systemPrompt },
             ...conversation_history.slice(-10),
             { role: 'user', content: message }
         ];
 
         try {
-            const response = await this.openaiBreaker.execute(() =>
-                axios.post('https://api.openai.com/v1/chat/completions', {
-                    model: OPENAI_MODEL,
-                    messages,
+            // Oggy response (with memory)
+            const oggyResolved = await providerResolver.getAdapter(userId, 'oggy');
+            const oggyResult = await this.openaiBreaker.execute(() =>
+                oggyResolved.adapter.chatCompletion({
+                    model: oggyResolved.model,
+                    messages: chatMessages,
                     temperature: 0.7,
                     max_tokens: 1000
-                }, {
-                    headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-                    timeout: 15000
                 })
             );
 
-            const oggyText = response.data.choices[0].message.content.trim();
-            costGovernor.recordUsage(Math.ceil((systemPrompt.length + message.length + oggyText.length) / 4));
+            const oggyText = oggyResult.text;
+            costGovernor.recordUsage(oggyResult.tokens_used || Math.ceil((systemPrompt.length + message.length + oggyText.length) / 4));
+            providerResolver.logRequest(userId, oggyResolved.provider, oggyResolved.model, 'oggy', 'generalChat', oggyResult.tokens_used, oggyResult.latency_ms, true, null);
 
             // Base model response (no memory)
             let baseText = '';
             try {
-                const baseResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
-                    model: OPENAI_MODEL,
+                const baseResolved = await providerResolver.getAdapter(userId, 'base');
+                const baseResult = await baseResolved.adapter.chatCompletion({
+                    model: baseResolved.model,
                     messages: [
                         { role: 'system', content: 'You are a helpful AI assistant.' },
                         ...conversation_history.slice(-10),
@@ -110,11 +127,9 @@ Respond helpfully and naturally. If you recall relevant information from past co
                     ],
                     temperature: 0.7,
                     max_tokens: 1000
-                }, {
-                    headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-                    timeout: 15000
                 });
-                baseText = baseResponse.data.choices[0].message.content.trim();
+                baseText = baseResult.text;
+                providerResolver.logRequest(userId, baseResolved.provider, baseResolved.model, 'base', 'generalChat', baseResult.tokens_used, baseResult.latency_ms, true, null);
             } catch (err) {
                 baseText = 'Base model unavailable.';
             }
@@ -220,6 +235,97 @@ Respond helpfully and naturally. If you recall relevant information from past co
             [projectId, userId, limit]
         );
         return result.rows;
+    }
+
+    /**
+     * Detect if user is asking about Oggy's own performance.
+     */
+    _detectPerformanceIntent(message) {
+        const lower = message.toLowerCase();
+        const keywords = [
+            'how are you performing', 'how are you doing', 'your performance',
+            'your accuracy', 'benchmark', 'how accurate', 'your level',
+            'what level', 'have you improved', 'your progress', 'training history',
+            'how smart are you', 'your score', 'your results', 'performance stats',
+            'how well do you', 'are you getting better', 'your weaknesses',
+            'weak categories', 'strong categories', 'confusion', 'improvement',
+            'performance recently', 'training session', 'how have you been doing',
+            'tell me about your', 'know about your performance', 'how good are you',
+            'are you improving', 'what do you think of your', 'your stats',
+            'how is your', 'scale level', 'difficulty level', 'learning progress',
+            'how much have you learned', 'what have you learned', 'how trained',
+            'about yourself', 'your capabilities', 'your strengths'
+        ];
+        return keywords.some(kw => lower.includes(kw));
+    }
+
+    /**
+     * Fetch real performance data for the system prompt.
+     */
+    async _getPerformanceContext(userId) {
+        try {
+            const parts = [];
+            // Also check legacy 'oggy' user_id for old data
+            const userIds = [userId];
+            if (userId !== 'oggy') userIds.push('oggy');
+
+            // Current scale/level
+            const stateResult = await query(
+                `SELECT scale, difficulty_level FROM continuous_learning_state WHERE user_id = ANY($1) ORDER BY user_id = $2 DESC LIMIT 1`,
+                [userIds, userId]
+            );
+            if (stateResult.rows.length > 0) {
+                const s = stateResult.rows[0];
+                parts.push(`Current Level: Scale ${s.scale}, Difficulty Level ${s.difficulty_level}`);
+            }
+
+            // Recent benchmarks (last 5) — check both user IDs
+            const bmResult = await query(
+                `SELECT oggy_accuracy, base_accuracy, advantage_delta,
+                        tested_at, training_state
+                 FROM sealed_benchmark_results
+                 WHERE user_id = ANY($1)
+                 ORDER BY tested_at DESC LIMIT 5`,
+                [userIds]
+            );
+            if (bmResult.rows.length > 0) {
+                const bmLines = bmResult.rows.map((r, i) => {
+                    const oggy = (r.oggy_accuracy * 100).toFixed(1);
+                    const base = (r.base_accuracy * 100).toFixed(1);
+                    const passed = r.advantage_delta >= 0;
+                    const scaleStatus = r.training_state?.scale_status || 'unknown';
+                    const date = new Date(r.tested_at).toLocaleDateString();
+                    return `  ${i + 1}. ${scaleStatus} — Oggy: ${oggy}% vs Base: ${base}% — ${passed ? 'PASSED' : 'FAILED'} (${date})`;
+                });
+                parts.push(`Recent Benchmarks (newest first):\n${bmLines.join('\n')}`);
+
+                // Trend
+                if (bmResult.rows.length >= 2) {
+                    const newest = bmResult.rows[0].oggy_accuracy;
+                    const oldest = bmResult.rows[bmResult.rows.length - 1].oggy_accuracy;
+                    const trend = newest > oldest ? 'improving' : newest < oldest ? 'declining' : 'stable';
+                    parts.push(`Accuracy Trend: ${trend} (${(oldest * 100).toFixed(1)}% → ${(newest * 100).toFixed(1)}%)`);
+                }
+            } else {
+                parts.push('No benchmarks completed yet.');
+            }
+
+            // Training sessions count
+            const trainingResult = await query(
+                `SELECT COUNT(*) as count FROM app_events
+                 WHERE user_id = ANY($1) AND event_type = 'training_session_completed'`,
+                [userIds]
+            );
+            const sessionCount = parseInt(trainingResult.rows[0]?.count || '0');
+            parts.push(`Training Sessions Completed: ${sessionCount}`);
+
+            if (parts.length === 0) return '';
+
+            return `\n# My Performance Data\n${parts.join('\n')}\n`;
+        } catch (err) {
+            logger.debug('Performance context fetch failed', { error: err.message });
+            return '';
+        }
     }
 }
 

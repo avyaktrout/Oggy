@@ -7,7 +7,7 @@ const express = require('express');
 const router = express.Router();
 const { getInstance } = require('../services/continuousLearningLoop');
 const benchmarkValidator = require('../services/benchmarkValidator');
-const trainingReporter = require('../services/trainingReporter');
+const { getReporter } = require('../services/trainingReporter');
 const { query } = require('../utils/db');
 const logger = require('../utils/logger');
 
@@ -17,27 +17,33 @@ const logger = require('../utils/logger');
  */
 router.post('/start', async (req, res) => {
     try {
+        // Always use authenticated user from session (not from body)
+        const user_id = req.userId;
+        if (!user_id) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+
         const {
-            user_id = 'test_user',
             duration_minutes = 5,
-            questions_per_benchmark = 20,         // Training questions before benchmark check
-            accuracy_threshold = 0.80,            // 80% on training to trigger benchmark
-            benchmark_scenario_count = 40,        // Questions per benchmark
-            upgrade_threshold = 0.90,             // 90% on benchmark to advance level
+            questions_per_benchmark = 20,
+            accuracy_threshold = 0.80,
+            benchmark_scenario_count = 40,
+            upgrade_threshold = 0.90,
             training_interval_ms = 10000,
             practice_count = 3,
-            starting_difficulty = null,  // null = load from DB, or specify 1-5
-            starting_scale = null,       // null = load from DB, or specify 1-10
+            starting_difficulty = null,
+            starting_scale = null,
             report_email = null,
             report_interval = 'end_only'
         } = req.body;
 
         const loop = getInstance(user_id);
 
-        // Configure email reporting if requested
+        // Configure per-user email reporter
         if (report_email) {
-            trainingReporter.configure(report_email, report_interval, duration_minutes, user_id);
-            trainingReporter.setStatsProvider(() => loop.getStats());
+            const reporter = getReporter(user_id);
+            reporter.configure(report_email, report_interval, duration_minutes, user_id);
+            reporter.setStatsProvider(() => loop.getStats());
         }
 
         logger.info('Starting continuous learning via API', {
@@ -67,7 +73,7 @@ router.post('/start', async (req, res) => {
 
         // Return immediately with status
         res.json({
-            message: `Continuous learning started for ${duration_minutes} minutes`,
+            message: duration_minutes ? `Continuous learning started for ${duration_minutes} minutes` : 'Continuous learning started (indefinite)',
             status: 'running',
             config: {
                 duration_minutes,
@@ -85,6 +91,13 @@ router.post('/start', async (req, res) => {
             logger.info('Continuous learning completed', results);
         }).catch(error => {
             logger.error('Continuous learning failed', { error: error.message });
+            // Send error report email via per-user reporter
+            try {
+                const reporter = getReporter(user_id);
+                reporter.onError(loop.getStats(), error);
+            } catch (reportErr) {
+                logger.warn('Error report failed', { error: reportErr.message });
+            }
         });
 
     } catch (error) {
@@ -105,17 +118,21 @@ router.post('/start', async (req, res) => {
  */
 router.post('/start-and-wait', async (req, res) => {
     try {
+        const user_id = req.userId;
+        if (!user_id) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+
         const {
-            user_id = 'test_user',
             duration_minutes = 5,
-            questions_per_benchmark = 20,         // Training questions before benchmark check
-            accuracy_threshold = 0.80,            // 80% on training to trigger benchmark
-            benchmark_scenario_count = 40,        // Questions per benchmark
-            upgrade_threshold = 0.90,             // 90% on benchmark to advance level
+            questions_per_benchmark = 20,
+            accuracy_threshold = 0.80,
+            benchmark_scenario_count = 40,
+            upgrade_threshold = 0.90,
             training_interval_ms = 10000,
             practice_count = 3,
-            starting_difficulty = null,  // null = load from DB, or specify 1-5
-            starting_scale = null        // null = load from DB, or specify 1-10
+            starting_difficulty = null,
+            starting_scale = null
         } = req.body;
 
         logger.info('Starting continuous learning (blocking) via API', {
@@ -160,7 +177,11 @@ router.post('/start-and-wait', async (req, res) => {
  */
 router.post('/stop', async (req, res) => {
     try {
-        const { user_id } = req.body;
+        const user_id = req.userId;
+        if (!user_id) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+
         const loop = getInstance(user_id);
         loop.stop();
         const stats = loop.getStats();
@@ -187,7 +208,11 @@ router.post('/stop', async (req, res) => {
  */
 router.get('/status', async (req, res) => {
     try {
-        const { user_id } = req.query;
+        const user_id = req.userId;
+        if (!user_id) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+
         const stats = getInstance(user_id).getStats();
         res.json(stats);
     } catch (error) {

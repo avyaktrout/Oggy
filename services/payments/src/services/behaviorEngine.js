@@ -9,9 +9,7 @@ const axios = require('axios');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 const circuitBreakerRegistry = require('../utils/circuitBreakerRegistry');
-
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const providerResolver = require('../providers/providerResolver');
 
 // Section 8: Safety non-negotiables
 const SAFETY_REFUSAL_PATTERNS = [
@@ -65,7 +63,7 @@ class BehaviorEngine {
 
         // Section 3.1: Generate candidates with varied tone/verbosity
         const candidates = await this._generateCandidates(
-            systemPrompt, message, conversationHistory, profile, humorGateActive
+            systemPrompt, message, conversationHistory, profile, humorGateActive, userId
         );
 
         if (candidates.length === 0) {
@@ -125,13 +123,13 @@ class BehaviorEngine {
      * Generate N candidate responses (Section 3.1)
      * Vary by tone and verbosity
      */
-    async _generateCandidates(systemPrompt, message, history, profile, humorGateActive) {
+    async _generateCandidates(systemPrompt, message, history, profile, humorGateActive, userId) {
         const styles = this._selectStyles(profile, humorGateActive);
         const candidates = [];
 
         // Generate candidates in parallel for speed
         const promises = styles.map(style =>
-            this._generateSingleCandidate(systemPrompt, message, history, style)
+            this._generateSingleCandidate(systemPrompt, message, history, style, userId)
                 .catch(err => {
                     logger.warn('Candidate generation failed', { style: style.name, error: err.message });
                     return null;
@@ -168,7 +166,7 @@ class BehaviorEngine {
         return styles;
     }
 
-    async _generateSingleCandidate(systemPrompt, message, history, style) {
+    async _generateSingleCandidate(systemPrompt, message, history, style, userId) {
         const styledPrompt = `${systemPrompt}\n\nResponse style: ${style.instruction}`;
         const messages = [
             { role: 'system', content: styledPrompt },
@@ -176,23 +174,21 @@ class BehaviorEngine {
             { role: 'user', content: message }
         ];
 
-        const response = await this.openaiBreaker.execute(() =>
-            axios.post('https://api.openai.com/v1/chat/completions', {
-                model: OPENAI_MODEL,
+        const resolved = await providerResolver.getAdapter(userId || 'system', 'oggy');
+        const result = await this.openaiBreaker.execute(() =>
+            resolved.adapter.chatCompletion({
+                model: resolved.model,
                 messages,
                 temperature: style.temperature,
                 max_tokens: 500
-            }, {
-                headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-                timeout: 15000
             })
         );
 
         return {
-            text: response.data.choices[0].message.content,
+            text: result.text,
             style: style.name,
             temperature: style.temperature,
-            tokens_used: response.data.usage?.total_tokens || 0
+            tokens_used: result.tokens_used || 0
         };
     }
 

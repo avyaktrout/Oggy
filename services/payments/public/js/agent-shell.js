@@ -33,7 +33,7 @@ class AgentShell {
             contextProvider: async () => ({}),
             actionHandlers: {},
             trainingConfig: {
-                durations: [5, 10, 15, 30, 60],
+                durations: [5, 10, 15, 30, 60, 120, 240, 360, 480, 720, 1440, 0],
                 defaultDuration: 10,
                 showBenchmarks: true
             },
@@ -496,7 +496,7 @@ class AgentShell {
 
         if (startBtn) { startBtn.disabled = true; startBtn.textContent = 'Starting...'; }
 
-        const reqBody = { user_id: USER_ID, duration_minutes: duration, run_benchmarks: true };
+        const reqBody = { user_id: USER_ID, duration_minutes: duration === 0 ? null : duration, run_benchmarks: true };
         if (email) { reqBody.report_email = email; reqBody.report_interval = reportInterval; }
 
         try {
@@ -509,7 +509,8 @@ class AgentShell {
             const panel = document.getElementById('training-panel');
             if (panel) panel.classList.add('training-active');
 
-            showToast(`Training started for ${duration} minutes`);
+            const durationLabel = duration === 0 ? 'indefinitely (until stopped)' : duration >= 60 ? `${duration / 60} hour${duration > 60 ? 's' : ''}` : `${duration} minutes`;
+            showToast(`Training started — running ${durationLabel}`);
             this.trainingPollInterval = setInterval(() => this._pollTraining(), 5000);
             this._pollTraining();
         } catch (err) {
@@ -521,7 +522,7 @@ class AgentShell {
 
     async stopTraining() {
         try {
-            await apiCall('POST', `${this.config.trainingEndpoint}/stop`, {});
+            await apiCall('POST', `${this.config.trainingEndpoint}/stop`, { user_id: USER_ID });
             showToast('Training stopped');
         } catch (err) {
             showToast('Error stopping: ' + err.message, 'error');
@@ -537,7 +538,7 @@ class AgentShell {
             setVal('ts-accuracy', s.overall_accuracy || '-');
             setVal('ts-questions', `${s.correct_answers || 0}/${s.total_questions || 0}`);
             setVal('ts-benchmarks', `${s.benchmarks_passed || 0}/${s.benchmarks_generated || 0} passed`);
-            setVal('ts-remaining', s.training_time_remaining_readable || '-');
+            setVal('ts-remaining', s.training_time_remaining_readable || (s.is_running ? 'Indefinite' : '-'));
             setVal('ts-status', s.status || '-');
 
             if (s.status === 'stopped' || !s.is_running) {
@@ -569,6 +570,9 @@ class AgentShell {
                 if (el('train-duration')) el('train-duration').disabled = true;
                 if (el('train-email')) el('train-email').disabled = true;
                 if (el('train-report-interval')) el('train-report-interval').disabled = true;
+                // Restore email/report settings from server state
+                if (s.report_email && el('train-email')) el('train-email').value = s.report_email;
+                if (s.report_interval && el('train-report-interval')) el('train-report-interval').value = s.report_interval;
                 this.trainingPollInterval = setInterval(() => this._pollTraining(), 5000);
                 this._pollTraining();
             }

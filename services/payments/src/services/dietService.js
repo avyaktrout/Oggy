@@ -8,10 +8,9 @@ const { query } = require('../utils/db');
 const logger = require('../utils/logger');
 const { costGovernor } = require('../middleware/costGovernor');
 const circuitBreakerRegistry = require('../utils/circuitBreakerRegistry');
+const providerResolver = require('../providers/providerResolver');
 
 const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory-service:3000';
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
 class DietService {
     constructor() {
@@ -33,7 +32,7 @@ class DietService {
 
         // Auto-analyze nutrition using AI
         try {
-            const nutritionData = await this._analyzeNutrition(description, quantity, unit);
+            const nutritionData = await this._analyzeNutrition(description, quantity, unit, userId);
             if (nutritionData) {
                 await query(
                     `INSERT INTO v3_diet_items (entry_id, name, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, source)
@@ -211,20 +210,19 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
             { role: 'user', content: message }
         ];
 
-        const response = await this.openaiBreaker.execute(() =>
-            axios.post('https://api.openai.com/v1/chat/completions', {
-                model: OPENAI_MODEL,
+        const oggyResolved = await providerResolver.getAdapter(userId, 'oggy');
+        const oggyResult = await this.openaiBreaker.execute(() =>
+            oggyResolved.adapter.chatCompletion({
+                model: oggyResolved.model,
                 messages,
                 temperature: 0.7,
                 max_tokens: 1000
-            }, {
-                headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-                timeout: 15000
             })
         );
 
-        const oggyText = response.data.choices[0].message.content.trim();
-        costGovernor.recordUsage(Math.ceil((systemPrompt.length + message.length + oggyText.length) / 4));
+        const oggyText = oggyResult.text;
+        costGovernor.recordUsage(oggyResult.tokens_used || Math.ceil((systemPrompt.length + message.length + oggyText.length) / 4));
+        providerResolver.logRequest(userId, oggyResolved.provider, oggyResolved.model, 'oggy', 'dietChat', oggyResult.tokens_used, oggyResult.latency_ms, true, null);
 
         // Store chat message
         try {
@@ -248,9 +246,7 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
     }
 
     // --- Nutrition Analysis (AI) ---
-    async _analyzeNutrition(description, quantity, unit) {
-        if (!OPENAI_API_KEY) return null;
-
+    async _analyzeNutrition(description, quantity, unit, userId) {
         try {
             await costGovernor.checkBudget(1000);
 
@@ -258,22 +254,23 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
 Respond in JSON only (no markdown):
 {"calories":0,"protein_g":0,"carbs_g":0,"fat_g":0,"fiber_g":0,"sugar_g":0,"sodium_mg":0}`;
 
-            const response = await axios.post('https://api.openai.com/v1/chat/completions', {
-                model: OPENAI_MODEL,
+            const resolved = userId
+                ? await providerResolver.getAdapter(userId, 'oggy')
+                : await providerResolver.getAdapter('system', 'oggy');
+
+            const result = await resolved.adapter.chatCompletion({
+                model: resolved.model,
                 messages: [
                     { role: 'system', content: 'You are a nutrition expert. Estimate nutritional values accurately. Respond with JSON only.' },
                     { role: 'user', content: prompt }
                 ],
                 temperature: 0.2,
-                max_tokens: 150
-            }, {
-                headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+                max_tokens: 150,
                 timeout: 10000
             });
 
-            const text = response.data.choices[0].message.content.trim();
-            const jsonStr = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-            costGovernor.recordUsage(200);
+            const jsonStr = result.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            costGovernor.recordUsage(result.tokens_used || 200);
             return JSON.parse(jsonStr);
         } catch (err) {
             logger.debug('Nutrition analysis failed', { error: err.message });

@@ -25,7 +25,7 @@ const tessaAssessmentGenerator = require('./tessaAssessmentGenerator');
 const adaptiveDifficultyScaler = require('./adaptiveDifficultyScaler'); // { getInstance }
 const logger = require('../utils/logger');
 const correctionValidator = require('../utils/correctionValidator');
-const trainingReporter = require('./trainingReporter');
+const { getReporter } = require('./trainingReporter');
 const { recordBenchmarkMetrics } = require('../utils/telemetry');
 const { parallelMap } = require('../utils/parallel');
 const { query } = require('../utils/db');
@@ -298,9 +298,10 @@ class ContinuousLearningLoop {
             logger.warn('Session cleanup failed', { error: error.message });
         }
 
-        // Send final training report email
+        // Send final training report email (per-user reporter)
         try {
-            await trainingReporter.onSessionEnd(this.getStats());
+            const reporter = getReporter(this.userId);
+            await reporter.onSessionEnd(this.getStats());
         } catch (error) {
             logger.warn('Final training report failed', { error: error.message });
         }
@@ -374,8 +375,19 @@ class ContinuousLearningLoop {
             scale_name: difficultyConfig.scale_name,
             scale_level_display: `S${this.stats.current_scale} L${this.stats.difficulty_level}`,
             complexity_factors: difficultyConfig.complexity_factors,
-            upgrade_threshold: (this.config.both_models_threshold_for_upgrade * 100) + '%'
+            upgrade_threshold: (this.config.both_models_threshold_for_upgrade * 100) + '%',
+            // Reporter config (so UI can restore after page refresh)
+            report_email: this._getReporterConfig()?.email || null,
+            report_interval: this._getReporterConfig()?.interval || null
         };
+    }
+
+    _getReporterConfig() {
+        try {
+            if (!this.userId) return null;
+            const reporter = getReporter(this.userId);
+            return reporter.config;
+        } catch { return null; }
     }
 
     /**
@@ -572,9 +584,10 @@ class ContinuousLearningLoop {
                 }
                 await this._maybeDemoteDifficultyFromBenchmark(benchmarkResult);
 
-                // Send email report if configured for benchmark events
+                // Send email report if configured for benchmark events (per-user reporter)
                 try {
-                    await trainingReporter.onBenchmarkComplete(this.getStats(), benchmarkResult);
+                    const reporter = getReporter(this.userId);
+                    await reporter.onBenchmarkComplete(this.getStats(), benchmarkResult);
                 } catch (reportErr) {
                     logger.warn('Benchmark report failed', { error: reportErr.message });
                 }

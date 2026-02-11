@@ -33,6 +33,7 @@ const benchmarkAnalyticsRouter = require('./routes/benchmarkAnalytics');
 const observerRouter = require('./routes/observer');
 const generalChatRouter = require('./routes/generalChat');
 const dietRouter = require('./routes/diet');
+const settingsRouter = require('./routes/settings');
 // migrationRouter split into export/import — loaded below near mount points
 
 const authRouter = require('./routes/auth');
@@ -303,6 +304,9 @@ app.use('/v0/general', generalChatRouter);
 
 // V3: Diet Agent routes
 app.use('/v0/diet', dietRouter);
+
+// Settings (BYO-Model)
+app.use('/v0/settings', settingsRouter);
 
 // Migration import (behind auth — requires authentication)
 app.use('/v0/migration', migrationImportRouter);

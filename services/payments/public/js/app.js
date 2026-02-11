@@ -177,9 +177,10 @@ function renderSidebar(appName, activePage) {
             </div>
         </div>`;
     }
+    html += `<div class="sidebar-divider"></div>
+        <a href="/settings.html" class="sidebar-link ${appName === 'settings' ? 'active' : ''}" style="padding-left:16px">Settings</a>`;
     if (USER_ROLE === 'admin') {
-        html += `<div class="sidebar-divider"></div>
-            <a href="/admin.html" class="sidebar-link ${appName === 'admin' ? 'active' : ''}" style="padding-left:16px">Admin</a>`;
+        html += `<a href="/admin.html" class="sidebar-link ${appName === 'admin' ? 'active' : ''}" style="padding-left:16px">Admin</a>`;
     }
     sidebar.innerHTML = html;
 }
@@ -202,7 +203,7 @@ function toggleSidebar() {
 // Deprecated — kept for backward compatibility
 function renderNav(activePage) {
     renderTopbar();
-    const map = { enter: 'payments', view: 'payments', chat: 'payments', analytics: 'payments', v2: 'general', v3: 'diet', admin: 'admin' };
+    const map = { enter: 'payments', view: 'payments', chat: 'payments', analytics: 'payments', v2: 'general', v3: 'diet', settings: 'settings', admin: 'admin' };
     const pageMap = { v2: 'chat', v3: 'enter' };
     renderSidebar(map[activePage] || 'payments', pageMap[activePage] || activePage);
 }

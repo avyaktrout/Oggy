@@ -84,6 +84,18 @@ class TrainingReporter {
     }
 
     /**
+     * Called when an error stops the training session
+     */
+    async onError(stats, error) {
+        if (!this.config) return;
+
+        const errorMsg = error?.message || String(error) || 'Unknown error';
+        const errorStats = { ...stats, status: `Error: ${errorMsg}` };
+        await this._sendReport('Training Stopped — Error', errorStats, null);
+        this.stop();
+    }
+
+    /**
      * Timed interval report
      */
     async _sendTimedReport() {
@@ -143,11 +155,12 @@ class TrainingReporter {
         try {
             if (!benchmarkResult || !benchmarkResult.benchmark_id) return null;
 
-            // Look up result_id from sealed_benchmark_results
+            // Look up result_id from sealed_benchmark_results (scoped by userId)
+            const userId = this.config?.userId;
             const resultRow = await query(
                 `SELECT result_id FROM sealed_benchmark_results
-                 WHERE benchmark_id = $1 ORDER BY tested_at DESC LIMIT 1`,
-                [benchmarkResult.benchmark_id]
+                 WHERE benchmark_id = $1${userId ? ' AND user_id = $2' : ''} ORDER BY tested_at DESC LIMIT 1`,
+                userId ? [benchmarkResult.benchmark_id, userId] : [benchmarkResult.benchmark_id]
             );
             if (resultRow.rows.length === 0) return null;
 
@@ -303,7 +316,7 @@ class TrainingReporter {
                 ` : '<p style="color:#64748b">No benchmarks run yet.</p>'}
 
                 <p style="color:#94a3b8;font-size:12px;margin-top:16px">
-                    Duration: ${this.config?.duration_minutes || '-'} min &bull;
+                    Duration: ${this.config?.duration_minutes ? this.config.duration_minutes + ' min' : 'Indefinite'} &bull;
                     Report type: ${this.config?.interval || '-'}
                 </p>
             </div>
@@ -320,5 +333,23 @@ class TrainingReporter {
     }
 }
 
-// Singleton
-module.exports = new TrainingReporter();
+// Per-user reporter registry (fixes multi-tenant singleton bug)
+const reporters = new Map();
+
+function getReporter(userId) {
+    if (!userId) throw new Error('userId required for training reporter');
+    if (!reporters.has(userId)) {
+        reporters.set(userId, new TrainingReporter());
+    }
+    return reporters.get(userId);
+}
+
+function removeReporter(userId) {
+    const reporter = reporters.get(userId);
+    if (reporter) {
+        reporter.stop();
+        reporters.delete(userId);
+    }
+}
+
+module.exports = { getReporter, removeReporter, TrainingReporter };
