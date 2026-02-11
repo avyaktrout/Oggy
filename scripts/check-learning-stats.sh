@@ -33,7 +33,7 @@ if [ "$IS_RUNNING" = "true" ]; then
     echo "✅ Oggy is actively learning autonomously"
     echo ""
     echo "View logs:"
-    echo "  docker logs oggy-payments-service | grep 'self-driven learning'"
+    echo "  docker logs oggy-application-service | grep 'self-driven learning'"
 else
     echo "ℹ️  Self-driven learning is not active"
     echo ""

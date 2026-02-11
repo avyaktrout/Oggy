@@ -58,7 +58,7 @@ aws s3 cp "s3://${S3_BUCKET}/postgres/${BACKUP_FILE}" /tmp/oggy-restore.sql.gz
 # Stop services that use the DB
 echo "Stopping application services..."
 cd "$OGGY_DIR"
-docker compose -f docker-compose.staging.yml stop payments-service memory-service learning-service 2>/dev/null || true
+docker compose -f docker-compose.staging.yml stop application-service memory-service learning-service 2>/dev/null || true
 
 # Restore
 echo "Restoring database..."

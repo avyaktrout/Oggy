@@ -31,7 +31,7 @@ if curl -s "$PAYMENTS_URL/health" > /dev/null; then
     echo -e "${GREEN}✓${NC} Payments service is running"
 else
     echo -e "❌ Payments service is NOT running"
-    echo "   Run: docker-compose up -d payments-service"
+    echo "   Run: docker-compose up -d application-service"
     exit 1
 fi
 

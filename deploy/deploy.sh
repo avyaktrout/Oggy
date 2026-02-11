@@ -56,11 +56,11 @@ MAX_WAIT=60
 WAITED=0
 
 while [ $WAITED -lt $MAX_WAIT ]; do
-    # Check payments-service health
+    # Check application-service health
     HTTP_STATUS=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3001/health 2>/dev/null || echo "000")
 
     if [ "$HTTP_STATUS" = "200" ]; then
-        echo "  payments-service healthy (${WAITED}s)"
+        echo "  application-service healthy (${WAITED}s)"
         break
     fi
 
@@ -71,8 +71,8 @@ done
 
 if [ "$HTTP_STATUS" != "200" ]; then
     echo ""
-    echo "ERROR: payments-service failed health check after ${MAX_WAIT}s"
-    echo "Check logs: docker compose -f $COMPOSE_FILE logs payments-service"
+    echo "ERROR: application-service failed health check after ${MAX_WAIT}s"
+    echo "Check logs: docker compose -f $COMPOSE_FILE logs application-service"
     exit 1
 fi
 

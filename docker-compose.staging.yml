@@ -80,11 +80,11 @@ services:
           memory: 384M
           cpus: "0.5"
 
-  payments-service:
+  application-service:
     build:
       context: ./services/payments
       dockerfile: Dockerfile
-    container_name: oggy-payments-service
+    container_name: oggy-application-service
     restart: always
     environment:
       NODE_ENV: production

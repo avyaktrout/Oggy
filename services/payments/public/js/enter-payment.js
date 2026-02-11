@@ -63,8 +63,11 @@
                         `Confidence: ${Math.round((suggestion.confidence || 0) * 100)}%`;
                     document.getElementById('sug-reasoning').textContent = suggestion.reasoning || '';
                     sugBox.classList.add('show');
+                    // Trigger inquiry check for uncategorized expense
+                    if (typeof checkInquiries === 'function') setTimeout(checkInquiries, 2000);
                 } catch (sugErr) {
                     showToast('Payment saved! (Oggy suggestion unavailable)', 'info');
+                    if (typeof checkInquiries === 'function') setTimeout(checkInquiries, 2000);
                     resetForm();
                 }
             } else {

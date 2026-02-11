@@ -1,6 +1,6 @@
 /**
- * Payments Service - Main Entry Point
- * Stage 0, Week 7: Hardened with Resilience & Observability
+ * Application Service - Main Entry Point
+ * Hosts all domains: Payments, General Assistant, Diet Agent
  */
 
 const express = require('express');
@@ -8,43 +8,45 @@ const cors = require('cors');
 const path = require('path');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
-const { query, close } = require('./utils/db');
-const AppEventProcessor = require('./services/eventProcessor');
-const logger = require('./utils/logger');
-const { costGovernor } = require('./middleware/costGovernor');
+const { query, close } = require('./shared/utils/db');
+const AppEventProcessor = require('./shared/services/eventProcessor');
+const logger = require('./shared/utils/logger');
+const { costGovernor } = require('./shared/middleware/costGovernor');
 
-// Import routes
-const expensesRouter = require('./routes/expenses');
-const queryRouter = require('./routes/query');
-const categorizationRouter = require('./routes/categorization');
-const evaluationRouter = require('./routes/evaluation');
-const learningRouter = require('./routes/learning');
-const tessaRouter = require('./routes/tessa');
-const sealedBenchmarkRouter = require('./routes/sealedBenchmark');
-const memoryPruningRouter = require('./routes/memoryPruning');
-const trainingRouter = require('./routes/training');
-const benchmarkDrivenLearningRouter = require('./routes/benchmarkDrivenLearning');
-const continuousLearningRouter = require('./routes/continuousLearning');
-const serviceHealthRouter = require('./routes/serviceHealth');
-const chatRouter = require('./routes/chat');
-const inquiriesRouter = require('./routes/inquiries');
-const preferencesRouter = require('./routes/preferences');
-const benchmarkAnalyticsRouter = require('./routes/benchmarkAnalytics');
-const observerRouter = require('./routes/observer');
-const generalChatRouter = require('./routes/generalChat');
-const dietRouter = require('./routes/diet');
-const settingsRouter = require('./routes/settings');
+// Shared routes
+const evaluationRouter = require('./shared/routes/evaluation');
+const learningRouter = require('./shared/routes/learning');
+const tessaRouter = require('./shared/routes/tessa');
+const sealedBenchmarkRouter = require('./shared/routes/sealedBenchmark');
+const memoryPruningRouter = require('./shared/routes/memoryPruning');
+const trainingRouter = require('./shared/routes/training');
+const benchmarkDrivenLearningRouter = require('./shared/routes/benchmarkDrivenLearning');
+const continuousLearningRouter = require('./shared/routes/continuousLearning');
+const serviceHealthRouter = require('./shared/routes/serviceHealth');
+const inquiriesRouter = require('./shared/routes/inquiries');
+const preferencesRouter = require('./shared/routes/preferences');
+const benchmarkAnalyticsRouter = require('./shared/routes/benchmarkAnalytics');
+const observerRouter = require('./shared/routes/observer');
+const settingsRouter = require('./shared/routes/settings');
 // migrationRouter split into export/import — loaded below near mount points
 
-const authRouter = require('./routes/auth');
-const authService = require('./services/authService');
-const { requireAuth, requireCSRF, injectUserId } = require('./middleware/auth');
+const authRouter = require('./shared/routes/auth');
+const authService = require('./shared/services/authService');
+const { requireAuth, requireCSRF, injectUserId } = require('./shared/middleware/auth');
 
-const auditChecker = require('./utils/auditChecker');
-const { getClient: getRedisClient } = require('./utils/redisClient');
-const chatHandler = require('./services/chatHandler');
-const { runMigrations } = require('./utils/migrationRunner');
-const { initTelemetry, seedHistoricalMetrics } = require('./utils/telemetry');
+const auditChecker = require('./shared/utils/auditChecker');
+const { getClient: getRedisClient } = require('./shared/utils/redisClient');
+const chatHandler = require('./shared/services/chatHandler');
+const { runMigrations } = require('./shared/utils/migrationRunner');
+const { initTelemetry, seedHistoricalMetrics } = require('./shared/utils/telemetry');
+
+// Domain routes
+const expensesRouter = require('./domains/payments/routes/expenses');
+const queryRouter = require('./domains/payments/routes/query');
+const categorizationRouter = require('./domains/payments/routes/categorization');
+const chatRouter = require('./domains/payments/routes/chat');
+const generalChatRouter = require('./domains/general/routes/generalChat');
+const dietRouter = require('./domains/diet/routes/diet');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -132,7 +134,7 @@ app.get('/health', async (req, res) => {
 
     res.status(statusCode).json({
         ok: overallOk,
-        service: 'payments-service',
+        service: 'application-service',
         version: '0.2.0',
         timestamp: new Date().toISOString(),
         checks,
@@ -200,7 +202,7 @@ app.use('/js', express.static(path.join(publicDir, 'js'), noCacheStatic));
 
 // Migration export (before auth — allows local instances to export without login)
 // Import is still protected by auth middleware below.
-const { migrationExportRouter, migrationImportRouter } = require('./routes/migration');
+const { migrationExportRouter, migrationImportRouter } = require('./shared/routes/migration');
 app.use('/v0/migration', migrationExportRouter);
 
 // Receive-sync endpoint (before auth — uses X-Sync-Key header for auth)
@@ -378,7 +380,7 @@ app.use((req, res) => {
 
 // Start server
 const server = app.listen(PORT, async () => {
-    logger.info('🚀 Payments Service starting', {
+    logger.info('🚀 Application Service starting', {
         port: PORT,
         version: '0.2.0',
         nodeEnv: process.env.NODE_ENV || 'development'
@@ -416,9 +418,9 @@ const server = app.listen(PORT, async () => {
         const redisClient = await getRedisClient();
         if (redisClient) {
             chatHandler.setRedisClient(redisClient);
-            const { setRedisClient: setPrefsRedis } = require('./routes/preferences');
+            const { setRedisClient: setPrefsRedis } = require('./shared/routes/preferences');
             setPrefsRedis(redisClient);
-            const { suggestionGate } = require('./services/suggestionGate');
+            const { suggestionGate } = require('./shared/services/suggestionGate');
             suggestionGate.setRedisClient(redisClient);
             logger.info('✅ Redis connected for behavior system');
         } else {
@@ -439,7 +441,7 @@ const server = app.listen(PORT, async () => {
 
     // Start Observer schedule (federated learning every 6 hours)
     try {
-        const observerService = require('./services/observerService');
+        const observerService = require('./shared/services/observerService');
         observerService.startSchedule(6);
         logger.info('✅ Observer schedule started (every 6 hours)');
     } catch (error) {

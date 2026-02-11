@@ -17,9 +17,9 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 if curl -sf http://localhost:3001/health > /dev/null 2>&1; then
-    echo "✅ Payments Service: UP"
+    echo "✅ Application Service: UP"
 else
-    echo "❌ Payments Service: DOWN"
+    echo "❌ Application Service: DOWN"
 fi
 
 if curl -sf http://localhost:3000/health > /dev/null 2>&1; then
@@ -97,7 +97,7 @@ echo "4. RECENT ACTIVITY (LAST 10 LOG LINES)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-docker logs oggy-payments-service --tail 10 2>&1 | grep -E "(info|error|warn)" | tail -10
+docker logs oggy-application-service --tail 10 2>&1 | grep -E "(info|error|warn)" | tail -10
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

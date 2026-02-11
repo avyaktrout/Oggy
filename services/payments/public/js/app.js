@@ -213,7 +213,7 @@ function renderNav(activePage) {
 let _inquiryPollInterval = null;
 function startInquiryPolling() {
     checkInquiries();
-    _inquiryPollInterval = setInterval(checkInquiries, 60000);
+    _inquiryPollInterval = setInterval(checkInquiries, 15000);
 }
 
 async function checkInquiries() {

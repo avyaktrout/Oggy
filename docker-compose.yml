@@ -84,12 +84,12 @@ services:
         condition: service_started
     command: npm run dev
 
-  # Payments Service (Node.js) - Week 5
-  payments-service:
+  # Application Service (Node.js) - Payments, General Assistant, Diet Agent
+  application-service:
     build:
       context: ./services/payments
       dockerfile: Dockerfile
-    container_name: oggy-payments-service
+    container_name: oggy-application-service
     restart: unless-stopped
     environment:
       NODE_ENV: ${NODE_ENV:-development}
@@ -107,7 +107,7 @@ services:
       XAI_API_KEY: ${XAI_API_KEY:-}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-      OTEL_SERVICE_NAME: payments-service
+      OTEL_SERVICE_NAME: application-service
       DAILY_TOKEN_BUDGET: "20000000"
       REDIS_HOST: redis
       REDIS_PORT: 6379

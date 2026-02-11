@@ -56,10 +56,10 @@ StandardError=journal
 WantedBy=multi-user.target
 SVCEOF
 
-# Add hosts entry so cloudflared can resolve payments-service to localhost
-if ! grep -q "payments-service" /etc/hosts; then
-    echo "127.0.0.1 payments-service" >> /etc/hosts
-    echo "Added hosts entry: 127.0.0.1 payments-service"
+# Add hosts entry so cloudflared can resolve application-service to localhost
+if ! grep -q "application-service" /etc/hosts; then
+    echo "127.0.0.1 application-service" >> /etc/hosts
+    echo "Added hosts entry: 127.0.0.1 application-service"
 fi
 
 # Enable and start

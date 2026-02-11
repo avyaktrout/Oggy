@@ -9,7 +9,7 @@ case "$SERVICE" in
     payments|pay)
         echo "📊 Viewing Payments Service logs (last $LINES lines)"
         echo "====================================================="
-        docker logs oggy-payments-service --tail $LINES -f
+        docker logs oggy-application-service --tail $LINES -f
         ;;
     memory|mem)
         echo "📊 Viewing Memory Service logs (last $LINES lines)"

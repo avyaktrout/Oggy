@@ -1,5 +1,5 @@
 {
-  "name": "payments-service",
+  "name": "application-service",
   "version": "0.1.0",
   "description": "Oggy Stage 0 - Payments Application for Continuous Learning",
   "main": "src/index.js",

@@ -16,8 +16,10 @@ CREATE TABLE IF NOT EXISTS oggy_inquiries (
     expires_at TIMESTAMPTZ NOT NULL DEFAULT (now() + INTERVAL '7 days'),
     generation_date DATE NOT NULL DEFAULT CURRENT_DATE,
     CONSTRAINT valid_inquiry_status CHECK (status IN ('pending', 'answered', 'dismissed', 'expired')),
+    response_type TEXT NOT NULL DEFAULT 'clarification',
     CONSTRAINT valid_question_type CHECK (question_type IN (
-        'ambiguous_merchant', 'category_confusion', 'spending_pattern', 'preference'
+        'ambiguous_merchant', 'category_confusion', 'spending_pattern', 'preference',
+        'uncategorized_expense', 'cost_cutting', 'high_confidence_confirmation'
     ))
 );
 

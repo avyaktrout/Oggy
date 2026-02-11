@@ -6,8 +6,8 @@
 # See start-tunnel.bat to launch the tunnel.
 
 services:
-  # Override payments-service for production
-  payments-service:
+  # Override application-service for production
+  application-service:
     environment:
       NODE_ENV: production
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
