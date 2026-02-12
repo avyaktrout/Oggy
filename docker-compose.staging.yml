@@ -1,14 +1,16 @@
-# EC2 Staging/Production Compose
+# EC2 Staging/Production Compose — Microservices Architecture
 # Usage: docker compose -f docker-compose.staging.yml up -d
 #
-# Differences from dev compose:
-#   - No source code volume mounts (uses baked-in COPY from Dockerfile)
-#   - No OTEL collector (reduces resource usage on t3.small)
-#   - Production NODE_ENV
-#   - Resource limits for t3.small (2 vCPU, 2GB RAM)
-#   - Restart policies
-#   - Named volumes for persistence
-#   - No host port exposure for postgres/redis (only accessible within Docker network)
+# Architecture:
+#   gateway (3001)   → auth, static files, shared routes, proxy
+#   payments (3010)  → expenses, chat, categorization, training, benchmarks
+#   general (3011)   → general chat, projects
+#   diet (3012)      → diet chat, entries, nutrition, rules
+#   memory (3000)    → vector memory (existing)
+#   learning (8000)  → Python learning service (existing)
+#
+# All application services share one Docker image (oggy-app), different CMD.
+# Resource limits tuned for t3.small (2 vCPU, 2GB RAM).
 
 services:
   postgres:
@@ -77,14 +79,16 @@ services:
     deploy:
       resources:
         limits:
-          memory: 384M
+          memory: 256M
           cpus: "0.5"
 
-  application-service:
+  # ── API Gateway ──────────────────────────────────
+  gateway:
+    image: oggy-app:latest
     build:
       context: ./services/applications
       dockerfile: Dockerfile
-    container_name: oggy-application-service
+    container_name: oggy-gateway
     restart: always
     environment:
       NODE_ENV: production
@@ -95,13 +99,15 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-oggy_db}
       MEMORY_SERVICE_URL: http://memory-service:3000
+      PAYMENTS_SERVICE_URL: http://payments-service:3010
+      GENERAL_SERVICE_URL: http://general-service:3011
+      DIET_SERVICE_URL: http://diet-service:3012
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       GOOGLE_AI_KEY: ${GOOGLE_AI_KEY:-}
       XAI_API_KEY: ${XAI_API_KEY:-}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
-      DAILY_TOKEN_BUDGET: "20000000"
       REDIS_HOST: redis
       REDIS_PORT: 6379
       SMTP_HOST: ${SMTP_HOST:-}
@@ -122,13 +128,123 @@ services:
         condition: service_healthy
       memory-service:
         condition: service_started
-    command: npm start
+    command: npm run start:gateway
     deploy:
       resources:
         limits:
-          memory: 512M
-          cpus: "1.0"
+          memory: 128M
+          cpus: "0.25"
 
+  # ── Payments Domain Service ──────────────────────
+  payments-service:
+    image: oggy-app:latest
+    container_name: oggy-payments-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      PORT: 3010
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-oggy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-oggy_db}
+      MEMORY_SERVICE_URL: http://memory-service:3000
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GOOGLE_AI_KEY: ${GOOGLE_AI_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      DAILY_TOKEN_BUDGET: "20000000"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      memory-service:
+        condition: service_started
+    command: npm run start:payments
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+
+  # ── General Domain Service ──────────────────────
+  general-service:
+    image: oggy-app:latest
+    container_name: oggy-general-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      PORT: 3011
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-oggy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-oggy_db}
+      MEMORY_SERVICE_URL: http://memory-service:3000
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GOOGLE_AI_KEY: ${GOOGLE_AI_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      memory-service:
+        condition: service_started
+    command: npm run start:general
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+
+  # ── Diet Domain Service ─────────────────────────
+  diet-service:
+    image: oggy-app:latest
+    container_name: oggy-diet-service
+    restart: always
+    environment:
+      NODE_ENV: production
+      PORT: 3012
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-oggy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-oggy_db}
+      MEMORY_SERVICE_URL: http://memory-service:3000
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GOOGLE_AI_KEY: ${GOOGLE_AI_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      memory-service:
+        condition: service_started
+    command: npm run start:diet
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+
+  # ── Learning Service (Python, existing) ─────────
   learning-service:
     build:
       context: ./services/learning
@@ -158,7 +274,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 384M
+          memory: 256M
           cpus: "0.5"
 
 volumes:

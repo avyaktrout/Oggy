@@ -5,6 +5,10 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
+    "start:gateway": "node src/gateway.js",
+    "start:payments": "node src/payments-entry.js",
+    "start:general": "node src/general-entry.js",
+    "start:diet": "node src/diet-entry.js",
     "dev": "nodemon src/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

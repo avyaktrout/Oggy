@@ -84,22 +84,26 @@ services:
         condition: service_started
     command: npm run dev
 
-  # Application Service (Node.js) - Payments, General Assistant, Diet Agent
-  application-service:
+  # ── API Gateway ──────────────────────────────────
+  gateway:
+    image: oggy-app:latest
     build:
       context: ./services/applications
       dockerfile: Dockerfile
-    container_name: oggy-application-service
+    container_name: oggy-gateway
     restart: unless-stopped
     environment:
       NODE_ENV: ${NODE_ENV:-development}
-      PORT: ${PAYMENTS_SERVICE_PORT:-3001}
+      PORT: 3001
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-oggy}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oggy_dev_password}
       POSTGRES_DB: ${POSTGRES_DB:-oggy_db}
       MEMORY_SERVICE_URL: http://memory-service:3000
+      PAYMENTS_SERVICE_URL: http://payments-service:3010
+      GENERAL_SERVICE_URL: http://general-service:3011
+      DIET_SERVICE_URL: http://diet-service:3012
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
@@ -107,8 +111,7 @@ services:
       XAI_API_KEY: ${XAI_API_KEY:-}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-      OTEL_SERVICE_NAME: application-service
-      DAILY_TOKEN_BUDGET: "20000000"
+      OTEL_SERVICE_NAME: gateway
       REDIS_HOST: redis
       REDIS_PORT: 6379
       SMTP_HOST: ${SMTP_HOST:-}
@@ -132,7 +135,122 @@ services:
         condition: service_healthy
       memory-service:
         condition: service_started
-    command: npm start
+    command: npm run start:gateway
+
+  # ── Payments Domain Service ──────────────────────
+  payments-service:
+    image: oggy-app:latest
+    container_name: oggy-payments-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3010
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-oggy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oggy_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-oggy_db}
+      MEMORY_SERVICE_URL: http://memory-service:3000
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GOOGLE_AI_KEY: ${GOOGLE_AI_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: payments-service
+      DAILY_TOKEN_BUDGET: "20000000"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    ports:
+      - "3010:3010"
+    volumes:
+      - ./services/applications:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      memory-service:
+        condition: service_started
+    command: npm run start:payments
+
+  # ── General Domain Service ──────────────────────
+  general-service:
+    image: oggy-app:latest
+    container_name: oggy-general-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3011
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-oggy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oggy_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-oggy_db}
+      MEMORY_SERVICE_URL: http://memory-service:3000
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GOOGLE_AI_KEY: ${GOOGLE_AI_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: general-service
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    ports:
+      - "3011:3011"
+    volumes:
+      - ./services/applications:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      memory-service:
+        condition: service_started
+    command: npm run start:general
+
+  # ── Diet Domain Service ─────────────────────────
+  diet-service:
+    image: oggy-app:latest
+    container_name: oggy-diet-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3012
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-oggy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oggy_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-oggy_db}
+      MEMORY_SERVICE_URL: http://memory-service:3000
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GOOGLE_AI_KEY: ${GOOGLE_AI_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: diet-service
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    ports:
+      - "3012:3012"
+    volumes:
+      - ./services/applications:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      memory-service:
+        condition: service_started
+    command: npm run start:diet
 
   # Learning Service (Python)
   learning-service:

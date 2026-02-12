@@ -1,0 +1,130 @@
+/**
+ * Diet Domain Service Entry Point
+ *
+ * Runs behind the API gateway. Handles diet agent routes:
+ * chat, entries, nutrition, rules, and continuous learning for the diet domain.
+ */
+
+const express = require('express');
+const { v4: uuidv4 } = require('uuid');
+const { query, close } = require('./shared/utils/db');
+const logger = require('./shared/utils/logger');
+const { injectUserIdFromHeader } = require('./shared/middleware/internalService');
+
+// Domain routes
+const dietRouter = require('./domains/diet/routes/diet');
+
+// Shared routes used by diet domain
+const continuousLearningRouter = require('./shared/routes/continuousLearning');
+
+const app = express();
+const PORT = process.env.PORT || 3012;
+
+// ──────────────────────────────────────────────────
+// Middleware
+// ──────────────────────────────────────────────────
+app.use(express.json({ limit: '50mb' }));
+
+// Request ID (forwarded from gateway)
+app.use((req, res, next) => {
+    req.requestId = req.headers['x-request-id'] || uuidv4();
+    res.setHeader('x-request-id', req.requestId);
+    next();
+});
+
+// Request logging
+app.use((req, res, next) => {
+    const startTime = Date.now();
+    res.on('finish', () => {
+        logger.info('HTTP Request', {
+            requestId: req.requestId,
+            method: req.method,
+            path: req.path,
+            statusCode: res.statusCode,
+            duration_ms: Date.now() - startTime,
+            service: 'diet',
+        });
+    });
+    next();
+});
+
+// Inject user_id from gateway header
+app.use(injectUserIdFromHeader);
+
+// ──────────────────────────────────────────────────
+// Health check
+// ──────────────────────────────────────────────────
+app.get('/health', async (req, res) => {
+    let dbOk = false;
+    try {
+        await query('SELECT 1');
+        dbOk = true;
+    } catch (_) {}
+
+    res.status(dbOk ? 200 : 503).json({
+        ok: dbOk,
+        service: 'diet-service',
+        timestamp: new Date().toISOString(),
+        checks: { database: dbOk },
+    });
+});
+
+// ──────────────────────────────────────────────────
+// Routes
+// ──────────────────────────────────────────────────
+app.use('/v0/diet', dietRouter);
+app.use('/v0/continuous-learning', continuousLearningRouter);
+
+// ──────────────────────────────────────────────────
+// Error + 404 handlers
+// ──────────────────────────────────────────────────
+app.use((error, req, res, _next) => {
+    logger.logError(error, { requestId: req.requestId, path: req.path, service: 'diet' });
+    res.status(500).json({ error: 'Internal server error', requestId: req.requestId });
+});
+
+app.use((req, res) => {
+    res.status(404).json({ error: 'Not found', path: req.path, service: 'diet' });
+});
+
+// ──────────────────────────────────────────────────
+// Start server
+// ──────────────────────────────────────────────────
+const server = app.listen(PORT, async () => {
+    logger.info('Diet service starting', { port: PORT });
+
+    // Database check
+    try {
+        await query('SELECT 1');
+        logger.info('Database connection verified (diet)');
+    } catch (error) {
+        logger.error('Database connection failed (diet)', { error: error.message });
+        process.exit(1);
+    }
+
+    logger.info('Diet service ready');
+});
+
+// Graceful shutdown
+function gracefulShutdown(signal) {
+    logger.warn(`${signal} received, shutting down diet service`);
+    const timeout = setTimeout(() => process.exit(1), 30000);
+    server.close(async () => {
+        try { await close(); } catch (_) {}
+        clearTimeout(timeout);
+        process.exit(0);
+    });
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('uncaughtException', (error) => {
+    logger.error('Uncaught exception (diet)', { error: error.message, stack: error.stack });
+    process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+    logger.error('Unhandled rejection (diet)', {
+        reason: reason instanceof Error ? reason.message : String(reason),
+    });
+});
+
+module.exports = app;

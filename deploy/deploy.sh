@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# Oggy Deployment Script for EC2
+# Oggy Deployment Script for EC2 — Microservices Architecture
 # Pulls latest code, rebuilds containers, and verifies health.
 #
 # Usage: cd /opt/oggy && ./deploy/deploy.sh
@@ -30,12 +30,12 @@ fi
 
 # --- Pull latest code ---
 echo ""
-echo "[1/5] Pulling latest code..."
+echo "[1/6] Pulling latest code..."
 git pull --ff-only origin main
 
 # --- Backup database before deploy ---
 echo ""
-echo "[2/5] Backing up database..."
+echo "[2/6] Backing up database..."
 if command -v aws &> /dev/null && aws sts get-caller-identity &> /dev/null; then
     ./deploy/backup-postgres.sh || echo "WARNING: Backup failed, continuing deploy..."
 else
@@ -45,22 +45,21 @@ fi
 
 # --- Build and deploy ---
 echo ""
-echo "[3/5] Building and deploying containers..."
+echo "[3/6] Building and deploying containers..."
 docker compose -f "$COMPOSE_FILE" build --no-cache
 docker compose -f "$COMPOSE_FILE" up -d
 
-# --- Wait for health ---
+# --- Wait for gateway health ---
 echo ""
-echo "[4/5] Waiting for services to be healthy..."
-MAX_WAIT=60
+echo "[4/6] Waiting for gateway to be healthy..."
+MAX_WAIT=90
 WAITED=0
 
 while [ $WAITED -lt $MAX_WAIT ]; do
-    # Check application-service health
     HTTP_STATUS=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3001/health 2>/dev/null || echo "000")
 
     if [ "$HTTP_STATUS" = "200" ]; then
-        echo "  application-service healthy (${WAITED}s)"
+        echo "  Gateway healthy (${WAITED}s)"
         break
     fi
 
@@ -71,14 +70,39 @@ done
 
 if [ "$HTTP_STATUS" != "200" ]; then
     echo ""
-    echo "ERROR: application-service failed health check after ${MAX_WAIT}s"
-    echo "Check logs: docker compose -f $COMPOSE_FILE logs application-service"
+    echo "ERROR: Gateway failed health check after ${MAX_WAIT}s"
+    echo "Check logs: docker compose -f $COMPOSE_FILE logs gateway"
     exit 1
+fi
+
+# --- Check all domain services ---
+echo ""
+echo "[5/6] Checking domain services..."
+SERVICES=("payments-service:3010" "general-service:3011" "diet-service:3012")
+ALL_HEALTHY=true
+
+for SVC in "${SERVICES[@]}"; do
+    NAME="${SVC%%:*}"
+    PORT="${SVC##*:}"
+    SVC_STATUS=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${PORT}/health" 2>/dev/null || echo "000")
+
+    if [ "$SVC_STATUS" = "200" ]; then
+        echo "  ${NAME}: HEALTHY"
+    else
+        echo "  ${NAME}: UNHEALTHY (status: ${SVC_STATUS})"
+        ALL_HEALTHY=false
+    fi
+done
+
+if [ "$ALL_HEALTHY" = false ]; then
+    echo ""
+    echo "WARNING: Some domain services are unhealthy. Check logs:"
+    echo "  docker compose -f $COMPOSE_FILE logs payments-service general-service diet-service"
 fi
 
 # --- Verify all containers ---
 echo ""
-echo "[5/5] Container status:"
+echo "[6/6] Container status:"
 docker compose -f "$COMPOSE_FILE" ps
 
 # --- Check tunnel ---
@@ -94,6 +118,9 @@ echo ""
 echo "=========================================="
 echo "  Deploy Complete!"
 echo "=========================================="
-echo "  Site: https://oggy-v1.com"
-echo "  Health: curl http://localhost:3001/health"
+echo "  Site:     https://oggy-v1.com"
+echo "  Gateway:  curl http://localhost:3001/health"
+echo "  Payments: curl http://localhost:3010/health"
+echo "  General:  curl http://localhost:3011/health"
+echo "  Diet:     curl http://localhost:3012/health"
 echo ""

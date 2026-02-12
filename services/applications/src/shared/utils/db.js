@@ -11,9 +11,9 @@ const pool = new Pool({
     database: process.env.POSTGRES_DB || 'oggy_stage0',
     user: process.env.POSTGRES_USER || 'oggy_user',
     password: process.env.POSTGRES_PASSWORD || 'oggy_password',
-    max: 20,
+    max: 10,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
+    connectionTimeoutMillis: 5000,
 });
 
 // Test connection on startup
