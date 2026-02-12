@@ -1,257 +1,211 @@
-# Oggy - Stage 0
+# Oggy
 
-A continuously learning AI agent system with full auditability. Oggy learns from user feedback and benchmark-driven training to improve expense categorization accuracy over time.
+A continuously learning AI agent that improves from user feedback and benchmark-driven training. Oggy powers three domain agents — expense categorization, general conversation, and diet tracking — each with its own training pipeline, memory system, and performance analytics.
 
-## Timeline
+Live at **https://oggy-v1.com**
 
-**Stage 0**: 8 weeks (Feb 2 – Mar 29, 2026)
+## Architecture
 
-**Current Progress**: Week 6 - "Base vs Oggy Head-to-Head"
+```
+Browser --> Cloudflare Tunnel --> Gateway (:3001)
+                                    |-- static files, auth, CORS
+                                    |-- shared routes (preferences, settings, analytics)
+                                    |-- proxy --> Payments Service (:3010)
+                                    |-- proxy --> General Service  (:3011)
+                                    |-- proxy --> Diet Service     (:3012)
+                                    |
+                                 Memory Service (:3000)
+                                    |
+                              +-----+-----+
+                              |           |
+                          PostgreSQL    Redis
+                            :5432      :6379
 
-## Project Progress
+                         Learning Service (:8000)
+                            (Python/FastAPI)
+```
 
-### Week 1 - "The Spine Runs" ✓
-- Memory Service (Node.js) with Postgres + Redis
-- Learning Service skeleton (Python)
+All application services share a single Docker image (`oggy-app`) with different entry points. The gateway validates auth and proxies requests to domain services via `X-User-Id` headers.
+
+## Services
+
+| Service | Port | Stack | Role |
+|---------|------|-------|------|
+| Gateway | 3001 | Node.js/Express | Auth, static files, CORS, proxy |
+| Payments | 3010 | Node.js/Express | Expense categorization, chat, training, benchmarks |
+| General | 3011 | Node.js/Express | General conversation, projects |
+| Diet | 3012 | Node.js/Express | Diet tracking, nutrition, meal logging |
+| Memory | 3000 | Node.js/Express | Vector memory CRUD, semantic retrieval, utility updates |
+| Learning | 8000 | Python/FastAPI | Agent orchestration, scoring, training loops |
+| PostgreSQL | 5432 | Postgres 15 | Persistent storage |
+| Redis | 6379 | Redis 7 | Cache, working memory, session state |
+
+## Features
+
+**Learning System**
+- Memory-augmented responses using retrieved context
+- Continuous training with auto-generated benchmarks (Tessa)
+- Difficulty scaling across 5 levels (S1-S5) with 3 sub-levels each
+- Benchmark-driven targeted learning from weakness analysis
+- Federated learning via Observer (cross-tenant knowledge packs)
+
+**Payments Domain**
+- Expense entry with AI categorization suggestions
+- Oggy vs Base model comparison (side-by-side chat)
+- Self-driven inquiries for ambiguous expenses
+- Domain knowledge storage for categorization rules
+
+**General Domain**
+- Conversational AI with persistent memory
+- Project-scoped conversations
+
+**Diet Domain**
+- Natural language meal logging
+- Nutritional breakdown and daily tracking
+- Custom dietary rules
+
+**Platform**
+- Magic link authentication (email-based, no passwords)
+- BYO-Model settings (OpenAI, Anthropic, Google, xAI)
+- Training email reports with configurable intervals
+- Performance analytics dashboard per domain
 - Full audit trail with evidence requirements
-- Docker Compose orchestration
-
-### Week 2 - "Contracts + Evaluation Bundle" ✓
-- Finalized reason_codes, context schema, error codes
-- Evaluation bundle format
-- Basic scoring framework
-
-### Week 3 - "Tessa v1" ✓
-- Tessa agent prototype with GPT-4o-mini
-- Generates practice assessments (trainable)
-- Generates sealed benchmarks (held out)
-- Difficulty tiers (warmup, standard, challenge, expert)
-- Domain knowledge storage for generated scenarios
-
-### Week 4 - "Continuous Learning Loop v1" ✓
-- Oggy categorizer with memory retrieval
-- Memory validation utility with reason_code + evidence_pointer
-- Memory-augmented prompts for personalized categorization
-
-### Week 5 - "Payments App Minimal Surface" ✓
-- Payments application: add/edit expense, categorize expense, query expenses
-- Training data pipeline: app events feed domain_knowledge + memory substrate
-
-### Week 6 - "Base vs Oggy Head-to-Head" ← CURRENT
-- Automated benchmark runs comparing Base vs Oggy
-- Comparison report with delta %, confidence, verdict
-- Benchmark-driven targeted learning based on weakness analysis
-
-**Results Achieved:**
-| Metric | Before Training | After Training |
-|--------|-----------------|----------------|
-| Oggy | 92.5% | **97.5%** |
-| Base | 92.5% | 92.5% |
-| Verdict | TIE | **OGGY_BETTER** |
-
-**Key Fixes:**
-1. Fixed correction memory formatting - memories now render as clear rules in prompts
-2. Added skip logic for inherently ambiguous category pairs (dining/business_meal)
-3. Improved benchmark generation prompts to create unambiguous test scenarios
-4. Deleted problematic correction memories that were teaching wrong patterns
-
-### Week 7 - "Hardening + Failure Modes" (Upcoming)
-- Retry policies, rate limiting / cost caps
-- Safe fallback when memory service is down
-- Audit completeness checker
-- makefile/scripts for common runs
-- CI checks: lint + unit tests for core utilities
-
-### Week 8 - "Stage 0 Demo Ready" (Upcoming)
-- Demo flow: enter expense → Oggy trains → Tessa evaluates → report shows movement vs base
-- Audit log explains why memory changes happened
-- Lightweight pitch artifact: 1–2 page summary + charts from real runs
 
 ## Prerequisites
 
 - Docker & Docker Compose
-- Node.js 20+ (for local development)
-- Python 3.11+ (for local development)
 - OpenAI API key
-- Anthropic API key (optional, for OOD benchmarks)
+- Anthropic API key (optional)
+- SMTP credentials for email features (optional)
 
 ## Quick Start
 
-### 1. Copy environment file
+### 1. Configure environment
 
 ```bash
 cp .env.example .env
-# Add your OPENAI_API_KEY and optionally ANTHROPIC_API_KEY
+# Fill in: OPENAI_API_KEY, POSTGRES_PASSWORD, and optionally ANTHROPIC_API_KEY, SMTP_*
 ```
 
 ### 2. Start all services
 
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
-This will start:
-- **PostgreSQL** (port 5432) - Memory persistence
-- **Redis** (port 6379) - Working memory/cache
-- **OpenTelemetry Collector** (ports 4317, 4318, 8888) - Observability
-- **Memory Service** (port 3000) - Memory CRUD + retrieval + utility updates
-- **Learning Service** (port 8000) - Training loops and agents
-- **Payments Service** (port 3001) - Oggy categorizer, benchmarks, training
-
-### 3. Verify services are running
+### 3. Verify
 
 ```bash
-curl http://localhost:3000/health  # Memory Service
-curl http://localhost:8000/health  # Learning Service
-curl http://localhost:3001/health  # Payments Service
+curl http://localhost:3001/health   # Gateway (aggregated)
+curl http://localhost:3000/health   # Memory Service
+curl http://localhost:8000/health   # Learning Service
 ```
 
-## Benchmark-Driven Training (Week 8)
+### 4. Access the app
 
-### Create a Sealed Benchmark
-
-```bash
-curl -X POST http://localhost:3001/v0/sealed-benchmark/create \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "my_benchmark_v1",
-    "count": 50,
-    "use_ood": false,
-    "difficulty_mix": "balanced"
-  }'
-```
-
-### Test on Sealed Benchmark
-
-```bash
-curl -X POST http://localhost:3001/v0/sealed-benchmark/test \
-  -H "Content-Type: application/json" \
-  -d '{
-    "benchmark_name": "my_benchmark_v1",
-    "user_id": "test"
-  }'
-```
-
-### Run Benchmark-Driven Training
-
-```bash
-curl -X POST http://localhost:3001/v0/training/benchmark-driven \
-  -H "Content-Type: application/json" \
-  -d '{
-    "result_id": "<result_id from test>",
-    "user_id": "test",
-    "duration_minutes": 3,
-    "items_per_category": 50,
-    "auto_retest": true
-  }'
-```
-
-## Architecture
-
-```
-┌─────────────────────┐     ┌─────────────────────┐
-│  Learning Service   │     │  Payments Service   │
-│  Port 8000          │     │  Port 3001          │
-│  (Python/FastAPI)   │     │  (Node.js/Express)  │
-└──────────┬──────────┘     └──────────┬──────────┘
-           │                           │
-           │         HTTP              │
-           └───────────┬───────────────┘
-                       ▼
-           ┌─────────────────────┐
-           │  Memory Service     │
-           │  Port 3000          │
-           │  (Node.js/Express)  │
-           └──────────┬──────────┘
-                      │
-                 ┌────┴────┐
-                 │         │
-                 ▼         ▼
-             ┌────────┐  ┌────────┐
-             │Postgres│  │ Redis  │
-             │  5432  │  │  6379  │
-             └────────┘  └────────┘
-```
-
-## Key Services
-
-### Payments Service (port 3001)
-
-**Oggy Categorizer** - Expense categorization with memory augmentation
-- Retrieves relevant memories before categorization
-- Formats correction memories as clear rules
-- Falls back gracefully when services unavailable
-
-**Sealed Benchmark System**
-- `POST /v0/sealed-benchmark/create` - Create fixed test sets
-- `POST /v0/sealed-benchmark/test` - Test Oggy vs Base
-- `GET /v0/sealed-benchmark/list` - List all benchmarks
-
-**Benchmark-Driven Training**
-- `POST /v0/training/benchmark-driven` - Run targeted training
-- `GET /v0/training/benchmark-driven/status` - Check training status
-- `POST /v0/training/benchmark-driven/stop` - Stop training early
-
-**Tessa Assessment Generator**
-- Generates novel practice scenarios via GPT-4o-mini
-- Supports difficulty tiers and confusion-targeted generation
-- Stores generated scenarios in domain knowledge
-
-### Memory Service (port 3000)
-
-- Memory card CRUD operations
-- Semantic retrieval with tag filtering
-- Utility weight updates with audit trail
-- Tiered memory system (working, short-term, long-term, archive)
-
-### Learning Service (port 8000)
-
-- Agent orchestration
-- Scoring framework
-- Training loop management
-
-## Core Integrity Rules
-
-**Evidence Requirement (CRITICAL):**
-- NO memory update without evidence pointer
-- Evidence: `trace_id`, `assessment_id`, `benchmark_id`, `user_event_id`
-- Updates rejected at validation gate if evidence missing
-
-**Audit Trail:**
-- Every update creates an immutable audit event
-- Includes: `event_type`, `intent`, `reason_code`, `evidence`
-- Only delta stored, not full card
-
-## Expense Categories
-
-| Category | Description |
-|----------|-------------|
-| dining | Personal restaurant/cafe visits (friends, family, dates) |
-| business_meal | Work-related dining (client meetings, business lunches) |
-| groceries | Supermarkets, grocery stores |
-| transportation | Gas, rideshare, parking, public transit |
-| utilities | Electric, water, internet, phone |
-| entertainment | Movies, concerts, streaming, hobbies |
-| health | Gym, pharmacy, doctor visits |
-| shopping | Retail, clothing, electronics |
+Open `http://localhost:3001` and sign in with the email set in `ADMIN_EMAIL`.
 
 ## Development
 
-**Start only infrastructure:**
+**Run the monolith** (all domains in one process, no proxy):
 ```bash
-docker-compose up postgres redis otel-collector
+cd services/applications && npm install && npm run dev
 ```
 
-**Run services locally:**
+**Run microservices locally:**
 ```bash
-# Memory Service
-cd services/memory && npm install && npm run dev
+docker compose up  # Uses volume mounts for hot reload
+```
 
-# Learning Service
-cd services/learning && pip install -r requirements.txt && uvicorn main:app --reload
+**Run only infrastructure:**
+```bash
+docker compose up postgres redis
+```
 
-# Payments Service
-cd services/payments && npm install && npm run dev
+## Production Deployment (EC2)
+
+Hosted on a t3.small via Cloudflare Tunnel. Resource limits tuned for 2GB RAM.
+
+```bash
+# First-time setup
+./deploy/ec2-setup.sh        # Docker, UFW, swap, cloudflared
+./deploy/setup-tunnel.sh     # Cloudflare Tunnel as systemd service
+./deploy/setup-cron.sh       # Nightly backups, weekly Docker prune
+
+# Deploy
+./deploy/deploy.sh           # Pull, backup, build, deploy, health check
+
+# Database
+./deploy/backup-postgres.sh  # Manual backup to S3
+./deploy/restore-postgres.sh # Restore from S3 (--list to see available)
+```
+
+## API Overview
+
+### Auth
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v0/auth/request-magic-link` | Send login email |
+| GET | `/v0/auth/verify?token=` | Verify magic link |
+| GET | `/v0/auth/me` | Current user info + CSRF token |
+
+### Payments
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v0/expenses` | Add expense |
+| POST | `/v0/categorization/suggest` | AI categorization |
+| POST | `/v0/chat` | Chat with Oggy (Oggy + Base responses) |
+| POST | `/v0/continuous-learning/start` | Start training session |
+| POST | `/v0/sealed-benchmark/create` | Create fixed benchmark |
+| POST | `/v0/sealed-benchmark/test` | Run Oggy vs Base |
+
+### General
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v0/general/chat` | Chat with general assistant |
+| GET | `/v0/general/projects` | List projects |
+
+### Diet
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v0/diet/chat` | Chat with diet agent |
+| POST | `/v0/diet/entries` | Log a meal |
+| GET | `/v0/diet/nutrition` | Nutrition summary |
+| GET | `/v0/diet/rules` | Dietary rules |
+
+### Shared
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v0/service-health/circuit-breakers` | Circuit breaker status |
+| GET | `/v0/benchmark-analytics` | Training analytics |
+| POST | `/v0/preferences/feedback` | Submit response feedback |
+| GET | `/v0/settings` | BYO-Model configuration |
+
+## Project Structure
+
+```
+services/
+  applications/          # All Node.js services (shared image)
+    src/
+      gateway.js         # API Gateway entry point
+      payments-entry.js  # Payments domain entry point
+      general-entry.js   # General domain entry point
+      diet-entry.js      # Diet domain entry point
+      index.js           # Monolith fallback (npm start)
+      domains/
+        payments/        # Payments routes + services
+        general/         # General routes + services
+        diet/            # Diet routes + services
+      shared/
+        middleware/       # Auth, CSRF, cost governor, internal service
+        routes/           # Shared routes (training, evaluation, settings, etc.)
+        services/         # Chat handler, training reporter, observer, etc.
+        utils/            # DB, Redis, logger, telemetry, migrations
+    public/              # Frontend (HTML, CSS, JS)
+  memory/                # Memory Service (separate image)
+  learning/              # Learning Service (Python, separate image)
+deploy/                  # EC2 deployment scripts
+data/                    # Practice packs, sealed benchmarks
 ```
 
 ## License
