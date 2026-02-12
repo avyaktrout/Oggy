@@ -226,7 +226,7 @@ class DietBenchmarkGenerator {
     async _generateBrandedScenario() {
         try {
             const result = await query(`
-                SELECT brand, product, serving_size, serving_unit,
+                SELECT brand, product, serving_size,
                        calories, protein_g, carbs_g, fat_g,
                        fiber_g, sugar_g, sodium_mg
                 FROM branded_foods
@@ -242,8 +242,8 @@ class DietBenchmarkGenerator {
             }
 
             const row = result.rows[0];
-            const servingInfo = row.serving_size && row.serving_unit
-                ? ` (${row.serving_size} ${row.serving_unit})`
+            const servingInfo = row.serving_size
+                ? ` (${row.serving_size})`
                 : '';
             const foodDescription = `${row.brand} ${row.product}${servingInfo}`;
 

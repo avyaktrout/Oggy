@@ -192,10 +192,15 @@ class SealedBenchmarkEvaluator {
             }
         });
 
-        const upgradeResult = await this._maybeAdvanceDifficultyFromBenchmark(
-            user_id,
-            oggy_accuracy
-        );
+        let upgradeResult = { upgraded: false, reason: 'not_attempted' };
+        try {
+            upgradeResult = await this._maybeAdvanceDifficultyFromBenchmark(
+                user_id,
+                oggy_accuracy
+            );
+        } catch (advanceErr) {
+            logger.warn('Difficulty advancement check failed (non-blocking)', { error: advanceErr.message });
+        }
 
         logger.info('Sealed benchmark test complete', {
             result_id,
@@ -438,7 +443,7 @@ class SealedBenchmarkEvaluator {
         const result = await query(`
             SELECT scale, difficulty_level
             FROM continuous_learning_state
-            WHERE user_id = $1
+            WHERE user_id = $1 AND domain = 'payments'
         `, [userId]);
 
         if (result.rows.length > 0) {
@@ -454,9 +459,9 @@ class SealedBenchmarkEvaluator {
 
     async _saveScaleAndLevel(userId, scale, level) {
         await query(`
-            INSERT INTO continuous_learning_state (user_id, scale, difficulty_level, updated_at)
-            VALUES ($1, $2, $3, NOW())
-            ON CONFLICT (user_id)
+            INSERT INTO continuous_learning_state (user_id, domain, scale, difficulty_level, updated_at)
+            VALUES ($1, 'payments', $2, $3, NOW())
+            ON CONFLICT (user_id, domain)
             DO UPDATE SET scale = $2, difficulty_level = $3, updated_at = NOW()
         `, [userId, scale, level]);
     }
