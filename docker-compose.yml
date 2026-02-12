@@ -162,6 +162,11 @@ services:
       DAILY_TOKEN_BUDGET: "20000000"
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
     ports:
       - "3010:3010"
     volumes:
@@ -200,6 +205,11 @@ services:
       OTEL_SERVICE_NAME: general-service
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
     ports:
       - "3011:3011"
     volumes:
@@ -238,6 +248,11 @@ services:
       OTEL_SERVICE_NAME: diet-service
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
     ports:
       - "3012:3012"
     volumes:
