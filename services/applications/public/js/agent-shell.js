@@ -598,7 +598,7 @@ class AgentShell {
 
     async stopTraining() {
         try {
-            await apiCall('POST', `${this.config.trainingEndpoint}/stop`, { user_id: USER_ID });
+            await apiCall('POST', `${this.config.trainingEndpoint}/stop`, { user_id: USER_ID, domain: this.config.domain });
             showToast('Training stopped');
         } catch (err) {
             showToast('Error stopping: ' + err.message, 'error');
@@ -608,7 +608,7 @@ class AgentShell {
 
     async _pollTraining() {
         try {
-            const s = await apiCall('GET', `${this.config.trainingEndpoint}/status`);
+            const s = await apiCall('GET', `${this.config.trainingEndpoint}/status?domain=${this.config.domain}`);
             const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
             setVal('ts-level', s.scale_level_display || '-');
             setVal('ts-accuracy', s.overall_accuracy || '-');
@@ -636,7 +636,7 @@ class AgentShell {
 
     async _checkRunningTraining() {
         try {
-            const s = await apiCall('GET', `${this.config.trainingEndpoint}/status`);
+            const s = await apiCall('GET', `${this.config.trainingEndpoint}/status?domain=${this.config.domain}`);
             if (s.is_running) {
                 const el = (id) => document.getElementById(id);
                 if (el('train-start')) el('train-start').style.display = 'none';
