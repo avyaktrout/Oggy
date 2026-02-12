@@ -17,7 +17,8 @@ router.post('/', async (req, res) => {
 
     try {
         const result = await chatHandler.handleChat(user_id, message, conversation_history || [], {
-            learnFromChat: !!learn_from_chat
+            learnFromChat: !!learn_from_chat,
+            requestId: req.requestId
         });
         res.json(result);
     } catch (error) {

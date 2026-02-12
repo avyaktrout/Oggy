@@ -342,6 +342,52 @@ class AgentShell {
             };
         }
 
+        // Feedback
+        window.shellSendFeedback = async function(intent, requestId, btn) {
+            const feedbackDiv = btn.parentElement;
+            feedbackDiv.querySelectorAll('.feedback-btn').forEach(b => b.disabled = true);
+            btn.classList.add('feedback-active');
+            try {
+                await apiCall('POST', '/v0/preferences/feedback', {
+                    user_id: USER_ID,
+                    intent: intent,
+                    target: 'tone',
+                    value: intent === 'like' ? 'good response quality' : 'response could be improved',
+                    strength: 0.6,
+                    request_id: requestId
+                });
+                if (intent === 'dislike') {
+                    const options = document.createElement('div');
+                    options.className = 'feedback-options';
+                    options.innerHTML = `
+                        <span class="feedback-label">What could be better?</span>
+                        <button onclick="shellSendDetailedFeedback('verbosity', 'too verbose', this)">Too long</button>
+                        <button onclick="shellSendDetailedFeedback('verbosity', 'too brief', this)">Too short</button>
+                        <button onclick="shellSendDetailedFeedback('tone', 'too formal', this)">Too formal</button>
+                        <button onclick="shellSendDetailedFeedback('tone', 'not helpful enough', this)">Not helpful</button>
+                    `;
+                    feedbackDiv.appendChild(options);
+                }
+            } catch (err) {
+                showToast('Failed to record feedback', 'error');
+            }
+        };
+        window.shellSendDetailedFeedback = async function(target, value, btn) {
+            btn.disabled = true;
+            btn.textContent = 'Noted';
+            try {
+                await apiCall('POST', '/v0/preferences/feedback', {
+                    user_id: USER_ID,
+                    intent: 'dislike',
+                    target: target,
+                    value: value,
+                    strength: 0.7
+                });
+                const options = btn.parentElement;
+                setTimeout(() => options.remove(), 1000);
+            } catch (err) { /* silent fail */ }
+        };
+
         // Audit
         if (this.config.capabilities.audit) {
             window.shellToggleAudit = () => {
@@ -406,6 +452,36 @@ class AgentShell {
                 memNote.textContent = 'Used learned memory';
                 oggyEl.appendChild(memNote);
             }
+
+            // Feedback buttons + audit tag
+            const feedbackDiv = document.createElement('div');
+            feedbackDiv.className = 'chat-feedback';
+            const reqId = data.request_id || '';
+            feedbackDiv.innerHTML = `
+                <button class="feedback-btn feedback-like" onclick="shellSendFeedback('like', '${reqId}', this)" title="Good response">&#x1F44D;</button>
+                <button class="feedback-btn feedback-dislike" onclick="shellSendFeedback('dislike', '${reqId}', this)" title="Could be better">&#x1F44E;</button>
+            `;
+            if (data.oggy_response.audit) {
+                const auditTag = document.createElement('span');
+                auditTag.className = 'chat-audit-tag';
+                auditTag.textContent = data.oggy_response.style || '';
+                if (data.oggy_response.audit.candidate_count > 1) {
+                    auditTag.title = `Selected from ${data.oggy_response.audit.candidate_count} candidates (score: ${(data.oggy_response.audit.winner_score || 0).toFixed(2)})`;
+                }
+                feedbackDiv.appendChild(auditTag);
+
+                // "Why?" link for audit detail
+                if (reqId) {
+                    const whyLink = document.createElement('a');
+                    whyLink.className = 'chat-why-link';
+                    whyLink.textContent = 'Why?';
+                    whyLink.href = '#';
+                    const self = this;
+                    whyLink.onclick = (e) => { e.preventDefault(); self._showAuditDetail(reqId, whyLink); };
+                    feedbackDiv.appendChild(whyLink);
+                }
+            }
+            oggyEl.appendChild(feedbackDiv);
 
             // Show base response
             if (this.config.capabilities.comparison && data.base_response) {
@@ -625,6 +701,59 @@ class AgentShell {
             if (sendBtn) sendBtn.disabled = false;
             container.scrollTop = container.scrollHeight;
             input.focus();
+        }
+    }
+
+    // --- Audit Detail ("Why?" link) ---
+    async _showAuditDetail(requestId, linkEl) {
+        // Toggle: if detail panel already exists, remove it
+        const existing = linkEl.parentElement?.querySelector('.chat-audit-detail');
+        if (existing) { existing.remove(); return; }
+
+        linkEl.textContent = '...';
+        try {
+            const data = await apiCall('GET', `/v0/preferences/audit/${requestId}?user_id=${USER_ID}`);
+
+            const panel = document.createElement('div');
+            panel.className = 'chat-audit-detail';
+
+            let html = `<div class="audit-detail-header">Response Audit</div>`;
+            html += `<div class="audit-detail-row"><span>Candidates evaluated:</span><strong>${data.candidate_count}</strong></div>`;
+            if (data.winner_reason) {
+                html += `<div class="audit-detail-row"><span>Reason:</span><span>${data.winner_reason}</span></div>`;
+            }
+            html += `<div class="audit-detail-row"><span>Memory cards used:</span><strong>${data.memory_cards_used}</strong></div>`;
+            if (data.humor_gate_active) {
+                html += `<div class="audit-detail-row"><span>Humor gate:</span><span>Active</span></div>`;
+            }
+
+            // Scoring breakdown bars
+            if (data.scoring && data.scoring.length > 0) {
+                html += `<div class="audit-detail-scoring">`;
+                for (const s of data.scoring) {
+                    const label = s.axis.replace(/_/g, ' ');
+                    const pct = s.score != null ? Math.round(s.score * 100) : 0;
+                    const weightPct = Math.round(s.weight * 100);
+                    html += `<div class="audit-score-row">
+                        <span class="audit-score-label">${label} <span class="audit-score-weight">(${weightPct}%)</span></span>
+                        <div class="audit-score-bar"><div class="audit-score-fill" style="width:${pct}%"></div></div>
+                        <span class="audit-score-value">${pct}%</span>
+                    </div>`;
+                }
+                html += `</div>`;
+            }
+
+            panel.innerHTML = html;
+            linkEl.parentElement.appendChild(panel);
+        } catch (err) {
+            // Show inline error
+            const errSpan = document.createElement('span');
+            errSpan.style.cssText = 'color:var(--danger);font-size:11px;margin-left:6px';
+            errSpan.textContent = 'Audit unavailable';
+            linkEl.parentElement.appendChild(errSpan);
+            setTimeout(() => errSpan.remove(), 3000);
+        } finally {
+            linkEl.textContent = 'Why?';
         }
     }
 }

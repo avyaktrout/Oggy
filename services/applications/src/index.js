@@ -51,12 +51,31 @@ const dietRouter = require('./domains/diet/routes/diet');
 const app = express();
 const PORT = process.env.PORT || 3001;
 const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory-service:3000';
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const { PROVIDER_MAP } = require('./shared/providers/providerResolver');
+
+/** Check which system-level provider API keys are configured */
+function getConfiguredSystemProviders() {
+    return Object.entries(PROVIDER_MAP)
+        .filter(([, config]) => {
+            const key = process.env[config.envKey];
+            return key && key.length > 0;
+        })
+        .map(([name]) => name);
+}
 
 // Middleware
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 app.use(cors({
-    origin: CORS_ORIGIN === '*' ? true : CORS_ORIGIN,
+    origin: function(origin, callback) {
+        // Allow requests with no origin (server-to-server, health checks, curl)
+        if (!origin) return callback(null, true);
+        // Dev: allow everything
+        if (CORS_ORIGIN === '*') return callback(null, true);
+        // Production: check against comma-separated allowlist
+        const allowed = CORS_ORIGIN.split(',').map(s => s.trim());
+        if (allowed.includes(origin)) return callback(null, true);
+        callback(new Error('CORS not allowed'));
+    },
     credentials: true
 }));
 app.use(express.json({ limit: '50mb' }));
@@ -92,7 +111,7 @@ app.get('/health', async (req, res) => {
     const checks = {
         database: false,
         memoryService: false,
-        openaiConfig: false
+        modelProvider: false
     };
 
     let overallOk = true;
@@ -120,10 +139,11 @@ app.get('/health', async (req, res) => {
         // Don't fail overall health if memory service is down (graceful degradation)
     }
 
-    // Check OpenAI configuration
-    checks.openaiConfig = !!OPENAI_API_KEY && OPENAI_API_KEY.length > 0;
-    if (!checks.openaiConfig) {
-        logger.error('Health check: OpenAI API key not configured');
+    // Check model provider configuration (any system provider key)
+    const configuredProviders = getConfiguredSystemProviders();
+    checks.modelProvider = configuredProviders.length > 0;
+    if (!checks.modelProvider) {
+        logger.error('Health check: No model provider API keys configured');
         overallOk = false;
     }
 
@@ -407,11 +427,12 @@ const server = app.listen(PORT, async () => {
         // Non-fatal: tables may already exist from a previous run
     }
 
-    if (!OPENAI_API_KEY) {
-        logger.error('❌ OPENAI_API_KEY not configured');
+    const startupProviders = getConfiguredSystemProviders();
+    if (startupProviders.length === 0) {
+        logger.error('❌ No model provider API keys configured (need at least one of: OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_KEY, XAI_API_KEY)');
         process.exit(1);
     }
-    logger.info('✅ OpenAI API key configured');
+    logger.info('✅ Model provider(s) configured', { providers: startupProviders });
 
     // Initialize Redis for behavior system (non-blocking)
     try {

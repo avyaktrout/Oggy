@@ -10,7 +10,7 @@ services:
   application-service:
     environment:
       NODE_ENV: production
-      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://oggy-v1.com}
 
   memory-service:
     environment:

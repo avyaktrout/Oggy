@@ -131,5 +131,42 @@ router.get('/audit-stats', async (req, res) => {
     }
 });
 
+/**
+ * GET /v0/preferences/audit/:requestId - Get audit detail for a specific response
+ * Used by the "Why?" link in chat UI
+ */
+router.get('/audit/:requestId', async (req, res) => {
+    const userId = req.query.user_id;
+    if (!userId) return res.status(400).json({ error: 'user_id is required' });
+
+    try {
+        const audit = await auditor.getAuditByRequest(req.params.requestId);
+        if (!audit) return res.status(404).json({ error: 'Audit not found' });
+        if (audit.user_id !== userId) return res.status(403).json({ error: 'Not authorized' });
+
+        const candidates = audit.candidates || [];
+        const winner = candidates[audit.winner_index] || {};
+        const axes = audit.scoring_axes?.weights || {};
+
+        res.json({
+            request_id: audit.request_id,
+            candidate_count: audit.candidate_count,
+            winner_reason: audit.winner_reason,
+            winner_score: winner.scores?.total || null,
+            humor_gate_active: audit.humor_gate_active,
+            memory_cards_used: (audit.memory_card_ids || []).length,
+            scoring: Object.entries(axes).map(([axis, weight]) => ({
+                axis,
+                weight,
+                score: winner.scores?.[axis] || null
+            })),
+            created_at: audit.created_at
+        });
+    } catch (error) {
+        logger.logError(error, { operation: 'get-audit-detail', requestId: req.requestId });
+        res.status(500).json({ error: 'Failed to get audit detail' });
+    }
+});
+
 module.exports = router;
 module.exports.setRedisClient = setRedisClient;

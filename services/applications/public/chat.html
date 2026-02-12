@@ -34,8 +34,8 @@
                         <option value="1440">24 hours</option>
                         <option value="0">Indefinite</option>
                     </select>
-                    <button class="btn btn-success btn-sm" id="train-start" onclick="startTraining()">Start Training</button>
-                    <button class="btn btn-danger btn-sm" id="train-stop" onclick="stopTraining()" style="display:none">Stop</button>
+                    <button class="btn btn-success btn-sm" id="train-start" onclick="shellStartTraining()">Start Training</button>
+                    <button class="btn btn-danger btn-sm" id="train-stop" onclick="shellStopTraining()" style="display:none">Stop</button>
                 </div>
             </div>
             <div class="report-row" id="training-report-options">
@@ -187,11 +187,11 @@
             <h1 class="page-title" style="margin-bottom:0">Chat with Oggy</h1>
             <div class="chat-controls">
                 <label class="toggle-label" title="When enabled, Oggy learns from your corrections and preferences shared in chat">
-                    <input type="checkbox" id="learn-toggle" onchange="toggleLearning(this.checked)">
+                    <input type="checkbox" id="learn-toggle" onchange="shellToggleLearning(this.checked)">
                     <span class="toggle-switch"></span>
                     <span class="toggle-text">Learn from chat</span>
                 </label>
-                <button class="btn btn-sm btn-outline" onclick="clearChat()" title="Clear conversation history">Clear Chat</button>
+                <button class="btn btn-sm btn-outline" onclick="shellClearChat()" title="Clear conversation history">Clear Chat</button>
             </div>
         </div>
 
@@ -222,15 +222,15 @@
 
         <div class="chat-input-row" style="margin-top:12px">
             <input type="text" id="chat-input" placeholder="Ask about your spending, categorization, or anything..."
-                   onkeydown="if(event.key==='Enter')sendChat()">
-            <button class="btn btn-primary" onclick="sendChat()" id="chat-send-btn">Send</button>
+                   onkeydown="if(event.key==='Enter')shellSendChat()">
+            <button class="btn btn-primary" onclick="shellSendChat()" id="chat-send-btn">Send</button>
             <button class="btn btn-sm" onclick="resetPreferences()" title="Reset learned response preferences"
                     style="margin-left:8px;font-size:11px;padding:6px 10px;background:var(--bg-secondary);border:1px solid var(--border)">Reset Preferences</button>
         </div>
 
         <!-- Performance Audit Panel -->
         <div class="audit-chat-panel" id="audit-panel">
-            <div class="audit-chat-header" onclick="toggleAuditPanel()">
+            <div class="audit-chat-header" onclick="shellToggleAudit()">
                 <div>
                     <div class="audit-chat-title">Performance Audit</div>
                     <div class="audit-chat-subtitle">Ask questions about Oggy's accuracy, weaknesses, and trends</div>
@@ -250,8 +250,8 @@
                 </div>
                 <div class="audit-chat-input-row">
                     <input type="text" id="audit-input" placeholder="Ask about performance..."
-                           onkeydown="if(event.key==='Enter')sendAuditQuestion()">
-                    <button class="btn btn-primary btn-sm" onclick="sendAuditQuestion()" id="audit-send-btn">Ask</button>
+                           onkeydown="if(event.key==='Enter')shellSendAudit()">
+                    <button class="btn btn-primary btn-sm" onclick="shellSendAudit()" id="audit-send-btn">Ask</button>
                 </div>
             </div>
         </div>
@@ -260,6 +260,7 @@
 
     <script src="/js/app.js?v=2"></script>
     <script src="/js/inquiries.js?v=2"></script>
-    <script src="/js/chat.js?v=2"></script>
+    <script src="/js/agent-shell.js?v=2"></script>
+    <script src="/js/payments-chat.js?v=2"></script>
 </body>
 </html>
