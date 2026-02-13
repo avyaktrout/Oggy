@@ -304,4 +304,179 @@ router.post('/alerts/:id/acknowledge', async (req, res) => {
     }
 });
 
+// ──────────────────────────────────────────────────
+// Drivers & Freshness
+// ──────────────────────────────────────────────────
+
+// Top drivers and drags for a node
+router.get('/node/:id/drivers', async (req, res) => {
+    try {
+        const timeWindowStart = req.query.time_window_start || '2024-01-01';
+        const count = parseInt(req.query.count) || 3;
+        const data = await harmonyEngine.getTopDriversAndDrags(req.params.id, timeWindowStart, count);
+        res.json(data);
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-drivers' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Data freshness and coverage for a node
+router.get('/node/:id/freshness', async (req, res) => {
+    try {
+        const data = await harmonyEngine.getFreshnessAndCoverage(req.params.id);
+        res.json(data);
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-freshness' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ──────────────────────────────────────────────────
+// Analytics (Daily Snapshots)
+// ──────────────────────────────────────────────────
+
+// Get snapshot history for charts
+router.get('/analytics/snapshots', async (req, res) => {
+    try {
+        const { node_id, days } = req.query;
+        const dayCount = parseInt(days) || 90;
+
+        let sql = `
+            SELECT s.*, n.name AS node_name
+            FROM harmony_daily_snapshots s
+            JOIN harmony_nodes n ON s.node_id = n.node_id
+            WHERE s.snapshot_date >= CURRENT_DATE - INTERVAL '1 day' * $1
+        `;
+        const params = [dayCount];
+
+        if (node_id) {
+            params.push(node_id);
+            sql += ` AND s.node_id = $${params.length}`;
+        }
+
+        sql += ' ORDER BY s.node_id, s.snapshot_date ASC';
+
+        const result = await query(sql, params);
+        res.json({ snapshots: result.rows });
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-analytics-snapshots' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Manual snapshot trigger
+router.post('/analytics/snapshot-now', async (req, res) => {
+    try {
+        const scope = req.body.scope || 'city';
+        const result = await harmonyEngine.snapshotAllNodes(scope);
+        res.json(result);
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-snapshot-now' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ──────────────────────────────────────────────────
+// Chat
+// ──────────────────────────────────────────────────
+
+const providerResolver = require('../../../shared/providers/providerResolver');
+const { costGovernor } = require('../../../shared/middleware/costGovernor');
+
+router.post('/chat', async (req, res) => {
+    try {
+        const userId = req.userId || req.body.user_id;
+        const { message, conversation_history = [] } = req.body;
+        if (!message) return res.status(400).json({ error: 'message is required' });
+
+        // Build context from latest city scores
+        const citiesResult = await query(`
+            SELECT n.name, s.harmony, s.e_scaled, s.balance, s.flow, s.care,
+                   s.awareness, s.expression, s.intent_coherence
+            FROM harmony_nodes n
+            JOIN harmony_scores s ON n.node_id = s.node_id
+            WHERE n.scope = 'city'
+            ORDER BY n.name
+        `);
+
+        const cityContext = citiesResult.rows.map(c =>
+            `${c.name}: H=${((c.harmony||0)*100).toFixed(1)}% E=${((c.e_scaled||0)*100).toFixed(1)}% B=${((c.balance||0)*100).toFixed(1)}% F=${((c.flow||0)*100).toFixed(1)}% C=${((c.care||0)*100).toFixed(1)}% S=${((c.intent_coherence||0)*100).toFixed(1)}%`
+        ).join('\n');
+
+        const systemPrompt = `You are Oggy, a Harmony Map assistant that helps users understand city well-being metrics.
+
+You use the Equilibrium Canon framework:
+- H (Harmony) = sqrt(E * S) — overall city well-being
+- E (Equilibrium) = (B * F * C)^(1/3) — structural balance
+- B (Balance) = weighted mean of safety/economic indicators
+- F (Flow) = weighted mean of mobility/access indicators
+- C (Care) = Compassion * Discernment
+- S (Intent Coherence) = sqrt(A * X)
+- A (Awareness) = weighted mean of education/civic indicators
+- X (Expression) = weighted mean of cultural/freedom indicators
+
+Current city scores:
+${cityContext}
+
+Help users understand what drives city scores, suggest improvements, and explain the mathematical relationships. You can also suggest new data sources or metrics to improve the model. Be concise and data-driven.`;
+
+        await costGovernor.checkBudget(6000);
+
+        const oggyMessages = [
+            { role: 'system', content: systemPrompt },
+            ...conversation_history.slice(-10),
+            { role: 'user', content: message }
+        ];
+
+        const baseMessages = [
+            { role: 'system', content: `You are a city well-being analysis assistant. Help users understand urban metrics and suggest improvements. Be concise.\n\nCurrent city scores:\n${cityContext}` },
+            ...conversation_history.slice(-10),
+            { role: 'user', content: message }
+        ];
+
+        // Run Oggy and Base in parallel
+        const [oggyResult, baseResult] = await Promise.all([
+            (async () => {
+                const resolved = await providerResolver.getAdapter(userId, 'oggy');
+                const r = await resolved.adapter.chatCompletion({
+                    model: resolved.model,
+                    messages: oggyMessages,
+                    temperature: 0.7,
+                    max_tokens: 1000
+                });
+                costGovernor.recordUsage(r.tokens_used || 800);
+                providerResolver.logRequest(userId, resolved.provider, resolved.model, 'oggy', 'harmonyChat', r.tokens_used, r.latency_ms, true, null);
+                return { text: r.text };
+            })(),
+            (async () => {
+                try {
+                    const resolved = await providerResolver.getAdapter(userId, 'base');
+                    const r = await resolved.adapter.chatCompletion({
+                        model: resolved.model,
+                        messages: baseMessages,
+                        temperature: 0.7,
+                        max_tokens: 1000
+                    });
+                    costGovernor.recordUsage(r.tokens_used || 800);
+                    providerResolver.logRequest(userId, resolved.provider, resolved.model, 'base', 'harmonyChat', r.tokens_used, r.latency_ms, true, null);
+                    return { text: r.text };
+                } catch (err) {
+                    logger.debug('Base harmony chat failed', { error: err.message });
+                    return { text: 'Sorry, I encountered an error. Please try again.' };
+                }
+            })()
+        ]);
+
+        res.json({
+            oggy_response: oggyResult.text,
+            base_response: baseResult.text,
+            domain: 'harmony',
+        });
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-chat' });
+        res.status(500).json({ error: 'Chat failed', message: err.message });
+    }
+});
+
 module.exports = router;

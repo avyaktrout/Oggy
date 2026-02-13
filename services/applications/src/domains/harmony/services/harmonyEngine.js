@@ -287,6 +287,100 @@ class HarmonyEngine {
 
         return alerts;
     }
+
+    /**
+     * Get top drivers (highest weighted normalized score) and drags (lowest)
+     */
+    async getTopDriversAndDrags(nodeId, timeWindowStart = '2024-01-01', count = 3) {
+        const data = await this.getExplainability(nodeId, timeWindowStart);
+        if (!data.indicators || data.indicators.length === 0) return { drivers: [], drags: [] };
+
+        const scored = data.indicators
+            .filter(ind => ind.normalized_value != null)
+            .map(ind => ({
+                ...ind,
+                weighted_score: ind.normalized_value * ind.weight,
+            }))
+            .sort((a, b) => b.weighted_score - a.weighted_score);
+
+        return {
+            drivers: scored.slice(0, count),
+            drags: scored.slice(-count).reverse(),
+        };
+    }
+
+    /**
+     * Get data freshness and coverage for a node
+     */
+    async getFreshnessAndCoverage(nodeId) {
+        const totalResult = await query('SELECT COUNT(*) AS total FROM harmony_indicators');
+        const totalIndicators = parseInt(totalResult.rows[0].total);
+
+        const presentResult = await query(`
+            SELECT COUNT(*) AS present,
+                   MIN(iv.created_at) AS oldest,
+                   MAX(iv.created_at) AS newest
+            FROM harmony_indicator_values iv
+            WHERE iv.node_id = $1
+        `, [nodeId]);
+
+        const present = parseInt(presentResult.rows[0].present);
+        const oldest = presentResult.rows[0].oldest;
+        const newest = presentResult.rows[0].newest;
+        const coveragePct = totalIndicators > 0 ? (present / totalIndicators) * 100 : 0;
+
+        const daysSinceUpdate = newest
+            ? Math.floor((Date.now() - new Date(newest).getTime()) / 86400000)
+            : null;
+
+        let grade = 'D';
+        if (coveragePct >= 90 && daysSinceUpdate != null && daysSinceUpdate < 30) grade = 'A';
+        else if (coveragePct >= 70 && daysSinceUpdate != null && daysSinceUpdate < 90) grade = 'B';
+        else if (coveragePct >= 50 && daysSinceUpdate != null && daysSinceUpdate < 180) grade = 'C';
+
+        return {
+            total_indicators: totalIndicators,
+            present_indicators: present,
+            coverage_pct: Math.round(coveragePct),
+            oldest_timestamp: oldest,
+            newest_timestamp: newest,
+            days_since_update: daysSinceUpdate,
+            grade,
+        };
+    }
+
+    /**
+     * Snapshot current scores for all nodes in a scope (for daily analytics)
+     */
+    async snapshotAllNodes(scope = 'city') {
+        const today = new Date().toISOString().split('T')[0];
+        const nodesResult = await query('SELECT node_id FROM harmony_nodes WHERE scope = $1', [scope]);
+
+        let snapshotCount = 0;
+        for (const { node_id } of nodesResult.rows) {
+            const scoresResult = await query(`
+                SELECT * FROM harmony_scores WHERE node_id = $1
+                ORDER BY time_window_start DESC LIMIT 1
+            `, [node_id]);
+
+            if (!scoresResult.rows[0]) continue;
+            const s = scoresResult.rows[0];
+
+            await query(`
+                INSERT INTO harmony_daily_snapshots
+                (node_id, snapshot_date, harmony, e_raw, e_scaled, balance, flow,
+                 compassion, discernment, care, awareness, expression, intent_coherence)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                ON CONFLICT (node_id, snapshot_date) DO UPDATE SET
+                    harmony = $3, e_raw = $4, e_scaled = $5, balance = $6, flow = $7,
+                    compassion = $8, discernment = $9, care = $10, awareness = $11,
+                    expression = $12, intent_coherence = $13
+            `, [node_id, today, s.harmony, s.e_raw, s.e_scaled, s.balance, s.flow,
+                s.compassion, s.discernment, s.care, s.awareness, s.expression, s.intent_coherence]);
+            snapshotCount++;
+        }
+        return { date: today, snapshots: snapshotCount };
+    }
 }
 
 module.exports = new HarmonyEngine();

@@ -15,7 +15,7 @@ router.post('/request-magic-link', async (req, res) => {
     if (!email) return res.status(400).json({ error: 'Email is required' });
 
     try {
-        const ip = req.ip || req.connection.remoteAddress;
+        const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
         const result = await authService.createMagicLink(email, ip);
 
         if (result.error === 'email_not_allowed') {
@@ -106,7 +106,7 @@ router.post('/verify', async (req, res) => {
     if (!token) return res.status(400).json({ error: 'Missing token' });
 
     try {
-        const ip = req.ip || req.connection.remoteAddress;
+        const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
         const result = await authService.verifyMagicLink(token, ip);
 
         if (result.error) {

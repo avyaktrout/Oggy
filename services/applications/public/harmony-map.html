@@ -37,6 +37,32 @@
         .alert-critical { background: #fee2e2; border-left: 3px solid #ef4444; }
         .why-btn { background: none; border: 1px solid var(--accent); color: var(--accent); padding: 4px 12px; border-radius: var(--radius); cursor: pointer; font-size: 12px; }
         .why-btn:hover { background: var(--accent); color: #fff; }
+        .overlay-btn { padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 12px; background: var(--bg); cursor: pointer; }
+        .overlay-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+        .freshness-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+        .freshness-A { background: #dcfce7; color: #166534; }
+        .freshness-B { background: #dbeafe; color: #1e40af; }
+        .freshness-C { background: #fef3c7; color: #92400e; }
+        .freshness-D { background: #fee2e2; color: #991b1b; }
+        .drivers-section { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0; }
+        .driver-list { font-size: 13px; }
+        .driver-list h4 { font-size: 12px; text-transform: uppercase; color: var(--text-muted); margin: 0 0 6px; }
+        .driver-item { padding: 4px 8px; border-radius: var(--radius); margin: 3px 0; cursor: pointer; display: flex; justify-content: space-between; }
+        .driver-item:hover { background: var(--surface); }
+        .driver-item.positive { border-left: 3px solid #22c55e; }
+        .driver-item.negative { border-left: 3px solid #ef4444; }
+        .indicator-table tr.highlight { background: #fef3c7; transition: background 1s; }
+        .dir-icon { font-size: 14px; }
+        .formulas-modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9999; justify-content: center; align-items: center; }
+        .formulas-modal.visible { display: flex; }
+        .formulas-content { background: var(--bg); border-radius: var(--radius); padding: 24px; max-width: 520px; width: 90%; max-height: 80vh; overflow-y: auto; }
+        .formulas-content h3 { margin: 0 0 16px; }
+        .formula-row { font-family: monospace; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+        .formula-row .formula-label { font-weight: 600; color: var(--accent); }
+        .formula-row .formula-val { color: var(--text-muted); font-size: 12px; }
+        .e-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+        .e-toggle input { cursor: pointer; }
+        .dim-filter { padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 12px; background: var(--bg); }
     </style>
 </head>
 <body class="app-layout">
@@ -57,6 +83,10 @@
             </select>
             <button id="btn-compute-all" onclick="computeAllNodes()">Compute All Scores</button>
             <span id="compute-status" style="font-size:12px;color:var(--text-muted)"></span>
+            <span style="border-left:1px solid var(--border);height:20px;margin:0 4px"></span>
+            <button class="overlay-btn active" data-overlay="harmony" onclick="toggleOverlay('harmony')">Harmony</button>
+            <button class="overlay-btn" data-overlay="crime" onclick="toggleOverlay('crime')">Crime</button>
+            <button class="overlay-btn" data-overlay="wellness" onclick="toggleOverlay('wellness')">Wellness</button>
         </div>
 
         <!-- Map -->
@@ -66,9 +96,11 @@
         <div class="node-panel" id="node-panel">
             <div style="display:flex;justify-content:space-between;align-items:center">
                 <h2 id="node-name" style="margin:0">—</h2>
-                <div>
+                <div style="display:flex;gap:6px;align-items:center">
+                    <span id="freshness-badge"></span>
                     <button class="why-btn" onclick="showExplainability()">Why?</button>
-                    <button class="why-btn" style="margin-left:6px" onclick="closeNodePanel()">Close</button>
+                    <button class="why-btn" onclick="showFormulas()">Formulas</button>
+                    <button class="why-btn" onclick="closeNodePanel()">Close</button>
                 </div>
             </div>
             <p id="node-meta" style="font-size:12px;color:var(--text-muted);margin:4px 0 0">—</p>
@@ -76,18 +108,49 @@
             <!-- Top-level scores -->
             <div class="score-grid" id="score-grid"></div>
 
+            <!-- E toggle -->
+            <div class="e-toggle" style="margin-top:4px">
+                <input type="checkbox" id="e-toggle" onchange="toggleERaw(this.checked)">
+                <label for="e-toggle">Show raw E &amp; H (product instead of cube root)</label>
+            </div>
+
             <!-- Alerts -->
             <div id="alerts-section" style="margin-top:12px"></div>
 
+            <!-- Drivers & Drags -->
+            <div id="drivers-section" class="drivers-section" style="display:none"></div>
+
             <!-- Explainability (hidden by default) -->
             <div id="explain-section" style="display:none;margin-top:16px">
-                <h3 style="font-size:14px;margin:0 0 8px">Indicator Breakdown</h3>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                    <h3 style="font-size:14px;margin:0">Indicator Breakdown</h3>
+                    <select class="dim-filter" id="dim-filter" onchange="filterIndicatorTable(this.value)">
+                        <option value="all">All Dimensions</option>
+                        <option value="balance">Balance</option>
+                        <option value="flow">Flow</option>
+                        <option value="compassion">Compassion</option>
+                        <option value="discernment">Discernment</option>
+                        <option value="awareness">Awareness</option>
+                        <option value="expression">Expression</option>
+                    </select>
+                </div>
                 <table class="indicator-table" id="indicator-table">
                     <thead>
-                        <tr><th>Indicator</th><th>Dimension</th><th>Raw</th><th>Normalized</th><th>Weight</th></tr>
+                        <tr><th>Indicator</th><th>Dimension</th><th>Dir</th><th>Raw</th><th>Normalized</th><th>Weight</th></tr>
                     </thead>
                     <tbody id="indicator-tbody"></tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- Formulas Modal -->
+        <div class="formulas-modal" id="formulas-modal" onclick="if(event.target===this)this.classList.remove('visible')">
+            <div class="formulas-content">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+                    <h3 style="margin:0">Equilibrium Canon Formulas</h3>
+                    <button class="why-btn" onclick="document.getElementById('formulas-modal').classList.remove('visible')">Close</button>
+                </div>
+                <div id="formulas-body"></div>
             </div>
         </div>
 

@@ -1,7 +1,10 @@
-// Harmony Map — Leaflet map with node markers, drilldown, and overlays
+// Harmony Map — Leaflet map with node markers, drilldown, overlays, and analytics
 let map;
 let markers = [];
 let selectedNodeId = null;
+let currentNodeData = null;   // Full node data for formulas/toggles
+let currentOverlay = 'harmony';
+let nodesCache = [];          // Cached node list for overlay switching
 
 // H-score color gradient: red (0) → yellow (0.5) → green (1)
 function hScoreColor(h) {
@@ -9,16 +12,10 @@ function hScoreColor(h) {
     const clamped = Math.max(0, Math.min(1, h));
     if (clamped < 0.5) {
         const t = clamped * 2;
-        const r = 220;
-        const g = Math.round(50 + t * 170);
-        const b = 50;
-        return `rgb(${r},${g},${b})`;
+        return `rgb(220,${Math.round(50 + t * 170)},50)`;
     } else {
         const t = (clamped - 0.5) * 2;
-        const r = Math.round(220 - t * 180);
-        const g = 200;
-        const b = 50;
-        return `rgb(${r},${g},${b})`;
+        return `rgb(${Math.round(220 - t * 180)},200,50)`;
     }
 }
 
@@ -30,23 +27,21 @@ function initMap() {
     }).addTo(map);
 
     loadNodes();
-
     document.getElementById('scope-select').addEventListener('change', loadNodes);
 }
 
 async function loadNodes() {
     const scope = document.getElementById('scope-select').value;
-
     try {
         const data = await apiCall('GET', `/v0/harmony/nodes?scope=${scope}`);
-        renderMarkers(data.nodes || []);
+        nodesCache = data.nodes || [];
+        renderMarkers(nodesCache);
     } catch (err) {
         showToast('Failed to load nodes: ' + err.message, 'error');
     }
 }
 
 function renderMarkers(nodes) {
-    // Clear existing markers
     markers.forEach(m => map.removeLayer(m));
     markers = [];
 
@@ -55,8 +50,8 @@ function renderMarkers(nodes) {
         const coords = node.geometry.coordinates;
         if (!coords || coords.length < 2) continue;
 
+        const color = getOverlayColor(node, currentOverlay);
         const h = node.harmony != null ? parseFloat(node.harmony) : null;
-        const color = hScoreColor(h);
         const hDisplay = h != null ? (h * 100).toFixed(0) + '%' : '—';
 
         const marker = L.circleMarker([coords[1], coords[0]], {
@@ -73,45 +68,63 @@ function renderMarkers(nodes) {
         });
 
         marker.on('click', () => selectNode(node.node_id));
+        marker._nodeId = node.node_id;
         markers.push(marker);
     }
 }
 
+// ──────────────────────────────────────────────────
+// Overlay system
+// ──────────────────────────────────────────────────
+function getOverlayColor(node, overlay) {
+    switch (overlay) {
+        case 'crime': {
+            // Lower balance = more red (balance includes crime indicators)
+            const b = node.balance != null ? parseFloat(node.balance) : null;
+            return hScoreColor(b);
+        }
+        case 'wellness': {
+            // Use care score for wellness
+            const c = node.care != null ? parseFloat(node.care) : null;
+            return hScoreColor(c);
+        }
+        default: {
+            const h = node.harmony != null ? parseFloat(node.harmony) : null;
+            return hScoreColor(h);
+        }
+    }
+}
+
+function toggleOverlay(overlay) {
+    currentOverlay = overlay;
+    // Update button states
+    document.querySelectorAll('.overlay-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.overlay === overlay);
+    });
+    // Re-render markers with new colors
+    if (nodesCache.length > 0) renderMarkers(nodesCache);
+}
+
+// ──────────────────────────────────────────────────
+// Node selection & score cards
+// ──────────────────────────────────────────────────
 async function selectNode(nodeId) {
     selectedNodeId = nodeId;
 
     try {
         const data = await apiCall('GET', `/v0/harmony/node/${nodeId}`);
         const node = data.node;
+        currentNodeData = node;
         const alerts = data.alerts || [];
 
         document.getElementById('node-name').textContent = node.name;
         const pop = node.population ? Number(node.population).toLocaleString() : '—';
         document.getElementById('node-meta').textContent = `${node.scope} | Pop: ${pop}`;
 
-        // Render score cards
-        const scoreFields = [
-            { key: 'harmony', label: 'Harmony (H)', color: '#6366f1' },
-            { key: 'e_scaled', label: 'Equilibrium (E)', color: '#8b5cf6' },
-            { key: 'intent_coherence', label: 'Intent (S)', color: '#a78bfa' },
-            { key: 'balance', label: 'Balance', color: '#3b82f6' },
-            { key: 'flow', label: 'Flow', color: '#22c55e' },
-            { key: 'care', label: 'Care (C)', color: '#ec4899' },
-            { key: 'compassion', label: 'Compassion', color: '#f472b6' },
-            { key: 'discernment', label: 'Discernment', color: '#f59e0b' },
-        ];
+        renderScoreCards(node, false);
 
-        const grid = document.getElementById('score-grid');
-        grid.innerHTML = scoreFields.map(sf => {
-            const val = node[sf.key] != null ? parseFloat(node[sf.key]) : null;
-            const display = val != null ? (val * 100).toFixed(1) + '%' : '—';
-            const width = val != null ? (val * 100).toFixed(0) : 0;
-            return `<div class="score-card">
-                <div class="score-label">${sf.label}</div>
-                <div class="score-value" style="color:${sf.color}">${display}</div>
-                <div class="score-bar"><div class="score-bar-fill" style="width:${width}%;background:${sf.color}"></div></div>
-            </div>`;
-        }).join('');
+        // Reset E toggle
+        document.getElementById('e-toggle').checked = false;
 
         // Render alerts
         const alertsDiv = document.getElementById('alerts-section');
@@ -122,8 +135,12 @@ async function selectNode(nodeId) {
             alertsDiv.innerHTML = '';
         }
 
-        // Hide explain section when switching nodes
+        // Hide explain + drivers when switching nodes
         document.getElementById('explain-section').style.display = 'none';
+        document.getElementById('drivers-section').style.display = 'none';
+
+        // Load freshness badge
+        loadFreshness(nodeId);
 
         // Show panel
         document.getElementById('node-panel').classList.add('visible');
@@ -132,53 +149,260 @@ async function selectNode(nodeId) {
     }
 }
 
+function renderScoreCards(node, showRawE) {
+    // Compute H_raw = sqrt(E_raw * S) when toggle is on
+    let hRaw = null;
+    if (showRawE && node.e_raw != null && node.intent_coherence != null) {
+        hRaw = Math.sqrt(parseFloat(node.e_raw) * parseFloat(node.intent_coherence));
+    }
+
+    const scoreFields = [
+        { key: showRawE ? '_h_raw' : 'harmony', label: showRawE ? 'Harmony (H raw)' : 'Harmony (H)', color: '#6366f1' },
+        { key: showRawE ? 'e_raw' : 'e_scaled', label: showRawE ? 'Equilibrium (E raw)' : 'Equilibrium (E)', color: '#8b5cf6' },
+        { key: 'intent_coherence', label: 'Intent (S)', color: '#a78bfa' },
+        { key: 'awareness', label: 'Awareness (A)', color: '#818cf8' },
+        { key: 'expression', label: 'Expression (X)', color: '#7c3aed' },
+        { key: 'balance', label: 'Balance (B)', color: '#3b82f6' },
+        { key: 'flow', label: 'Flow (F)', color: '#22c55e' },
+        { key: 'care', label: 'Care (C)', color: '#ec4899' },
+        { key: 'compassion', label: 'Compassion', color: '#f472b6' },
+        { key: 'discernment', label: 'Discernment', color: '#f59e0b' },
+    ];
+
+    const grid = document.getElementById('score-grid');
+    grid.innerHTML = scoreFields.map(sf => {
+        let val;
+        if (sf.key === '_h_raw') {
+            val = hRaw;
+        } else {
+            val = node[sf.key] != null ? parseFloat(node[sf.key]) : null;
+        }
+        const display = val != null ? (val * 100).toFixed(1) + '%' : '—';
+        const width = val != null ? Math.min(100, val * 100).toFixed(0) : 0;
+        return `<div class="score-card">
+            <div class="score-label">${sf.label}</div>
+            <div class="score-value" style="color:${sf.color}">${display}</div>
+            <div class="score-bar"><div class="score-bar-fill" style="width:${width}%;background:${sf.color}"></div></div>
+        </div>`;
+    }).join('');
+}
+
+function toggleERaw(showRaw) {
+    if (currentNodeData) renderScoreCards(currentNodeData, showRaw);
+}
+
+// ──────────────────────────────────────────────────
+// Freshness badge
+// ──────────────────────────────────────────────────
+async function loadFreshness(nodeId) {
+    try {
+        const data = await apiCall('GET', `/v0/harmony/node/${nodeId}/freshness`);
+        const badge = document.getElementById('freshness-badge');
+        const gradeClass = `freshness-${data.grade}`;
+        const daysText = data.days_since_update != null ? `${data.days_since_update}d ago` : 'no data';
+        badge.innerHTML = `<span class="freshness-badge ${gradeClass}">${data.grade} &middot; ${data.coverage_pct}% coverage &middot; ${daysText}</span>`;
+    } catch (err) {
+        document.getElementById('freshness-badge').innerHTML = '';
+    }
+}
+
+// ──────────────────────────────────────────────────
+// Explainability + Drivers/Drags
+// ──────────────────────────────────────────────────
 async function showExplainability() {
     if (!selectedNodeId) return;
 
     try {
-        const data = await apiCall('GET', `/v0/harmony/node/${selectedNodeId}/explain`);
-        const tbody = document.getElementById('indicator-tbody');
+        // Load indicators and drivers in parallel
+        const [explainData, driversData] = await Promise.all([
+            apiCall('GET', `/v0/harmony/node/${selectedNodeId}/explain`),
+            apiCall('GET', `/v0/harmony/node/${selectedNodeId}/drivers`),
+        ]);
 
-        const dimClass = { balance: 'dim-balance', flow: 'dim-flow', compassion: 'dim-compassion', discernment: 'dim-discernment', awareness: 'dim-awareness', expression: 'dim-expression' };
-
-        tbody.innerHTML = (data.indicators || []).map(ind => {
-            const norm = ind.normalized_value != null ? (ind.normalized_value * 100).toFixed(1) + '%' : '—';
-            const cls = dimClass[ind.dimension] || '';
-            return `<tr>
-                <td title="${ind.description || ''}">${ind.name} ${ind.unit ? '<span style="color:var(--text-muted);font-size:11px">(' + ind.unit + ')</span>' : ''}</td>
-                <td><span class="dim-badge ${cls}">${ind.dimension}</span></td>
-                <td>${ind.raw_value}</td>
-                <td>${norm}</td>
-                <td>${ind.weight}</td>
-            </tr>`;
-        }).join('');
+        renderIndicatorTable(explainData.indicators || []);
+        renderDrivers(driversData);
 
         document.getElementById('explain-section').style.display = 'block';
+        document.getElementById('drivers-section').style.display = 'grid';
+        document.getElementById('dim-filter').value = 'all';
     } catch (err) {
         showToast('Failed to load explainability: ' + err.message, 'error');
+    }
+}
+
+function renderIndicatorTable(indicators) {
+    const dimClass = { balance: 'dim-balance', flow: 'dim-flow', compassion: 'dim-compassion', discernment: 'dim-discernment', awareness: 'dim-awareness', expression: 'dim-expression' };
+
+    const tbody = document.getElementById('indicator-tbody');
+    tbody.innerHTML = indicators.map(ind => {
+        const norm = ind.normalized_value != null ? (ind.normalized_value * 100).toFixed(1) + '%' : '—';
+        const cls = dimClass[ind.dimension] || '';
+        const dirIcon = ind.direction === 'lower_is_better' ? '<span class="dir-icon" title="Lower is better">&#8595;</span>' : '<span class="dir-icon" title="Higher is better">&#8593;</span>';
+        return `<tr data-key="${ind.key}" data-dimension="${ind.dimension}">
+            <td title="${ind.description || ''}">${ind.name} ${ind.unit ? '<span style="color:var(--text-muted);font-size:11px">(' + ind.unit + ')</span>' : ''}</td>
+            <td><span class="dim-badge ${cls}">${ind.dimension}</span></td>
+            <td>${dirIcon}</td>
+            <td>${ind.raw_value}</td>
+            <td>${norm}</td>
+            <td>${ind.weight}</td>
+        </tr>`;
+    }).join('');
+}
+
+function renderDrivers(data) {
+    const section = document.getElementById('drivers-section');
+    const drivers = data.drivers || [];
+    const drags = data.drags || [];
+
+    section.innerHTML = `
+        <div class="driver-list">
+            <h4>Top Drivers</h4>
+            ${drivers.map(d => `<div class="driver-item positive" onclick="scrollToIndicator('${d.key}')">
+                <span>${d.name}</span>
+                <span style="color:#22c55e;font-weight:600">${(d.normalized_value * 100).toFixed(0)}%</span>
+            </div>`).join('')}
+        </div>
+        <div class="driver-list">
+            <h4>Top Drags</h4>
+            ${drags.map(d => `<div class="driver-item negative" onclick="scrollToIndicator('${d.key}')">
+                <span>${d.name}</span>
+                <span style="color:#ef4444;font-weight:600">${(d.normalized_value * 100).toFixed(0)}%</span>
+            </div>`).join('')}
+        </div>
+    `;
+}
+
+function scrollToIndicator(key) {
+    const row = document.querySelector(`#indicator-tbody tr[data-key="${key}"]`);
+    if (!row) return;
+
+    // Make sure explain section is visible
+    document.getElementById('explain-section').style.display = 'block';
+    // Clear filter to show all
+    document.getElementById('dim-filter').value = 'all';
+    filterIndicatorTable('all');
+
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.classList.add('highlight');
+    setTimeout(() => row.classList.remove('highlight'), 2000);
+}
+
+function filterIndicatorTable(dimension) {
+    const rows = document.querySelectorAll('#indicator-tbody tr');
+    rows.forEach(row => {
+        if (dimension === 'all' || row.dataset.dimension === dimension) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
+}
+
+// ──────────────────────────────────────────────────
+// Formulas modal
+// ──────────────────────────────────────────────────
+function showFormulas() {
+    if (!currentNodeData) return;
+    const n = currentNodeData;
+
+    const fmt = v => v != null ? (parseFloat(v) * 100).toFixed(1) + '%' : '—';
+    const raw = v => v != null ? parseFloat(v).toFixed(4) : '—';
+
+    const B = raw(n.balance);
+    const F = raw(n.flow);
+    const comp = raw(n.compassion);
+    const disc = raw(n.discernment);
+    const C = raw(n.care);
+    const eRaw = raw(n.e_raw);
+    const eScaled = raw(n.e_scaled);
+    const A = raw(n.awareness);
+    const X = raw(n.expression);
+    const S = raw(n.intent_coherence);
+    const H = raw(n.harmony);
+
+    document.getElementById('formulas-body').innerHTML = `
+        <div class="formula-row">
+            <span class="formula-label">B (Balance)</span> = weighted_mean(safety, economic indicators)<br>
+            <span class="formula-val">= ${B} (${fmt(n.balance)})</span>
+        </div>
+        <div class="formula-row">
+            <span class="formula-label">F (Flow)</span> = weighted_mean(mobility, access indicators)<br>
+            <span class="formula-val">= ${F} (${fmt(n.flow)})</span>
+        </div>
+        <div class="formula-row">
+            <span class="formula-label">Compassion</span> = weighted_mean(health, housing, food indicators)<br>
+            <span class="formula-val">= ${comp} (${fmt(n.compassion)})</span>
+        </div>
+        <div class="formula-row">
+            <span class="formula-label">Discernment</span> = weighted_mean(education, civic indicators)<br>
+            <span class="formula-val">= ${disc} (${fmt(n.discernment)})</span>
+        </div>
+        <div class="formula-row">
+            <span class="formula-label">C (Care)</span> = Compassion &times; Discernment<br>
+            <span class="formula-val">= ${comp} &times; ${disc} = ${C} (${fmt(n.care)})</span>
+        </div>
+        <div class="formula-row">
+            <span class="formula-label">E<sub>raw</sub></span> = (B &times; F) &times; C<br>
+            <span class="formula-val">= (${B} &times; ${F}) &times; ${C} = ${eRaw}</span>
+        </div>
+        <div class="formula-row">
+            <span class="formula-label">E<sub>scaled</sub></span> = (B &times; F &times; C)<sup>1/3</sup><br>
+            <span class="formula-val">= (${B} &times; ${F} &times; ${C})<sup>1/3</sup> = ${eScaled} (${fmt(n.e_scaled)})</span>
+        </div>
+        <div class="formula-row">
+            <span class="formula-label">A (Awareness)</span> = weighted_mean(education, civic engagement)<br>
+            <span class="formula-val">= ${A} (${fmt(n.awareness)})</span>
+        </div>
+        <div class="formula-row">
+            <span class="formula-label">X (Expression)</span> = weighted_mean(arts, protest freedom)<br>
+            <span class="formula-val">= ${X} (${fmt(n.expression)})</span>
+        </div>
+        <div class="formula-row">
+            <span class="formula-label">S (Intent Coherence)</span> = &radic;(A &times; X)<br>
+            <span class="formula-val">= &radic;(${A} &times; ${X}) = ${S} (${fmt(n.intent_coherence)})</span>
+        </div>
+        <div class="formula-row" style="padding-top:12px">
+            <span class="formula-label" style="font-size:15px">H (Harmony)</span> = &radic;(E<sub>scaled</sub> &times; S)<br>
+            <span class="formula-val">= &radic;(${eScaled} &times; ${S}) = ${H} (${fmt(n.harmony)})</span>
+        </div>
+        <div class="formula-row" style="border-bottom:none">
+            <span class="formula-label" style="font-size:15px">H<sub>raw</sub></span> = &radic;(E<sub>raw</sub> &times; S)<br>
+            <span class="formula-val">= &radic;(${eRaw} &times; ${S}) = ${n.e_raw != null && n.intent_coherence != null ? Math.sqrt(parseFloat(n.e_raw) * parseFloat(n.intent_coherence)).toFixed(4) : '—'}</span>
+        </div>
+    `;
+
+    document.getElementById('formulas-modal').classList.add('visible');
+}
+
+// ──────────────────────────────────────────────────
+// Compute all with progress states
+// ──────────────────────────────────────────────────
+async function computeAllNodes() {
+    const scope = document.getElementById('scope-select').value;
+    const statusEl = document.getElementById('compute-status');
+    const btn = document.getElementById('btn-compute-all');
+
+    btn.disabled = true;
+    statusEl.textContent = 'Queued...';
+
+    try {
+        statusEl.textContent = 'Computing scores...';
+        const data = await apiCall('POST', '/v0/harmony/compute-all', { scope });
+        statusEl.textContent = `Done — ${data.computed} nodes computed`;
+        showToast(`Scores computed for ${data.computed} nodes`, 'success');
+        await loadNodes();
+    } catch (err) {
+        statusEl.textContent = 'Failed';
+        showToast('Computation failed: ' + err.message, 'error');
+    } finally {
+        btn.disabled = false;
     }
 }
 
 function closeNodePanel() {
     document.getElementById('node-panel').classList.remove('visible');
     selectedNodeId = null;
-}
-
-async function computeAllNodes() {
-    const scope = document.getElementById('scope-select').value;
-    const statusEl = document.getElementById('compute-status');
-    statusEl.textContent = 'Computing...';
-
-    try {
-        const data = await apiCall('POST', '/v0/harmony/compute-all', { scope });
-        statusEl.textContent = `Computed ${data.computed} nodes`;
-        showToast(`Scores computed for ${data.computed} nodes`, 'success');
-        // Reload markers with new scores
-        await loadNodes();
-    } catch (err) {
-        statusEl.textContent = 'Failed';
-        showToast('Computation failed: ' + err.message, 'error');
-    }
+    currentNodeData = null;
 }
 
 // Init on page load

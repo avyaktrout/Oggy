@@ -148,7 +148,9 @@ const SIDEBAR_APPS = [
         pages: [
             { id: 'map', label: 'Map', href: '/harmony-map.html' },
             { id: 'scenarios', label: 'Scenarios', href: '/harmony-scenarios.html' },
-            { id: 'data', label: 'Data Catalog', href: '/harmony-data.html' }
+            { id: 'data', label: 'Data Catalog', href: '/harmony-data.html' },
+            { id: 'analytics', label: 'Analytics', href: '/harmony-analytics.html' },
+            { id: 'chat', label: 'Chat & Training', href: '/harmony-chat.html' }
         ]
     }
 ];

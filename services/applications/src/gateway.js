@@ -51,6 +51,7 @@ const DOMAIN_SERVICE_MAP = {
     payments: PAYMENTS_SERVICE_URL,
     general: GENERAL_SERVICE_URL,
     diet: DIET_SERVICE_URL,
+    harmony: HARMONY_SERVICE_URL,
 };
 
 // ──────────────────────────────────────────────────
@@ -86,6 +87,18 @@ async function proxyRequest(req, res, targetBaseUrl) {
 // ──────────────────────────────────────────────────
 // Middleware
 // ──────────────────────────────────────────────────
+
+// Redirect HTTP → HTTPS in production (before CORS so origin matches)
+if (process.env.NODE_ENV === 'production') {
+    app.use((req, res, next) => {
+        const proto = req.headers['x-forwarded-proto'];
+        if (proto === 'http') {
+            return res.redirect(301, `https://${req.headers.host}${req.url}`);
+        }
+        next();
+    });
+}
+
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 app.use(cors({
     origin: function(origin, callback) {

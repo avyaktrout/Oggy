@@ -13,6 +13,8 @@ const { injectUserIdFromHeader } = require('./shared/middleware/internalService'
 
 // Domain routes
 const harmonyRouter = require('./domains/harmony/routes/harmony');
+const continuousLearningRouter = require('./shared/routes/continuousLearning');
+const harmonyEngine = require('./domains/harmony/services/harmonyEngine');
 
 const app = express();
 const PORT = process.env.PORT || 3013;
@@ -70,6 +72,7 @@ app.get('/health', async (req, res) => {
 // Routes
 // ──────────────────────────────────────────────────
 app.use('/v0/harmony', harmonyRouter);
+app.use('/v0/continuous-learning', continuousLearningRouter);
 
 // ──────────────────────────────────────────────────
 // Error + 404 handlers
@@ -97,6 +100,29 @@ const server = app.listen(PORT, async () => {
         logger.error('Database connection failed (harmony)', { error: error.message });
         process.exit(1);
     }
+
+    // Schedule daily 6pm snapshot
+    function scheduleSnapshot() {
+        const now = new Date();
+        const target = new Date(now);
+        target.setHours(18, 0, 0, 0);
+        if (target <= now) target.setDate(target.getDate() + 1);
+        const delay = target.getTime() - now.getTime();
+
+        setTimeout(async () => {
+            try {
+                logger.info('Running daily harmony snapshot');
+                const result = await harmonyEngine.snapshotAllNodes('city');
+                logger.info('Daily snapshot complete', result);
+            } catch (err) {
+                logger.error('Daily snapshot failed', { error: err.message });
+            }
+            scheduleSnapshot(); // schedule next day
+        }, delay);
+
+        logger.info('Next harmony snapshot scheduled', { at: target.toISOString(), delay_ms: delay });
+    }
+    scheduleSnapshot();
 
     logger.info('Harmony service ready');
 });

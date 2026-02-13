@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oggy - Harmony Analytics</title>
+    <link rel="stylesheet" href="/css/style.css?v=2">
+    <style>
+        .analytics-controls { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+        .analytics-controls select, .analytics-controls button {
+            padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+            font-size: 13px; background: var(--bg); cursor: pointer;
+        }
+        .analytics-controls button:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+        .chart-container { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+        .chart-container canvas { max-height: 400px; }
+        .snapshot-status { font-size: 12px; color: var(--text-muted); margin-left: 8px; }
+        .legend-row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; font-size: 12px; }
+        .legend-item { display: flex; align-items: center; gap: 4px; }
+        .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+    </style>
+</head>
+<body class="app-layout">
+    <header class="topbar" id="topbar"></header>
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+    <main class="main-content">
+    <div class="container">
+        <h1 class="page-title">Harmony Analytics</h1>
+
+        <div class="analytics-controls">
+            <select id="city-select">
+                <option value="">All Cities</option>
+            </select>
+            <select id="metric-select">
+                <option value="harmony">Harmony (H)</option>
+                <option value="e_scaled">Equilibrium (E)</option>
+                <option value="intent_coherence">Intent (S)</option>
+                <option value="balance">Balance (B)</option>
+                <option value="flow">Flow (F)</option>
+                <option value="care">Care (C)</option>
+                <option value="awareness">Awareness (A)</option>
+                <option value="expression">Expression (X)</option>
+            </select>
+            <select id="days-select">
+                <option value="30">Last 30 days</option>
+                <option value="60">Last 60 days</option>
+                <option value="90" selected>Last 90 days</option>
+                <option value="180">Last 180 days</option>
+                <option value="365">Last year</option>
+            </select>
+            <button onclick="snapshotNow()">Snapshot Now</button>
+            <span class="snapshot-status" id="snapshot-status"></span>
+        </div>
+
+        <div class="chart-container">
+            <canvas id="trend-chart"></canvas>
+            <div class="legend-row" id="chart-legend"></div>
+        </div>
+
+        <p style="font-size:12px;color:var(--text-muted)">Snapshots are taken daily at 6:00 PM. Use "Snapshot Now" to capture the current state immediately.</p>
+    </div>
+    </main>
+
+    <script src="/js/app.js?v=2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="/js/harmony-analytics.js?v=2"></script>
+</body>
+</html>

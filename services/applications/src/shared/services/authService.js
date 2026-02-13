@@ -21,6 +21,26 @@ const SESSION_EXPIRY_DAYS = 7;
 class AuthService {
     constructor() {
         this._cleanupInterval = null;
+        this._transporter = null;
+    }
+
+    /**
+     * Get or create a reusable SMTP transporter (singleton).
+     */
+    _getTransporter() {
+        if (!this._transporter) {
+            const nodemailer = require('nodemailer');
+            this._transporter = nodemailer.createTransport({
+                host: process.env.SMTP_HOST,
+                port: parseInt(process.env.SMTP_PORT || '587'),
+                secure: process.env.SMTP_SECURE === 'true',
+                auth: {
+                    user: process.env.SMTP_USER,
+                    pass: process.env.SMTP_PASS
+                }
+            });
+        }
+        return this._transporter;
     }
 
     /**
@@ -231,16 +251,13 @@ class AuthService {
 
         // Production: use nodemailer
         try {
-            const nodemailer = require('nodemailer');
-            const transporter = nodemailer.createTransport({
-                host: process.env.SMTP_HOST,
-                port: parseInt(process.env.SMTP_PORT || '587'),
-                secure: process.env.SMTP_SECURE === 'true',
-                auth: {
-                    user: process.env.SMTP_USER,
-                    pass: process.env.SMTP_PASS
-                }
-            });
+            if (!process.env.SMTP_HOST) {
+                logger.warn('SMTP not configured, falling back to console', { email });
+                console.log(`\n  Magic Link for ${email} (no SMTP):\n  ${magicUrl}\n`);
+                return { sent: false, error: 'SMTP not configured', url: magicUrl };
+            }
+
+            const transporter = this._getTransporter();
 
             await transporter.sendMail({
                 from: process.env.SMTP_FROM || 'Oggy <noreply@oggy.app>',
