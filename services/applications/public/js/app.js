@@ -142,6 +142,14 @@ const SIDEBAR_APPS = [
             { id: 'chat', label: 'Chat & Training', href: '/diet-chat.html' },
             { id: 'analytics', label: 'Analytics', href: '/diet-analytics.html' }
         ]
+    },
+    {
+        id: 'harmony', label: 'Harmony Map',
+        pages: [
+            { id: 'map', label: 'Map', href: '/harmony-map.html' },
+            { id: 'scenarios', label: 'Scenarios', href: '/harmony-scenarios.html' },
+            { id: 'data', label: 'Data Catalog', href: '/harmony-data.html' }
+        ]
     }
 ];
 

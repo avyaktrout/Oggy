@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oggy - Harmony Scenarios</title>
+    <link rel="stylesheet" href="/css/style.css?v=2">
+    <style>
+        .scenario-form { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; padding-bottom: 24px; margin-bottom: 16px; overflow: visible; }
+        .scenario-form h2 { margin: 0 0 12px; font-size: 16px; }
+        .form-row { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+        .form-row input, .form-row select, .form-row textarea {
+            padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px;
+        }
+        .form-row input[type="text"] { flex: 1; min-width: 200px; }
+        .form-row textarea { flex: 1; min-width: 200px; min-height: 60px; resize: vertical; }
+        .adj-grid { margin: 12px 0; }
+        .dim-section { margin-bottom: 12px; }
+        .dim-section .dim-header { margin-bottom: 6px; }
+        .dim-section .adj-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 6px; }
+        .adj-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+        .adj-item label { flex: 1; }
+        .adj-item input { width: 90px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px; }
+        .adj-item input:not(:placeholder-shown) { border-color: #6366f1; background: #f0f0ff; }
+        .adjustment-preview { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; margin-top: 12px; min-height: 32px; }
+        .scenario-list { margin-top: 16px; }
+        .scenario-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 8px; }
+        .scenario-card h3 { margin: 0; font-size: 14px; }
+        .scenario-card .meta { font-size: 12px; color: var(--text-muted); margin: 4px 0; }
+        .comparison-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; margin-top: 8px; }
+        .comp-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; text-align: center; font-size: 12px; }
+        .comp-card .comp-label { font-weight: 600; text-transform: uppercase; color: var(--text-muted); font-size: 10px; }
+        .comp-card .comp-delta { font-size: 16px; font-weight: 700; }
+        .comp-positive { color: #16a34a; }
+        .comp-negative { color: #dc2626; }
+        .comp-neutral { color: var(--text-muted); }
+        .status-draft { color: #f59e0b; }
+        .status-approved { color: #16a34a; }
+        .btn-sm { padding: 6px 16px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px; cursor: pointer; background: var(--bg); }
+        .btn-sm:hover { background: var(--surface); }
+    </style>
+</head>
+<body class="app-layout">
+    <header class="topbar" id="topbar"></header>
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+    <main class="main-content">
+    <div class="container">
+        <h1 class="page-title">Scenarios</h1>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">
+            Create what-if scenarios by adjusting indicator values and comparing projected scores against the baseline.
+        </p>
+
+        <!-- Create Scenario Form -->
+        <div class="scenario-form">
+            <h2>New Scenario</h2>
+            <div class="form-row">
+                <input type="text" id="scenario-name" placeholder="Scenario name">
+                <select id="scenario-node">
+                    <option value="">Select a city...</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <textarea id="scenario-desc" placeholder="Description (optional)"></textarea>
+            </div>
+
+            <h3 style="font-size:13px;margin:12px 0 8px">Adjust Indicators</h3>
+            <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Type a new value into any indicator field to adjust it. Indicators are grouped by dimension.</p>
+            <div class="adj-grid" id="adj-grid">
+                <div style="color:var(--text-muted);font-size:13px">Select a city first to load indicators</div>
+            </div>
+
+            <!-- Live adjustment preview -->
+            <div class="adjustment-preview" id="adjustment-preview">
+                <span style="color:var(--text-muted);font-size:12px">No adjustments yet. Type new values into the indicator fields above.</span>
+            </div>
+
+            <div id="create-btn-wrapper" style="margin-top:20px;padding-top:16px;border-top:2px solid #6366f1;text-align:left">
+                <div onclick="createScenario()" style="display:inline-block;background:#6366f1;color:#ffffff;border:2px solid #6366f1;padding:14px 40px;font-size:16px;font-weight:700;border-radius:8px;cursor:pointer;letter-spacing:0.5px;user-select:none">CREATE &amp; COMPARE</div>
+            </div>
+        </div>
+
+        <!-- Existing Scenarios -->
+        <div class="scenario-list" id="scenario-list">
+            <h2 style="font-size:16px;margin-bottom:12px">Your Scenarios</h2>
+            <div id="scenarios-container">Loading...</div>
+        </div>
+    </div>
+    </main>
+
+    <script src="/js/app.js"></script>
+    <script src="/js/harmony-scenarios.js"></script>
+</body>
+</html>

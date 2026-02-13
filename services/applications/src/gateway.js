@@ -43,6 +43,7 @@ const PORT = process.env.PORT || 3001;
 const PAYMENTS_SERVICE_URL = process.env.PAYMENTS_SERVICE_URL || 'http://payments-service:3010';
 const GENERAL_SERVICE_URL = process.env.GENERAL_SERVICE_URL || 'http://general-service:3011';
 const DIET_SERVICE_URL = process.env.DIET_SERVICE_URL || 'http://diet-service:3012';
+const HARMONY_SERVICE_URL = process.env.HARMONY_SERVICE_URL || 'http://harmony-service:3013';
 const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory-service:3000';
 
 // Domain routing map for continuous-learning
@@ -124,7 +125,7 @@ app.use((req, res, next) => {
 // Health check (aggregated)
 // ──────────────────────────────────────────────────
 app.get('/health', async (req, res) => {
-    const checks = { database: false, memoryService: false, payments: false, general: false, diet: false };
+    const checks = { database: false, memoryService: false, payments: false, general: false, diet: false, harmony: false };
     let overallOk = true;
 
     // Database
@@ -152,6 +153,7 @@ app.get('/health', async (req, res) => {
         { name: 'payments', url: PAYMENTS_SERVICE_URL },
         { name: 'general', url: GENERAL_SERVICE_URL },
         { name: 'diet', url: DIET_SERVICE_URL },
+        { name: 'harmony', url: HARMONY_SERVICE_URL },
     ];
     await Promise.all(domainChecks.map(async ({ name, url }) => {
         try {
@@ -265,6 +267,11 @@ app.use('/v0/general', (req, res) => proxyRequest(req, res, GENERAL_SERVICE_URL)
 app.use('/v0/diet', (req, res) => proxyRequest(req, res, DIET_SERVICE_URL));
 
 // ──────────────────────────────────────────────────
+// Proxy: Harmony domain
+// ──────────────────────────────────────────────────
+app.use('/v0/harmony', (req, res) => proxyRequest(req, res, HARMONY_SERVICE_URL));
+
+// ──────────────────────────────────────────────────
 // Proxy: Continuous learning (route by domain param)
 // ──────────────────────────────────────────────────
 app.use('/v0/continuous-learning', (req, res) => {
@@ -346,6 +353,7 @@ const server = app.listen(PORT, async () => {
         payments: PAYMENTS_SERVICE_URL,
         general: GENERAL_SERVICE_URL,
         diet: DIET_SERVICE_URL,
+        harmony: HARMONY_SERVICE_URL,
     });
 });
 

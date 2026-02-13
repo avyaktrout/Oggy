@@ -104,6 +104,7 @@ services:
       PAYMENTS_SERVICE_URL: http://payments-service:3010
       GENERAL_SERVICE_URL: http://general-service:3011
       DIET_SERVICE_URL: http://diet-service:3012
+      HARMONY_SERVICE_URL: http://harmony-service:3013
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
@@ -266,6 +267,38 @@ services:
       memory-service:
         condition: service_started
     command: npm run start:diet
+
+  # ── Harmony Domain Service ─────────────────────
+  harmony-service:
+    image: oggy-app:latest
+    container_name: oggy-harmony-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3013
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-oggy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oggy_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-oggy_db}
+      MEMORY_SERVICE_URL: http://memory-service:3000
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: harmony-service
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    ports:
+      - "3013:3013"
+    volumes:
+      - ./services/applications:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      memory-service:
+        condition: service_started
+    command: npm run start:harmony
 
   # Learning Service (Python)
   learning-service:

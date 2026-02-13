@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oggy - Harmony Data Catalog</title>
+    <link rel="stylesheet" href="/css/style.css?v=2">
+    <style>
+        .dataset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; margin-top: 16px; }
+        .dataset-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+        .dataset-card h3 { margin: 0 0 6px; font-size: 14px; }
+        .dataset-card .meta { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+        .dataset-card .fields-list { list-style: none; padding: 0; margin: 0; }
+        .dataset-card .fields-list li { font-size: 12px; padding: 2px 0; border-bottom: 1px solid var(--border); }
+        .dataset-card .fields-list li:last-child { border-bottom: none; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+        .badge-license { background: #dbeafe; color: #1e40af; }
+        .badge-cadence { background: #dcfce7; color: #166534; }
+        .dataset-link { color: var(--accent); font-size: 12px; text-decoration: none; }
+        .dataset-link:hover { text-decoration: underline; }
+    </style>
+</head>
+<body class="app-layout">
+    <header class="topbar" id="topbar"></header>
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+    <main class="main-content">
+    <div class="container">
+        <h1 class="page-title">Data Catalog</h1>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:4px">
+            Datasets powering the Harmony Map indicators. All data sourced from public domain or CC-licensed sources.
+        </p>
+
+        <div class="dataset-grid" id="dataset-grid">Loading...</div>
+    </div>
+    </main>
+
+    <script src="/js/app.js"></script>
+    <script src="/js/harmony-data.js"></script>
+</body>
+</html>

@@ -18,6 +18,7 @@ const DOMAIN_MIGRATION_DIRS = [
     path.join(__dirname, '..', '..', 'domains', 'payments', 'db'),
     path.join(__dirname, '..', '..', 'domains', 'general', 'db'),
     path.join(__dirname, '..', '..', 'domains', 'diet', 'db'),
+    path.join(__dirname, '..', '..', 'domains', 'harmony', 'db'),
 ];
 
 function collectMigrationFiles() {
