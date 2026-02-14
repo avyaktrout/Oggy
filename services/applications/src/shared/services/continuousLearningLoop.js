@@ -109,6 +109,37 @@ registerDomain('general', () => {
         }
     };
 });
+
+registerDomain('harmony', () => {
+    const sdl = require('../../domains/harmony/services/harmonySelfDrivenLearning');
+    const gen = require('../../domains/harmony/services/harmonyBenchmarkGenerator');
+    const evl = require('../../domains/harmony/services/harmonyBenchmarkEvaluator');
+    const harmonySuggestionService = require('../../domains/harmony/services/harmonySuggestionService');
+    return {
+        getSdl: (userId) => sdl.getInstance(userId),
+        createBenchmark: (opts) => gen.createBenchmark(opts),
+        getBenchmark: (name, userId) => gen.getBenchmark(name, userId),
+        runBenchmark: (opts) => evl.testOnBenchmark(opts),
+        scaleComplexity: {
+            1: { name: 'Foundation', complexity_factors: ['indicator_classification', 'basic_formulas'] },
+            2: { name: 'Intermediate', complexity_factors: ['score_prediction', 'weight_reasoning', 'data_quality'] },
+            3: { name: 'Advanced', complexity_factors: ['cross_city_comparison', 'model_critique', 'indicator_gaps'] },
+            4: { name: 'Expert', complexity_factors: ['policy_simulation', 'multi_dimension_impact', 'temporal_analysis'] },
+            5: { name: 'Master', complexity_factors: ['model_redesign', 'novel_indicators', 'cross_domain_synthesis'] }
+        },
+        postBenchmarkProcess: async (benchmark, testResult, userId, helpers) => {
+            // Generate 10 suggestions per benchmark cycle
+            let suggestionsGenerated = 0;
+            try {
+                const result = await harmonySuggestionService.generateOnDemand(userId, 10, 'all');
+                suggestionsGenerated = Array.isArray(result) ? result.length : 0;
+            } catch (err) {
+                // Non-critical
+            }
+            return { mistakes_learned: 0, validation_issues_found: 0, suggestions_generated: suggestionsGenerated };
+        }
+    };
+});
 const logger = require('../utils/logger');
 const correctionValidator = require('../utils/correctionValidator');
 const { getReporter } = require('./trainingReporter');
@@ -537,13 +568,16 @@ class ContinuousLearningLoop {
             const newQuestions = learningStats.total_attempts - this.stats.total_questions;
 
             if (newQuestions > 0) {
+                // Normalize accuracy: payments returns "85.3%", general returns 0.853
+                const accuracyDecimal = this._parseAccuracyToDecimal(learningStats.accuracy);
+
                 const newCorrect = Math.round(
-                    (parseFloat(learningStats.accuracy) / 100) * learningStats.total_attempts
+                    accuracyDecimal * learningStats.total_attempts
                 ) - this.stats.correct_answers;
 
                 this.stats.total_questions = learningStats.total_attempts;
                 this.stats.correct_answers = Math.round(
-                    (parseFloat(learningStats.accuracy) / 100) * learningStats.total_attempts
+                    accuracyDecimal * learningStats.total_attempts
                 );
                 this.stats.current_window_questions += newQuestions;
                 this.stats.current_window_correct += Math.max(0, newCorrect);
@@ -1798,6 +1832,23 @@ class ContinuousLearningLoop {
         } else {
             return `${seconds}s`;
         }
+    }
+
+    /**
+     * Parse accuracy from any SDL format into a 0-1 decimal.
+     * Payments returns "85.3%" (string with %), General returns 0.853 (number 0-1),
+     * Harmony returns "85.3%" (string with %).
+     */
+    _parseAccuracyToDecimal(accuracy) {
+        if (typeof accuracy === 'string') {
+            // "85.3%" → 0.853
+            return parseFloat(accuracy) / 100;
+        }
+        // Number: if > 1, treat as percentage (e.g. 85.3); if <= 1, treat as decimal (e.g. 0.853)
+        if (typeof accuracy === 'number') {
+            return accuracy > 1 ? accuracy / 100 : accuracy;
+        }
+        return 0;
     }
 
     /**

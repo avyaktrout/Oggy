@@ -174,6 +174,172 @@ class TrainingReporter {
         }
     }
 
+    /**
+     * Harmony-specific benchmark analysis — replaces weakness analyzer for harmony domain
+     */
+    async _getHarmonyAnalysis(benchmarkResult) {
+        try {
+            if (!benchmarkResult || !benchmarkResult.benchmark_id) return null;
+
+            const userId = this.config?.userId;
+            const resultRow = await query(
+                `SELECT detailed_results FROM sealed_benchmark_results
+                 WHERE benchmark_id = $1${userId ? ' AND user_id = $2' : ''} ORDER BY tested_at DESC LIMIT 1`,
+                userId ? [benchmarkResult.benchmark_id, userId] : [benchmarkResult.benchmark_id]
+            );
+            if (resultRow.rows.length === 0) return null;
+
+            const details = resultRow.rows[0].detailed_results;
+            if (!details || !details.oggy || !details.oggy.scenario_results) return null;
+
+            const oggyResults = details.oggy.scenario_results;
+            const baseResults = details.base?.scenario_results || [];
+
+            // Group by scenario_type
+            const byType = {};
+            for (const r of oggyResults) {
+                const type = r.scenario_type || 'unknown';
+                if (!byType[type]) byType[type] = { correct: 0, total: 0, wrong: [] };
+                byType[type].total++;
+                if (r.correct) {
+                    byType[type].correct++;
+                } else {
+                    byType[type].wrong.push({ expected: r.expected, answer: r.answer });
+                }
+            }
+
+            // Compute per-type accuracy
+            const typePerformance = {};
+            for (const [type, data] of Object.entries(byType)) {
+                typePerformance[type] = {
+                    accuracy: data.total > 0 ? data.correct / data.total : 0,
+                    correct: data.correct,
+                    total: data.total,
+                    wrong_examples: data.wrong.slice(0, 3)
+                };
+            }
+
+            // Dimension accuracy for classification scenarios
+            const dimensionPerf = {};
+            for (const r of oggyResults) {
+                if (r.scenario_type === 'indicator_classification' && r.expected) {
+                    const dim = r.expected.toLowerCase();
+                    if (!dimensionPerf[dim]) dimensionPerf[dim] = { correct: 0, total: 0 };
+                    dimensionPerf[dim].total++;
+                    if (r.correct) dimensionPerf[dim].correct++;
+                }
+            }
+
+            // Weak areas (< 70%)
+            const weakTypes = Object.entries(typePerformance)
+                .filter(([_, p]) => p.accuracy < 0.70 && p.total >= 2)
+                .map(([type]) => type);
+
+            return { typePerformance, dimensionPerf, weakTypes, oggyTotal: oggyResults.length };
+        } catch (err) {
+            logger.warn('Harmony analysis for report failed (non-blocking)', { error: err.message });
+            return null;
+        }
+    }
+
+    _buildHarmonySection(analysis) {
+        if (!analysis) return '';
+
+        let html = '';
+        const typeLabels = {
+            indicator_classification: 'Indicator Classification',
+            score_prediction: 'Score Prediction',
+            city_wellness_assessment: 'City Wellness Assessment',
+            metric_identification: 'Metric Identification',
+            city_expansion: 'City Expansion',
+            data_source_recommendation: 'Data Source Recommendation',
+            missing_indicator: 'Missing Indicator',
+            weight_suggestion: 'Weight Suggestion'
+        };
+
+        // Scenario Type Accuracy bars
+        const typeEntries = Object.entries(analysis.typePerformance)
+            .sort((a, b) => a[1].accuracy - b[1].accuracy);
+
+        if (typeEntries.length > 0) {
+            const typeRows = typeEntries.map(([type, perf]) => {
+                const pct = (perf.accuracy * 100).toFixed(0);
+                const barColor = perf.accuracy < 0.50 ? '#ef4444' :
+                                 perf.accuracy < 0.70 ? '#f59e0b' : '#22c55e';
+                const barWidth = Math.max(pct, 5);
+                const label = typeLabels[type] || type.replace(/_/g, ' ');
+                return `
+                    <tr>
+                        <td style="padding:4px 8px;font-size:13px;font-weight:500;white-space:nowrap">${label}</td>
+                        <td style="padding:4px 8px;width:100%">
+                            <div style="background:#f1f5f9;border-radius:4px;height:18px;position:relative;overflow:hidden">
+                                <div style="background:${barColor};height:100%;width:${barWidth}%;border-radius:4px;min-width:20px"></div>
+                            </div>
+                        </td>
+                        <td style="padding:4px 8px;font-size:13px;color:#64748b;white-space:nowrap">${pct}% (${perf.correct}/${perf.total})</td>
+                    </tr>`;
+            }).join('');
+
+            html += `
+                <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Scenario Type Accuracy</h3>
+                <table style="width:100%;border-collapse:collapse">${typeRows}</table>`;
+        }
+
+        // Dimension Performance (from classification scenarios)
+        const dimEntries = Object.entries(analysis.dimensionPerf)
+            .sort((a, b) => a[1].correct / a[1].total - b[1].correct / b[1].total);
+
+        if (dimEntries.length > 0) {
+            const dimRows = dimEntries.map(([dim, perf]) => {
+                const acc = perf.total > 0 ? perf.correct / perf.total : 0;
+                const pct = (acc * 100).toFixed(0);
+                const barColor = acc < 0.50 ? '#ef4444' : acc < 0.70 ? '#f59e0b' : '#22c55e';
+                const label = dim.charAt(0).toUpperCase() + dim.slice(1);
+                return `
+                    <tr>
+                        <td style="padding:4px 8px;font-size:13px;font-weight:500;white-space:nowrap">${label}</td>
+                        <td style="padding:4px 8px;width:100%">
+                            <div style="background:#f1f5f9;border-radius:4px;height:18px;position:relative;overflow:hidden">
+                                <div style="background:${barColor};height:100%;width:${Math.max(pct, 5)}%;border-radius:4px;min-width:20px"></div>
+                            </div>
+                        </td>
+                        <td style="padding:4px 8px;font-size:13px;color:#64748b;white-space:nowrap">${pct}% (${perf.correct}/${perf.total})</td>
+                    </tr>`;
+            }).join('');
+
+            html += `
+                <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Dimension Performance</h3>
+                <table style="width:100%;border-collapse:collapse">${dimRows}</table>`;
+        }
+
+        // Weak areas recommendation
+        if (analysis.weakTypes.length > 0) {
+            const focusAreas = analysis.weakTypes.map(t => typeLabels[t] || t.replace(/_/g, ' ')).join(', ');
+            html += `
+                <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:14px;margin-top:16px">
+                    <strong style="color:#92400e;font-size:13px">Recommendation</strong>
+                    <p style="margin:6px 0 0;font-size:13px;color:#78350f">
+                        Focus training on weaker scenario types: <strong>${focusAreas}</strong>.
+                        These areas are below 70% accuracy and need more practice.
+                    </p>
+                </div>`;
+        }
+
+        // Strong types (>= 80%)
+        const strongTypes = typeEntries.filter(([_, p]) => p.accuracy >= 0.80);
+        if (strongTypes.length > 0) {
+            const strongList = strongTypes.reverse().map(([type, perf]) => {
+                const label = typeLabels[type] || type.replace(/_/g, ' ');
+                return `<span style="display:inline-block;background:#dcfce7;color:#166534;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600;margin:2px">${label} ${(perf.accuracy * 100).toFixed(0)}%</span>`;
+            }).join(' ');
+            html += `
+                <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Strong Scenario Types</h3>
+                <div>${strongList}</div>`;
+        }
+
+        return html;
+    }
+
     async _buildReportHtml(title, stats, benchmarkResult) {
         const bmRows = (stats.benchmark_results || []).map((bm, i) => `
             <tr>
@@ -194,77 +360,84 @@ class TrainingReporter {
             </div>
         ` : '';
 
-        // Get weakness analysis for the latest benchmark
-        const analysis = await this._getWeaknessData(latestBm);
+        // Get domain-specific analysis for the latest benchmark
+        const isHarmony = stats.domain === 'harmony' || (latestBm && latestBm.domain === 'harmony');
         let weaknessSection = '';
 
-        if (analysis && analysis.category_performance) {
-            // Category accuracy bars
-            const catEntries = Object.entries(analysis.category_performance)
-                .sort((a, b) => a[1].accuracy - b[1].accuracy);
+        if (isHarmony) {
+            const harmonyAnalysis = await this._getHarmonyAnalysis(latestBm);
+            weaknessSection = this._buildHarmonySection(harmonyAnalysis);
+        } else {
+            const analysis = await this._getWeaknessData(latestBm);
 
-            if (catEntries.length > 0) {
-                const catRows = catEntries.map(([cat, perf]) => {
-                    const pct = (perf.accuracy * 100).toFixed(0);
-                    const barColor = perf.accuracy < 0.60 ? '#ef4444' :
-                                     perf.accuracy < 0.80 ? '#f59e0b' : '#22c55e';
-                    const barWidth = Math.max(pct, 5);
-                    return `
+            if (analysis && analysis.category_performance) {
+                // Category accuracy bars
+                const catEntries = Object.entries(analysis.category_performance)
+                    .sort((a, b) => a[1].accuracy - b[1].accuracy);
+
+                if (catEntries.length > 0) {
+                    const catRows = catEntries.map(([cat, perf]) => {
+                        const pct = (perf.accuracy * 100).toFixed(0);
+                        const barColor = perf.accuracy < 0.60 ? '#ef4444' :
+                                         perf.accuracy < 0.80 ? '#f59e0b' : '#22c55e';
+                        const barWidth = Math.max(pct, 5);
+                        return `
+                            <tr>
+                                <td style="padding:4px 8px;font-size:13px;font-weight:500;white-space:nowrap">${cat}</td>
+                                <td style="padding:4px 8px;width:100%">
+                                    <div style="background:#f1f5f9;border-radius:4px;height:18px;position:relative;overflow:hidden">
+                                        <div style="background:${barColor};height:100%;width:${barWidth}%;border-radius:4px;min-width:20px"></div>
+                                    </div>
+                                </td>
+                                <td style="padding:4px 8px;font-size:13px;color:#64748b;white-space:nowrap">${pct}% (${perf.correct}/${perf.total})</td>
+                            </tr>`;
+                    }).join('');
+
+                    weaknessSection += `
+                        <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Category Accuracy</h3>
+                        <table style="width:100%;border-collapse:collapse">${catRows}</table>`;
+                }
+
+                // Confusion pairs
+                if (analysis.confusion_patterns && analysis.confusion_patterns.length > 0) {
+                    const confusionRows = analysis.confusion_patterns.slice(0, 5).map(p => `
                         <tr>
-                            <td style="padding:4px 8px;font-size:13px;font-weight:500;white-space:nowrap">${cat}</td>
-                            <td style="padding:4px 8px;width:100%">
-                                <div style="background:#f1f5f9;border-radius:4px;height:18px;position:relative;overflow:hidden">
-                                    <div style="background:${barColor};height:100%;width:${barWidth}%;border-radius:4px;min-width:20px"></div>
-                                </div>
+                            <td style="padding:4px 8px;font-size:13px">
+                                <span style="color:#ef4444;font-weight:600">${p.actual}</span>
+                                <span style="color:#94a3b8"> misclassified as </span>
+                                <span style="font-weight:600">${p.predicted}</span>
                             </td>
-                            <td style="padding:4px 8px;font-size:13px;color:#64748b;white-space:nowrap">${pct}% (${perf.correct}/${perf.total})</td>
-                        </tr>`;
-                }).join('');
+                            <td style="padding:4px 8px;font-size:13px;color:#64748b;text-align:right">${p.count} times</td>
+                        </tr>
+                    `).join('');
 
-                weaknessSection += `
-                    <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Category Accuracy</h3>
-                    <table style="width:100%;border-collapse:collapse">${catRows}</table>`;
-            }
+                    weaknessSection += `
+                        <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Top Confusion Pairs</h3>
+                        <table style="width:100%;border-collapse:collapse">${confusionRows}</table>`;
+                }
 
-            // Confusion pairs
-            if (analysis.confusion_patterns && analysis.confusion_patterns.length > 0) {
-                const confusionRows = analysis.confusion_patterns.slice(0, 5).map(p => `
-                    <tr>
-                        <td style="padding:4px 8px;font-size:13px">
-                            <span style="color:#ef4444;font-weight:600">${p.actual}</span>
-                            <span style="color:#94a3b8"> misclassified as </span>
-                            <span style="font-weight:600">${p.predicted}</span>
-                        </td>
-                        <td style="padding:4px 8px;font-size:13px;color:#64748b;text-align:right">${p.count} times</td>
-                    </tr>
-                `).join('');
+                // Recommendations
+                if (analysis.recommendations && analysis.recommendations.priority === 'targeted') {
+                    const focusCats = analysis.recommendations.focus_categories.join(', ');
+                    weaknessSection += `
+                        <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:14px;margin-top:16px">
+                            <strong style="color:#92400e;font-size:13px">Recommendation</strong>
+                            <p style="margin:6px 0 0;font-size:13px;color:#78350f">
+                                ${analysis.recommendations.message}. Focus categories: <strong>${focusCats}</strong>
+                            </p>
+                        </div>`;
+                }
 
-                weaknessSection += `
-                    <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Top Confusion Pairs</h3>
-                    <table style="width:100%;border-collapse:collapse">${confusionRows}</table>`;
-            }
-
-            // Recommendations
-            if (analysis.recommendations && analysis.recommendations.priority === 'targeted') {
-                const focusCats = analysis.recommendations.focus_categories.join(', ');
-                weaknessSection += `
-                    <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:14px;margin-top:16px">
-                        <strong style="color:#92400e;font-size:13px">Recommendation</strong>
-                        <p style="margin:6px 0 0;font-size:13px;color:#78350f">
-                            ${analysis.recommendations.message}. Focus categories: <strong>${focusCats}</strong>
-                        </p>
-                    </div>`;
-            }
-
-            // Strengths (categories >80%)
-            const strengths = catEntries.filter(([_, perf]) => perf.accuracy >= 0.80);
-            if (strengths.length > 0) {
-                const strongList = strengths.reverse().map(([cat, perf]) =>
-                    `<span style="display:inline-block;background:#dcfce7;color:#166534;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600;margin:2px">${cat} ${(perf.accuracy * 100).toFixed(0)}%</span>`
-                ).join(' ');
-                weaknessSection += `
-                    <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Strong Categories</h3>
-                    <div>${strongList}</div>`;
+                // Strengths (categories >80%)
+                const strengths = catEntries.filter(([_, perf]) => perf.accuracy >= 0.80);
+                if (strengths.length > 0) {
+                    const strongList = strengths.reverse().map(([cat, perf]) =>
+                        `<span style="display:inline-block;background:#dcfce7;color:#166534;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600;margin:2px">${cat} ${(perf.accuracy * 100).toFixed(0)}%</span>`
+                    ).join(' ');
+                    weaknessSection += `
+                        <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Strong Categories</h3>
+                        <div>${strongList}</div>`;
+                }
             }
         }
 

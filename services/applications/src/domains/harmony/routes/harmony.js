@@ -8,6 +8,8 @@ const logger = require('../../../shared/utils/logger');
 const harmonyEngine = require('../services/harmonyEngine');
 const scenarioService = require('../services/scenarioService');
 const auditService = require('../services/auditService');
+const harmonySuggestionService = require('../services/harmonySuggestionService');
+const suggestionLoop = require('../services/harmonySuggestionLoop');
 
 // ──────────────────────────────────────────────────
 // Nodes
@@ -476,6 +478,265 @@ Help users understand what drives city scores, suggest improvements, and explain
     } catch (err) {
         logger.logError(err, { operation: 'harmony-chat' });
         res.status(500).json({ error: 'Chat failed', message: err.message });
+    }
+});
+
+// ──────────────────────────────────────────────────
+// What-If Chat (node-specific, with suggestions)
+// ──────────────────────────────────────────────────
+
+router.post('/whatif-chat', async (req, res) => {
+    try {
+        const userId = req.userId || req.body.user_id;
+        const { message, node_id, conversation_history = [] } = req.body;
+        if (!message || !node_id) return res.status(400).json({ error: 'message and node_id required' });
+
+        // Build rich context for the selected node
+        const [nodeData, explainData, driversData, snapshotsData, allCities] = await Promise.all([
+            query(`
+                SELECT n.*, s.balance, s.flow, s.compassion, s.discernment, s.care,
+                       s.e_raw, s.e_scaled, s.awareness, s.expression, s.intent_coherence, s.harmony
+                FROM harmony_nodes n LEFT JOIN harmony_scores s ON n.node_id = s.node_id
+                WHERE n.node_id = $1 LIMIT 1
+            `, [node_id]),
+            harmonyEngine.getExplainability(node_id),
+            harmonyEngine.getTopDriversAndDrags(node_id),
+            query(`
+                SELECT snapshot_date, harmony, e_scaled, balance, flow, care, intent_coherence
+                FROM harmony_daily_snapshots WHERE node_id = $1
+                ORDER BY snapshot_date DESC LIMIT 30
+            `, [node_id]),
+            query(`
+                SELECT n.name, s.harmony, s.e_scaled, s.balance, s.flow, s.care, s.intent_coherence
+                FROM harmony_nodes n JOIN harmony_scores s ON n.node_id = s.node_id
+                WHERE n.scope = 'city' ORDER BY n.name
+            `),
+        ]);
+
+        const node = nodeData.rows[0];
+        if (!node) return res.status(404).json({ error: 'Node not found' });
+
+        const indicatorContext = (explainData.indicators || []).map(i =>
+            `  ${i.key}: raw=${i.raw_value} norm=${i.normalized_value != null ? (i.normalized_value*100).toFixed(1)+'%' : '?'} (${i.dimension}, ${i.direction}, w=${i.weight})`
+        ).join('\n');
+
+        const driverContext = (driversData.drivers || []).map(d => `  + ${d.name}: ${(d.normalized_value*100).toFixed(0)}%`).join('\n');
+        const dragContext = (driversData.drags || []).map(d => `  - ${d.name}: ${(d.normalized_value*100).toFixed(0)}%`).join('\n');
+
+        const progressionContext = snapshotsData.rows.map(s =>
+            `  ${s.snapshot_date}: H=${((s.harmony||0)*100).toFixed(1)}% E=${((s.e_scaled||0)*100).toFixed(1)}%`
+        ).join('\n');
+
+        const allCityContext = allCities.rows.map(c =>
+            `${c.name}: H=${((c.harmony||0)*100).toFixed(1)}% B=${((c.balance||0)*100).toFixed(1)}% F=${((c.flow||0)*100).toFixed(1)}% C=${((c.care||0)*100).toFixed(1)}% S=${((c.intent_coherence||0)*100).toFixed(1)}%`
+        ).join('\n');
+
+        const systemPrompt = `You are Oggy, a Harmony Map "What If?" scenario analyst. You analyze targeted what-if scenarios about cities and regions observable on the Harmony Map.
+
+SELECTED CITY: ${node.name} (pop: ${node.population ? Number(node.population).toLocaleString() : 'unknown'})
+Current scores: H=${((node.harmony||0)*100).toFixed(1)}% E=${((node.e_scaled||0)*100).toFixed(1)}% B=${((node.balance||0)*100).toFixed(1)}% F=${((node.flow||0)*100).toFixed(1)}% C=${((node.care||0)*100).toFixed(1)}% S=${((node.intent_coherence||0)*100).toFixed(1)}%
+
+INDICATORS:
+${indicatorContext}
+
+TOP DRIVERS:
+${driverContext}
+
+TOP DRAGS:
+${dragContext}
+
+RECENT PROGRESSION (last 30 snapshots):
+${progressionContext || '  No historical data yet'}
+
+ALL CITIES FOR COMPARISON:
+${allCityContext}
+
+EQUILIBRIUM CANON:
+H = sqrt(E * S), E = (B*F*C)^(1/3), S = sqrt(A*X), C = Compassion*Discernment
+Dimensions: balance, flow, compassion, discernment, awareness, expression
+
+YOUR ROLE:
+1. Answer "what if" scenarios with quantitative reasoning. Estimate how score changes would propagate through the formula chain.
+2. Use publicly available data, historical trends, and cross-city comparisons.
+3. When you notice gaps in the model, proactively suggest new metrics or data points.
+4. If you have a concrete suggestion, append it as a JSON block at the end of your response like:
+   ===SUGGESTIONS===
+   [{"suggestion_type":"new_indicator","title":"...","description":"...","payload":{...}}]
+
+Be concise, data-driven, and actionable.`;
+
+        await costGovernor.checkBudget(8000);
+
+        const oggyMessages = [
+            { role: 'system', content: systemPrompt },
+            ...conversation_history.slice(-10),
+            { role: 'user', content: message }
+        ];
+
+        const baseMessages = [
+            { role: 'system', content: `You are a city analysis assistant. Answer what-if scenario questions about ${node.name}. Current H=${((node.harmony||0)*100).toFixed(1)}%. Be concise.\n\nAll cities:\n${allCityContext}` },
+            ...conversation_history.slice(-10),
+            { role: 'user', content: message }
+        ];
+
+        const [oggyResult, baseResult] = await Promise.all([
+            (async () => {
+                const resolved = await providerResolver.getAdapter(userId, 'oggy');
+                const r = await resolved.adapter.chatCompletion({
+                    model: resolved.model,
+                    messages: oggyMessages,
+                    temperature: 0.7,
+                    max_tokens: 1500
+                });
+                costGovernor.recordUsage(r.tokens_used || 1000);
+                providerResolver.logRequest(userId, resolved.provider, resolved.model, 'oggy', 'harmonyWhatIf', r.tokens_used, r.latency_ms, true, null);
+                return { text: r.text };
+            })(),
+            (async () => {
+                try {
+                    const resolved = await providerResolver.getAdapter(userId, 'base');
+                    const r = await resolved.adapter.chatCompletion({
+                        model: resolved.model,
+                        messages: baseMessages,
+                        temperature: 0.7,
+                        max_tokens: 1000
+                    });
+                    costGovernor.recordUsage(r.tokens_used || 800);
+                    providerResolver.logRequest(userId, resolved.provider, resolved.model, 'base', 'harmonyWhatIf', r.tokens_used, r.latency_ms, true, null);
+                    return { text: r.text };
+                } catch (err) {
+                    return { text: 'Base model unavailable.' };
+                }
+            })()
+        ]);
+
+        // Extract embedded suggestions from Oggy's response
+        let oggyText = oggyResult.text;
+        let suggestions = [];
+        const sugMarker = '===SUGGESTIONS===';
+        const sugIdx = oggyText.indexOf(sugMarker);
+        if (sugIdx !== -1) {
+            const sugJson = oggyText.substring(sugIdx + sugMarker.length).trim();
+            oggyText = oggyText.substring(0, sugIdx).trim();
+            try {
+                const parsed = JSON.parse(sugJson.match(/\[[\s\S]*\]/)?.[0] || '[]');
+                for (const s of parsed) {
+                    const saved = await harmonySuggestionService.createSuggestion(userId, {
+                        node_id: node_id,
+                        suggestion_type: s.suggestion_type,
+                        title: s.title,
+                        description: s.description,
+                        payload: s.payload || {},
+                        source: 'chat',
+                    });
+                    suggestions.push(saved);
+                }
+            } catch (parseErr) {
+                logger.debug('Failed to parse whatif suggestions', { error: parseErr.message });
+            }
+        }
+
+        res.json({
+            oggy_response: oggyText,
+            base_response: baseResult.text,
+            suggestions,
+            domain: 'harmony',
+        });
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-whatif-chat' });
+        res.status(500).json({ error: 'What-if chat failed', message: err.message });
+    }
+});
+
+// ──────────────────────────────────────────────────
+// Suggestions
+// ──────────────────────────────────────────────────
+
+router.get('/suggestions', async (req, res) => {
+    try {
+        const userId = req.userId || req.query.user_id;
+        const suggestions = await harmonySuggestionService.listSuggestions(userId, {
+            status: req.query.status,
+            node_id: req.query.node_id,
+        });
+        res.json({ suggestions, count: suggestions.length });
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-list-suggestions' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.post('/suggestions/:id/accept', async (req, res) => {
+    try {
+        const userId = req.userId || req.body.user_id;
+        const result = await harmonySuggestionService.acceptSuggestion(req.params.id, userId);
+        res.json(result);
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-accept-suggestion' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.post('/suggestions/:id/reject', async (req, res) => {
+    try {
+        const userId = req.userId || req.body.user_id;
+        const result = await harmonySuggestionService.rejectSuggestion(req.params.id, userId);
+        res.json(result);
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-reject-suggestion' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.post('/generate-suggestions', async (req, res) => {
+    try {
+        const userId = req.userId || req.body.user_id;
+        const { count = 10, focus = 'all' } = req.body;
+        const suggestions = await harmonySuggestionService.generateOnDemand(userId, count, focus);
+        res.json({ suggestions, count: suggestions.length });
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-generate-suggestions' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ──────────────────────────────────────────────────
+// Suggestion auto-generation loop
+// ──────────────────────────────────────────────────
+
+router.post('/suggestions/auto/start', async (req, res) => {
+    try {
+        const userId = req.userId || req.body.user_id;
+        const { interval_minutes = 10 } = req.body;
+        const loop = suggestionLoop.getInstance(userId);
+        const result = await loop.start(userId, { intervalMinutes: interval_minutes });
+        res.json(result);
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-suggestion-loop-start' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.post('/suggestions/auto/stop', async (req, res) => {
+    try {
+        const userId = req.userId || req.body.user_id;
+        const loop = suggestionLoop.getInstance(userId);
+        const result = loop.stop();
+        res.json(result);
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-suggestion-loop-stop' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.get('/suggestions/auto/status', async (req, res) => {
+    try {
+        const userId = req.userId || req.query.user_id;
+        const loop = suggestionLoop.getInstance(userId);
+        res.json(loop.getStatus());
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-suggestion-loop-status' });
+        res.status(500).json({ error: err.message });
     }
 });
 

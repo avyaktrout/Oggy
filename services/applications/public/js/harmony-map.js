@@ -405,7 +405,9 @@ function closeNodePanel() {
     currentNodeData = null;
 }
 
+// ──────────────────────────────────────────────────
 // Init on page load
+// ──────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
     const authed = await initAuth();
     if (!authed) return;

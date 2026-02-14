@@ -84,6 +84,44 @@
             </div>
         </div>
 
+        <!-- Suggestion Generation -->
+        <div class="training-panel" id="suggestion-panel" style="margin-bottom:16px">
+            <div class="training-panel-header">
+                <div class="training-panel-title">Suggestion Generation</div>
+                <div class="training-controls">
+                    <select id="suggestion-interval" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+                        <option value="5">Every 5 min</option>
+                        <option value="10" selected>Every 10 min</option>
+                        <option value="15">Every 15 min</option>
+                        <option value="20">Every 20 min</option>
+                        <option value="25">Every 25 min</option>
+                        <option value="30">Every 30 min</option>
+                    </select>
+                    <button class="btn btn-success btn-sm" id="btn-start-suggestions" onclick="startSuggestionLoop()">Enable Suggestions</button>
+                    <button class="btn btn-danger btn-sm" id="btn-stop-suggestions" onclick="stopSuggestionLoop()" style="display:none">Disable Suggestions</button>
+                </div>
+            </div>
+            <div id="suggestion-status-row" style="display:none;padding:8px 16px;font-size:12px;color:var(--text-muted)">
+                <span>Generated: <strong id="sug-total">0</strong></span>
+                <span style="margin-left:12px">Cycles: <strong id="sug-cycles">0</strong></span>
+                <span style="margin-left:12px">Last run: <span id="sug-last">—</span></span>
+                <span style="margin-left:12px">Errors: <span id="sug-errors">0</span></span>
+            </div>
+        </div>
+
+        <!-- Pending Suggestions -->
+        <div class="training-panel" id="suggestions-list-panel" style="margin-bottom:16px">
+            <div class="training-panel-header">
+                <div class="training-panel-title">
+                    Pending Suggestions <span id="sug-pending-count" style="font-size:12px;color:var(--text-muted)">(0)</span>
+                </div>
+                <button class="btn btn-sm btn-outline" onclick="refreshSuggestions()">Refresh</button>
+            </div>
+            <div id="suggestions-list" style="max-height:400px;overflow-y:auto;padding:8px 16px">
+                <p style="color:var(--text-muted);font-size:13px">No pending suggestions yet.</p>
+            </div>
+        </div>
+
         <!-- Chat -->
         <div class="chat-title-row">
             <h1 class="page-title" style="margin-bottom:0">Harmony Chat</h1>

@@ -38,6 +38,48 @@
         .status-approved { color: #16a34a; }
         .btn-sm { padding: 6px 16px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px; cursor: pointer; background: var(--bg); }
         .btn-sm:hover { background: var(--surface); }
+
+        /* What-If Chat */
+        .whatif-section { display: grid; grid-template-columns: 1fr 340px; gap: 16px; margin-top: 24px; }
+        @media (max-width: 900px) { .whatif-section { grid-template-columns: 1fr; } }
+        .whatif-chat { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 420px; }
+        .whatif-chat-header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+        .whatif-chat-header h2 { margin: 0; font-size: 16px; }
+        .whatif-messages { flex: 1; overflow-y: auto; padding: 12px; max-height: 400px; }
+        .whatif-msg { margin-bottom: 10px; font-size: 13px; line-height: 1.5; padding: 8px 12px; border-radius: var(--radius); }
+        .whatif-msg-user { background: var(--accent); color: #fff; margin-left: 20%; text-align: right; }
+        .whatif-msg-bot { background: var(--surface); border: 1px solid var(--border); margin-right: 20%; }
+        .whatif-msg-base { background: var(--surface); border: 1px dashed var(--border); margin-right: 20%; font-size: 12px; color: var(--text-muted); }
+        .whatif-input-row { padding: 10px 12px; border-top: 1px solid var(--border); display: flex; gap: 6px; }
+        .whatif-input-row input { flex: 1; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px; }
+        .whatif-send-btn { padding: 8px 16px; background: var(--accent); color: #fff; border: none; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
+
+        /* Suggestion cards */
+        .suggestion-card { background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius); padding: 10px; margin: 8px 0; }
+        .suggestion-card .sug-type { font-size: 10px; text-transform: uppercase; color: var(--accent); font-weight: 700; }
+        .suggestion-card .sug-title { font-size: 13px; font-weight: 600; margin: 2px 0; }
+        .suggestion-card .sug-desc { font-size: 12px; color: var(--text-muted); }
+        .suggestion-card .sug-actions { margin-top: 6px; display: flex; gap: 6px; }
+        .suggestion-card .sug-actions button { padding: 3px 10px; font-size: 11px; border-radius: var(--radius); cursor: pointer; border: 1px solid var(--border); }
+        .suggestion-card .sug-actions .sug-accept { background: #22c55e; color: #fff; border-color: #22c55e; }
+        .suggestion-card .sug-actions .sug-reject { background: var(--bg); }
+
+        /* Sidebar panel (suggestions + observer) */
+        .whatif-sidebar { display: flex; flex-direction: column; gap: 16px; }
+        .sidebar-panel { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
+        .sidebar-panel h3 { margin: 0 0 8px; font-size: 14px; }
+        .observer-toggle-row { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 4px 0; }
+        .observer-toggle-row input { cursor: pointer; }
+        .observer-status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+        .observer-status-ready { background: #22c55e; }
+        .observer-status-running { background: #f59e0b; }
+        .observer-status-unavailable { background: #94a3b8; }
+        .pack-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; margin: 4px 0; font-size: 12px; }
+        .pack-card .pack-name { font-weight: 600; }
+        .pack-card .pack-meta { color: var(--text-muted); font-size: 11px; }
+        .pack-actions { display: flex; gap: 4px; margin-top: 4px; }
+        .pack-actions button { padding: 2px 8px; font-size: 11px; border-radius: var(--radius); cursor: pointer; border: 1px solid var(--border); }
+        .impact-low { color: #22c55e; } .impact-medium { color: #f59e0b; } .impact-high { color: #ef4444; }
     </style>
 </head>
 <body class="app-layout">
@@ -86,6 +128,65 @@
             <h2 style="font-size:16px;margin-bottom:12px">Your Scenarios</h2>
             <div id="scenarios-container">Loading...</div>
         </div>
+        <!-- What-If Chat + Suggestions + Observer -->
+        <div class="whatif-section">
+            <!-- Chat column -->
+            <div class="whatif-chat">
+                <div class="whatif-chat-header">
+                    <h2>What If?</h2>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <select id="whatif-node" style="padding:4px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:12px">
+                            <option value="">Select city...</option>
+                        </select>
+                        <span id="whatif-node-label" style="font-size:12px;color:var(--text-muted)"></span>
+                    </div>
+                </div>
+                <div class="whatif-messages" id="whatif-messages">
+                    <div class="whatif-msg whatif-msg-bot">Select a city above, then ask "What if..." questions to explore scenarios. I'll suggest improvements based on what I see working for other cities.</div>
+                </div>
+                <div class="whatif-input-row">
+                    <input type="text" id="whatif-input" placeholder="What if crime dropped 20%..."
+                           onkeydown="if(event.key==='Enter')sendWhatIf()">
+                    <button class="whatif-send-btn" onclick="sendWhatIf()" id="whatif-send-btn">Send</button>
+                </div>
+            </div>
+
+            <!-- Sidebar: Suggestions + Observer -->
+            <div class="whatif-sidebar">
+                <!-- Suggestions Panel -->
+                <div class="sidebar-panel">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                        <h3>Suggestions</h3>
+                        <div style="display:flex;gap:6px;align-items:center">
+                            <span id="pending-sug-count" style="font-size:11px;color:var(--text-muted)"></span>
+                            <button class="btn-sm" style="padding:3px 10px;font-size:11px" onclick="generateSuggestions()">Generate</button>
+                        </div>
+                    </div>
+                    <div id="whatif-suggestions"></div>
+                </div>
+
+                <!-- Observer Panel -->
+                <div class="sidebar-panel">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                        <h3>Observer <span class="observer-status-dot" id="observer-dot"></span></h3>
+                        <button class="btn-sm" style="padding:3px 10px;font-size:11px" onclick="loadObserverPacks()">Refresh</button>
+                    </div>
+                    <div class="observer-toggle-row">
+                        <input type="checkbox" id="obs-share" onchange="updateObserverConfig()">
+                        <label for="obs-share">Share my accepted changes</label>
+                    </div>
+                    <div class="observer-toggle-row">
+                        <input type="checkbox" id="obs-receive" onchange="updateObserverConfig()">
+                        <label for="obs-receive">Receive harmony packs</label>
+                    </div>
+                    <div style="margin-top:8px">
+                        <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px">Available Packs</div>
+                        <div id="observer-packs"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </div>
     </main>
 

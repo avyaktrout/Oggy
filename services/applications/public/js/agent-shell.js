@@ -37,6 +37,7 @@ class AgentShell {
                 defaultDuration: 10,
                 showBenchmarks: true
             },
+            observerBasePath: '/v0/observer',
             auditProvider: {
                 endpoint: '/v0/benchmark-analytics/audit-chat',
                 placeholder: 'Ask about performance...'
@@ -203,9 +204,10 @@ class AgentShell {
 
         // Observer
         if (this.config.capabilities.observer) {
+            const obsBase = this.config.observerBasePath;
             const loadObserverConfig = async () => {
                 try {
-                    const config = await apiCall('GET', `/v0/observer/config?user_id=${USER_ID}`);
+                    const config = await apiCall('GET', `${obsBase}/config?user_id=${USER_ID}`);
                     const shareEl = document.getElementById('observer-share');
                     const sugEl = document.getElementById('observer-suggestions');
                     const merchEl = document.getElementById('observer-merchant');
@@ -218,7 +220,7 @@ class AgentShell {
                 const container = document.getElementById('observer-packs');
                 if (!container) return;
                 try {
-                    const data = await apiCall('GET', '/v0/observer/packs');
+                    const data = await apiCall('GET', `${obsBase}/packs`);
                     if (!data.packs || data.packs.length === 0) {
                         container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px 0">No packs available yet. Run an observer job to generate packs.</div>';
                         return;
@@ -245,7 +247,7 @@ class AgentShell {
             };
             const loadObserverJobStatus = async () => {
                 try {
-                    const status = await apiCall('GET', '/v0/observer/job-status');
+                    const status = await apiCall('GET', `${obsBase}/job-status`);
                     const btn = document.getElementById('observer-run-btn');
                     const dot = document.querySelector('.observer-status-dot');
                     const text = document.getElementById('observer-status-text');
@@ -293,17 +295,17 @@ class AgentShell {
                 try {
                     const update = { user_id: USER_ID };
                     update[field] = value;
-                    await apiCall('PUT', '/v0/observer/config', update);
+                    await apiCall('PUT', `${obsBase}/config`, update);
                     showToast('Observer setting updated');
                 } catch (err) { showToast('Failed to update: ' + err.message, 'error'); }
             };
             window.toggleObserverAutoRun = async function(enabled) {
                 try {
                     if (enabled) {
-                        await apiCall('POST', '/v0/observer/run-job', { start_schedule: true });
+                        await apiCall('POST', `${obsBase}/run-job`, { start_schedule: true });
                         showToast('Observer auto-run enabled (every 6h)');
                     } else {
-                        await apiCall('POST', '/v0/observer/run-job', { stop_schedule: true });
+                        await apiCall('POST', `${obsBase}/run-job`, { stop_schedule: true });
                         showToast('Observer auto-run disabled');
                     }
                     loadObserverJobStatus();
@@ -313,7 +315,7 @@ class AgentShell {
                 try {
                     const btn = document.getElementById('observer-run-btn');
                     if (btn) { btn.disabled = true; btn.textContent = 'Running...'; }
-                    const result = await apiCall('POST', '/v0/observer/run-job', {});
+                    const result = await apiCall('POST', `${obsBase}/run-job`, {});
                     showToast(`Observer job complete: ${result.packs_generated} packs generated`);
                     if (btn) btn.textContent = 'Run Now';
                     loadObserverPacks();
@@ -327,7 +329,7 @@ class AgentShell {
             };
             window.applyPack = async function(packId) {
                 try {
-                    const result = await apiCall('POST', '/v0/observer/import-pack', { pack_id: packId, user_id: USER_ID });
+                    const result = await apiCall('POST', `${obsBase}/import-pack`, { pack_id: packId, user_id: USER_ID });
                     showToast(`Pack applied: ${result.rules_applied} rules, ${result.cards_created} memory cards created`);
                     loadObserverPacks();
                 } catch (err) { showToast('Failed to apply pack: ' + err.message, 'error'); }
@@ -335,7 +337,7 @@ class AgentShell {
             window.rollbackPack = async function(packId) {
                 if (!confirm('Rollback this observer pack? This will zero out the memory cards it created.')) return;
                 try {
-                    const result = await apiCall('POST', '/v0/observer/rollback-pack', { pack_id: packId, user_id: USER_ID });
+                    const result = await apiCall('POST', `${obsBase}/rollback-pack`, { pack_id: packId, user_id: USER_ID });
                     showToast(`Pack rolled back: ${result.cards_rolled_back} cards affected`);
                     loadObserverPacks();
                 } catch (err) { showToast('Failed to rollback: ' + err.message, 'error'); }

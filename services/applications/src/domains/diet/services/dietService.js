@@ -308,10 +308,11 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
         };
     }
 
-    // --- Nutrition Analysis (AI) ---
+    // --- Nutrition Analysis ---
+    // Lookup chain: user-corrected → branded_foods (fuzzy) → OpenFoodFacts API → AI estimation
     async _analyzeNutrition(description, quantity, unit, userId) {
         try {
-            // Check for previous user-corrected entry with same description
+            // 1. Check for previous user-corrected entry with same description
             if (userId) {
                 const prev = await query(
                     `SELECT i.calories, i.protein_g, i.carbs_g, i.fat_g, i.fiber_g, i.sugar_g, i.sodium_mg
@@ -327,48 +328,192 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
                 }
             }
 
-            // Check branded foods database for known products
-            const brandedMatch = await query(
+            // 2. Check branded foods database (fuzzy: match brand + any word overlap)
+            const brandedResult = await this._lookupBrandedFoods(description);
+            if (brandedResult) return brandedResult;
+
+            // 3. Try OpenFoodFacts API (free, no key needed, massive product database)
+            const offResult = await this._lookupOpenFoodFacts(description);
+            if (offResult) {
+                logger.debug('Using OpenFoodFacts data for: ' + description);
+                return offResult;
+            }
+
+            // 4. Fall back to AI estimation
+            return await this._aiNutritionEstimate(description, quantity, unit, userId);
+        } catch (err) {
+            logger.warn('Nutrition analysis failed', { error: err.message, description });
+            return { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0, sugar_g: 0, sodium_mg: 0 };
+        }
+    }
+
+    /**
+     * Fuzzy branded foods lookup — matches brand name + overlapping words in product name
+     */
+    async _lookupBrandedFoods(description) {
+        try {
+            // First try exact product match
+            const exactMatch = await query(
                 `SELECT calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg
                  FROM branded_foods
                  WHERE LOWER($1) LIKE '%' || LOWER(brand) || '%' AND LOWER($1) LIKE '%' || LOWER(product) || '%'
                  ORDER BY LENGTH(product) DESC LIMIT 1`,
                 [description]
             );
-            if (brandedMatch.rows.length > 0) {
-                logger.debug('Using branded foods database for: ' + description);
-                return brandedMatch.rows[0];
+            if (exactMatch.rows.length > 0) {
+                logger.debug('Branded foods exact match for: ' + description);
+                return exactMatch.rows[0];
             }
 
-            await costGovernor.checkBudget(1000);
+            // Fuzzy match: brand name + category keyword matching
+            // Split description into words and match brand + any significant word
+            const words = description.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+            const brandMatch = await query(
+                `SELECT brand, product, category, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+                        similarity(LOWER(brand || ' ' || product), LOWER($1)) AS sim
+                 FROM branded_foods
+                 WHERE LOWER($1) LIKE '%' || LOWER(brand) || '%'
+                 ORDER BY sim DESC, LENGTH(product) DESC LIMIT 1`,
+                [description]
+            );
 
-            const prompt = `Estimate the nutritional content of: "${description}"${quantity ? ` (${quantity} ${unit || 'serving'})` : ''}.
-If this matches a known brand product, use the actual nutritional facts from that product. Use real data over estimates whenever possible.
-Respond in JSON only (no markdown):
-{"calories":0,"protein_g":0,"carbs_g":0,"fat_g":0,"fiber_g":0,"sugar_g":0,"sodium_mg":0}`;
+            // If similarity extension isn't available, fall back to simpler match
+            if (brandMatch.rows.length > 0) {
+                logger.debug('Branded foods brand match for: ' + description, { matched: brandMatch.rows[0].product });
+                return brandMatch.rows[0];
+            }
+        } catch (err) {
+            // pg_trgm similarity() may not be available — try simpler fallback
+            try {
+                const fallback = await query(
+                    `SELECT calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, brand, product, category
+                     FROM branded_foods
+                     WHERE LOWER($1) LIKE '%' || LOWER(brand) || '%'
+                     ORDER BY LENGTH(product) DESC LIMIT 3`,
+                    [description]
+                );
+                if (fallback.rows.length > 0) {
+                    // Pick best match: prefer same category (energy_drink for energy drinks)
+                    const descLower = description.toLowerCase();
+                    const best = fallback.rows.find(r =>
+                        (descLower.includes('energy') && r.category === 'energy_drink') ||
+                        (descLower.includes('protein') && r.category === 'protein_shake') ||
+                        (descLower.includes('bar') && r.category === 'snack_bar')
+                    ) || fallback.rows[0];
+                    logger.debug('Branded foods category fallback for: ' + description, { matched: best.product });
+                    return best;
+                }
+            } catch (innerErr) {
+                logger.debug('Branded foods lookup failed', { error: innerErr.message });
+            }
+        }
+        return null;
+    }
 
-            const resolved = userId
-                ? await providerResolver.getAdapter(userId, 'oggy')
-                : await providerResolver.getAdapter('system', 'oggy');
+    /**
+     * Look up nutrition data from OpenFoodFacts API (free, no API key needed)
+     */
+    async _lookupOpenFoodFacts(description) {
+        try {
+            const searchTerms = encodeURIComponent(description);
+            const response = await axios.get(
+                `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${searchTerms}&json=1&page_size=5&fields=product_name,brands,nutriments`,
+                { timeout: 5000, headers: { 'User-Agent': 'Oggy-Diet-Tracker/1.0' } }
+            );
 
-            const result = await resolved.adapter.chatCompletion({
-                model: resolved.model,
-                messages: [
-                    { role: 'system', content: 'You are a nutrition expert with knowledge of popular food brands and their exact nutritional labels. When a food matches a known brand or product, use the actual nutrition facts from the label. Only estimate when the food is homemade or unbranded. Respond with JSON only.' },
-                    { role: 'user', content: prompt }
-                ],
-                temperature: 0.2,
-                max_tokens: 150,
-                timeout: 10000
+            const products = response.data?.products;
+            if (!products || products.length === 0) return null;
+
+            // Find best match — prefer products with complete nutrient data
+            const descLower = description.toLowerCase();
+            const scored = products
+                .filter(p => p.nutriments && (p.nutriments['energy-kcal_100g'] || p.nutriments['energy-kcal_serving']))
+                .map(p => {
+                    const name = ((p.brands || '') + ' ' + (p.product_name || '')).toLowerCase();
+                    // Simple word overlap scoring
+                    const descWords = descLower.split(/\s+/).filter(w => w.length > 2);
+                    const matchCount = descWords.filter(w => name.includes(w)).length;
+                    return { product: p, score: matchCount };
+                })
+                .sort((a, b) => b.score - a.score);
+
+            if (scored.length === 0 || scored[0].score < 2) return null;
+
+            const best = scored[0].product;
+            const n = best.nutriments;
+
+            // OpenFoodFacts stores per-100g and per-serving. Prefer per-serving when available.
+            const useServing = n['energy-kcal_serving'] != null;
+            const suffix = useServing ? '_serving' : '_100g';
+
+            const result = {
+                calories: Math.round(n[`energy-kcal${suffix}`] || n['energy-kcal_100g'] || 0),
+                protein_g: Math.round((n[`proteins${suffix}`] || n['proteins_100g'] || 0) * 10) / 10,
+                carbs_g: Math.round((n[`carbohydrates${suffix}`] || n['carbohydrates_100g'] || 0) * 10) / 10,
+                fat_g: Math.round((n[`fat${suffix}`] || n['fat_100g'] || 0) * 10) / 10,
+                fiber_g: Math.round((n[`fiber${suffix}`] || n['fiber_100g'] || 0) * 10) / 10,
+                sugar_g: Math.round((n[`sugars${suffix}`] || n['sugars_100g'] || 0) * 10) / 10,
+                sodium_mg: Math.round((n[`sodium${suffix}`] || n['sodium_100g'] || 0) * 1000),
+            };
+
+            logger.info('OpenFoodFacts match', {
+                query: description,
+                matched: `${best.brands || '?'} ${best.product_name || '?'}`,
+                calories: result.calories,
+                perServing: useServing
             });
 
-            const jsonStr = result.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-            costGovernor.recordUsage(result.tokens_used || 200);
-            return JSON.parse(jsonStr);
+            return result;
         } catch (err) {
-            logger.debug('Nutrition analysis failed', { error: err.message });
+            logger.debug('OpenFoodFacts lookup failed', { error: err.message, description });
             return null;
         }
+    }
+
+    /**
+     * AI-based nutrition estimation (final fallback)
+     */
+    async _aiNutritionEstimate(description, quantity, unit, userId) {
+        await costGovernor.checkBudget(1000);
+
+        const prompt = `Look up the exact nutritional content for: "${description}"${quantity ? ` (${quantity} ${unit || 'serving'})` : ''}.
+This is a real, commercially available product. Provide the actual nutrition facts from the product label.
+If you cannot identify the exact product, estimate based on similar products in the same category.
+Respond in JSON only (no markdown), all numeric values must be filled in:
+{"calories":___,"protein_g":___,"carbs_g":___,"fat_g":___,"fiber_g":___,"sugar_g":___,"sodium_mg":___}`;
+
+        const resolved = userId
+            ? await providerResolver.getAdapter(userId, 'oggy')
+            : await providerResolver.getAdapter('system', 'oggy');
+
+        const result = await resolved.adapter.chatCompletion({
+            model: resolved.model,
+            messages: [
+                { role: 'system', content: 'You are a nutrition database expert with comprehensive knowledge of commercially available food and beverages. You know exact nutritional labels for energy drinks (Ghost, Monster, Celsius, Red Bull, Bang, Alani Nu, C4, Reign, ZOA), protein supplements (Ghost, Optimum Nutrition, Dymatize), fast food chains, packaged foods, and grocery items. Always provide realistic nutritional values. Never return all zeros unless the item truly has zero calories (water, black coffee, plain tea). For zero-calorie energy drinks, still include sodium and small carb amounts from flavoring. If unsure of exact values, estimate based on similar products. Respond with JSON only.' },
+                { role: 'user', content: prompt }
+            ],
+            temperature: 0.2,
+            max_tokens: 150,
+            timeout: 10000
+        });
+
+        const jsonStr = result.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        costGovernor.recordUsage(result.tokens_used || 200);
+
+        // Parse JSON, trying to extract from markdown if needed
+        let parsed;
+        const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            parsed = JSON.parse(jsonMatch[0]);
+        } else {
+            parsed = JSON.parse(jsonStr);
+        }
+
+        if (parsed.calories === 0 && parsed.protein_g === 0 && parsed.carbs_g === 0 && parsed.fat_g === 0) {
+            logger.warn('Nutrition AI returned all zeros — may be incorrect', { description });
+        }
+
+        return parsed;
     }
 }
 

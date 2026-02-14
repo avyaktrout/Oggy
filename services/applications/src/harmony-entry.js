@@ -13,6 +13,7 @@ const { injectUserIdFromHeader } = require('./shared/middleware/internalService'
 
 // Domain routes
 const harmonyRouter = require('./domains/harmony/routes/harmony');
+const harmonyObserverRouter = require('./domains/harmony/routes/harmonyObserver');
 const continuousLearningRouter = require('./shared/routes/continuousLearning');
 const harmonyEngine = require('./domains/harmony/services/harmonyEngine');
 
@@ -72,6 +73,7 @@ app.get('/health', async (req, res) => {
 // Routes
 // ──────────────────────────────────────────────────
 app.use('/v0/harmony', harmonyRouter);
+app.use('/v0/harmony/observer', harmonyObserverRouter);
 app.use('/v0/continuous-learning', continuousLearningRouter);
 
 // ──────────────────────────────────────────────────
@@ -92,10 +94,49 @@ app.use((req, res) => {
 const server = app.listen(PORT, async () => {
     logger.info('Harmony service starting', { port: PORT });
 
-    // Database check
+    // Database check + migrations
     try {
         await query('SELECT 1');
         logger.info('Database connection verified (harmony)');
+
+        // Auto-migrate: add 'new_city' to suggestion type constraint
+        try {
+            await query(`ALTER TABLE harmony_suggestions DROP CONSTRAINT IF EXISTS valid_suggestion_type`);
+            await query(`ALTER TABLE harmony_suggestions ADD CONSTRAINT valid_suggestion_type CHECK (suggestion_type IN ('new_indicator', 'new_data_point', 'weight_adjustment', 'model_update', 'new_city'))`);
+            logger.info('Harmony suggestion type constraint updated (includes new_city)');
+        } catch (migErr) {
+            logger.debug('Suggestion constraint migration skipped', { error: migErr.message });
+        }
+
+        // Auto-fix: populate indicator values for cities that have no data
+        try {
+            const emptyCities = await query(`
+                SELECT n.node_id, n.name, s.balance, s.flow, s.compassion, s.discernment, s.awareness, s.expression
+                FROM harmony_nodes n
+                LEFT JOIN harmony_scores s ON n.node_id = s.node_id
+                WHERE n.scope = 'city'
+                  AND NOT EXISTS (SELECT 1 FROM harmony_indicator_values iv WHERE iv.node_id = n.node_id)
+            `);
+            if (emptyCities.rows.length > 0) {
+                const suggestionService = require('./domains/harmony/services/harmonySuggestionService');
+                for (const city of emptyCities.rows) {
+                    const scores = {
+                        balance: city.balance ? Math.round(parseFloat(city.balance) * 100) : 50,
+                        flow: city.flow ? Math.round(parseFloat(city.flow) * 100) : 50,
+                        compassion: city.compassion ? Math.round(parseFloat(city.compassion) * 100) : 50,
+                        discernment: city.discernment ? Math.round(parseFloat(city.discernment) * 100) : 50,
+                        awareness: city.awareness ? Math.round(parseFloat(city.awareness) * 100) : 50,
+                        expression: city.expression ? Math.round(parseFloat(city.expression) * 100) : 50,
+                    };
+                    await suggestionService._populateCityIndicatorValues(city.node_id, scores);
+                    const harmonyEngine = require('./domains/harmony/services/harmonyEngine');
+                    await harmonyEngine.computeScores(city.node_id);
+                    logger.info('Auto-populated indicator values for empty city', { name: city.name, node_id: city.node_id });
+                }
+            }
+        } catch (migErr) {
+            logger.debug('Empty city indicator migration skipped', { error: migErr.message });
+        }
     } catch (error) {
         logger.error('Database connection failed (harmony)', { error: error.message });
         process.exit(1);

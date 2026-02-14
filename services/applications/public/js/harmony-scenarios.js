@@ -276,6 +276,245 @@ function esc(str) {
     return div.innerHTML;
 }
 
+// ──────────────────────────────────────────────────
+// What-If Chat
+// ──────────────────────────────────────────────────
+function populateWhatIfNodes(nodes) {
+    const select = document.getElementById('whatif-node');
+    if (!select) return;
+    select.innerHTML = '<option value="">Select city...</option>';
+    for (const node of nodes) {
+        const opt = document.createElement('option');
+        opt.value = node.node_id;
+        opt.textContent = node.name;
+        select.appendChild(opt);
+    }
+}
+
+async function sendWhatIf() {
+    const input = document.getElementById('whatif-input');
+    const msg = input.value.trim();
+    if (!msg) return;
+
+    const nodeId = document.getElementById('whatif-node').value;
+    if (!nodeId) {
+        showToast('Select a city first', 'error');
+        return;
+    }
+
+    input.value = '';
+    const msgArea = document.getElementById('whatif-messages');
+
+    msgArea.innerHTML += `<div class="whatif-msg whatif-msg-user">${esc(msg)}</div>`;
+
+    const loadingId = 'wif-loading-' + Date.now();
+    msgArea.innerHTML += `<div class="whatif-msg whatif-msg-bot" id="${loadingId}">Thinking...</div>`;
+    msgArea.scrollTop = msgArea.scrollHeight;
+
+    const sendBtn = document.getElementById('whatif-send-btn');
+    sendBtn.disabled = true;
+
+    try {
+        const data = await apiCall('POST', '/v0/harmony/whatif-chat', {
+            message: msg,
+            node_id: nodeId,
+        });
+
+        const loadEl = document.getElementById(loadingId);
+        if (loadEl) loadEl.remove();
+
+        if (data.oggy_response) {
+            msgArea.innerHTML += `<div class="whatif-msg whatif-msg-bot"><strong>Oggy:</strong><br>${formatWhatIfResponse(data.oggy_response)}</div>`;
+        }
+        if (data.base_response) {
+            msgArea.innerHTML += `<div class="whatif-msg whatif-msg-base"><strong>Base:</strong><br>${formatWhatIfResponse(data.base_response)}</div>`;
+        }
+        if (data.suggestions && data.suggestions.length > 0) {
+            for (const sug of data.suggestions) {
+                msgArea.innerHTML += renderSuggestionCard(sug);
+            }
+        }
+        msgArea.scrollTop = msgArea.scrollHeight;
+    } catch (err) {
+        const loadEl = document.getElementById(loadingId);
+        if (loadEl) loadEl.innerHTML = `Error: ${err.message}`;
+        showToast('What-If chat failed: ' + err.message, 'error');
+    } finally {
+        sendBtn.disabled = false;
+    }
+}
+
+function formatWhatIfResponse(text) {
+    return esc(text)
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\n/g, '<br>');
+}
+
+function renderSuggestionCard(sug) {
+    const typeLabel = (sug.suggestion_type || 'suggestion').replace(/_/g, ' ');
+    return `<div class="suggestion-card" id="sug-${sug.suggestion_id}">
+        <div class="sug-type">${typeLabel}</div>
+        <div class="sug-title">${esc(sug.title)}</div>
+        <div class="sug-desc">${esc(sug.description || '')}</div>
+        <div class="sug-actions">
+            <button class="sug-accept" onclick="acceptSuggestion('${sug.suggestion_id}')">Accept</button>
+            <button class="sug-reject" onclick="rejectSuggestion('${sug.suggestion_id}')">Reject</button>
+        </div>
+    </div>`;
+}
+
+// ──────────────────────────────────────────────────
+// Suggestions (accept / reject / generate)
+// ──────────────────────────────────────────────────
+async function acceptSuggestion(id) {
+    try {
+        await apiCall('POST', `/v0/harmony/suggestions/${id}/accept`);
+        const card = document.getElementById('sug-' + id);
+        if (card) {
+            card.style.borderColor = '#22c55e';
+            card.querySelector('.sug-actions').innerHTML = '<span style="color:#22c55e;font-weight:600;font-size:12px">Accepted</span>';
+        }
+        showToast('Suggestion accepted and applied', 'success');
+        loadPendingSuggestions();
+    } catch (err) {
+        showToast('Failed to accept: ' + err.message, 'error');
+    }
+}
+
+async function rejectSuggestion(id) {
+    try {
+        await apiCall('POST', `/v0/harmony/suggestions/${id}/reject`);
+        const card = document.getElementById('sug-' + id);
+        if (card) {
+            card.style.opacity = '0.5';
+            card.querySelector('.sug-actions').innerHTML = '<span style="color:var(--text-muted);font-size:12px">Rejected</span>';
+        }
+        loadPendingSuggestions();
+    } catch (err) {
+        showToast('Failed to reject: ' + err.message, 'error');
+    }
+}
+
+async function generateSuggestions() {
+    const countEl = document.getElementById('pending-sug-count');
+    countEl.textContent = 'Generating...';
+    try {
+        const data = await apiCall('POST', '/v0/harmony/generate-suggestions', { count: 10, focus: 'all' });
+        countEl.textContent = `${data.generated || 0} generated`;
+        showToast(`Generated ${data.generated || 0} suggestions`, 'success');
+        loadPendingSuggestions();
+    } catch (err) {
+        countEl.textContent = 'Failed';
+        showToast('Failed to generate: ' + err.message, 'error');
+    }
+}
+
+async function loadPendingSuggestions() {
+    try {
+        const data = await apiCall('GET', '/v0/harmony/suggestions?status=pending');
+        const suggestions = data.suggestions || [];
+        const countEl = document.getElementById('pending-sug-count');
+        countEl.textContent = suggestions.length > 0 ? `${suggestions.length} pending` : '';
+
+        const container = document.getElementById('whatif-suggestions');
+        if (container && suggestions.length > 0) {
+            container.innerHTML = suggestions.map(s => renderSuggestionCard(s)).join('');
+        } else if (container) {
+            container.innerHTML = '<div style="font-size:12px;color:var(--text-muted)">No pending suggestions. Click Generate to create some.</div>';
+        }
+    } catch (_) {}
+}
+
+// ──────────────────────────────────────────────────
+// Observer
+// ──────────────────────────────────────────────────
+async function loadObserverConfig() {
+    try {
+        const data = await apiCall('GET', '/v0/harmony/observer/config');
+        const config = data.config || {};
+        document.getElementById('obs-share').checked = !!config.share_changes;
+        document.getElementById('obs-receive').checked = !!config.receive_harmony_packs;
+        updateObserverDot(config);
+        loadObserverPacks();
+    } catch (_) {
+        updateObserverDot({});
+    }
+}
+
+function updateObserverDot(config) {
+    const dot = document.getElementById('observer-dot');
+    if (!dot) return;
+    if (config.share_changes || config.receive_harmony_packs) {
+        dot.className = 'observer-status-dot observer-status-ready';
+    } else {
+        dot.className = 'observer-status-dot observer-status-unavailable';
+    }
+}
+
+async function updateObserverConfig() {
+    const share = document.getElementById('obs-share').checked;
+    const receive = document.getElementById('obs-receive').checked;
+    try {
+        await apiCall('PUT', '/v0/harmony/observer/config', {
+            share_changes: share,
+            receive_harmony_packs: receive,
+        });
+        updateObserverDot({ share_changes: share, receive_harmony_packs: receive });
+    } catch (err) {
+        showToast('Failed to update observer: ' + err.message, 'error');
+    }
+}
+
+async function loadObserverPacks() {
+    const container = document.getElementById('observer-packs');
+    if (!container) return;
+    try {
+        const data = await apiCall('GET', '/v0/harmony/observer/packs');
+        const packs = data.packs || [];
+        if (packs.length === 0) {
+            container.innerHTML = '<div style="font-size:12px;color:var(--text-muted)">No packs available</div>';
+            return;
+        }
+        container.innerHTML = packs.map(p => {
+            const changes = Array.isArray(p.changes) ? p.changes.length : 0;
+            const impactCls = `impact-${p.impact_level || 'low'}`;
+            const actions = p.status === 'applied'
+                ? `<button onclick="rollbackPack('${p.pack_id}')">Rollback</button>`
+                : `<button onclick="applyPack('${p.pack_id}')" style="background:var(--accent);color:#fff;border-color:var(--accent)">Apply</button>`;
+            return `<div class="pack-card">
+                <div class="pack-name">${esc(p.name)}</div>
+                <div class="pack-meta">v${p.version} &middot; ${changes} changes &middot; <span class="${impactCls}">${p.impact_level || 'low'} impact</span></div>
+                <div class="pack-actions">${actions}</div>
+            </div>`;
+        }).join('');
+    } catch (_) {
+        container.innerHTML = '<div style="font-size:12px;color:var(--text-muted)">Failed to load packs</div>';
+    }
+}
+
+async function applyPack(packId) {
+    try {
+        await apiCall('POST', '/v0/harmony/observer/import-pack', { pack_id: packId });
+        showToast('Pack applied successfully', 'success');
+        loadObserverPacks();
+    } catch (err) {
+        showToast('Failed to apply pack: ' + err.message, 'error');
+    }
+}
+
+async function rollbackPack(packId) {
+    try {
+        await apiCall('POST', '/v0/harmony/observer/rollback-pack', { pack_id: packId });
+        showToast('Pack rolled back', 'success');
+        loadObserverPacks();
+    } catch (err) {
+        showToast('Failed to rollback: ' + err.message, 'error');
+    }
+}
+
+// ──────────────────────────────────────────────────
+// Init
+// ──────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
     const authed = await initAuth();
     if (!authed) return;
@@ -284,4 +523,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     startInquiryPolling();
     loadNodes();
     loadScenarios();
+
+    // Load What-If node dropdown + suggestions + observer
+    try {
+        const data = await apiCall('GET', '/v0/harmony/nodes?scope=city');
+        populateWhatIfNodes(data.nodes || []);
+    } catch (_) {}
+    loadPendingSuggestions();
+    loadObserverConfig();
 });
