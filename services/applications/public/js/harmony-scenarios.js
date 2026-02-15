@@ -426,93 +426,6 @@ async function loadPendingSuggestions() {
 }
 
 // ──────────────────────────────────────────────────
-// Observer
-// ──────────────────────────────────────────────────
-async function loadObserverConfig() {
-    try {
-        const data = await apiCall('GET', '/v0/harmony/observer/config');
-        const config = data.config || {};
-        document.getElementById('obs-share').checked = !!config.share_changes;
-        document.getElementById('obs-receive').checked = !!config.receive_harmony_packs;
-        updateObserverDot(config);
-        loadObserverPacks();
-    } catch (_) {
-        updateObserverDot({});
-    }
-}
-
-function updateObserverDot(config) {
-    const dot = document.getElementById('observer-dot');
-    if (!dot) return;
-    if (config.share_changes || config.receive_harmony_packs) {
-        dot.className = 'observer-status-dot observer-status-ready';
-    } else {
-        dot.className = 'observer-status-dot observer-status-unavailable';
-    }
-}
-
-async function updateObserverConfig() {
-    const share = document.getElementById('obs-share').checked;
-    const receive = document.getElementById('obs-receive').checked;
-    try {
-        await apiCall('PUT', '/v0/harmony/observer/config', {
-            share_changes: share,
-            receive_harmony_packs: receive,
-        });
-        updateObserverDot({ share_changes: share, receive_harmony_packs: receive });
-    } catch (err) {
-        showToast('Failed to update observer: ' + err.message, 'error');
-    }
-}
-
-async function loadObserverPacks() {
-    const container = document.getElementById('observer-packs');
-    if (!container) return;
-    try {
-        const data = await apiCall('GET', '/v0/harmony/observer/packs');
-        const packs = data.packs || [];
-        if (packs.length === 0) {
-            container.innerHTML = '<div style="font-size:12px;color:var(--text-muted)">No packs available</div>';
-            return;
-        }
-        container.innerHTML = packs.map(p => {
-            const changes = Array.isArray(p.changes) ? p.changes.length : 0;
-            const impactCls = `impact-${p.impact_level || 'low'}`;
-            const actions = p.status === 'applied'
-                ? `<button onclick="rollbackPack('${p.pack_id}')">Rollback</button>`
-                : `<button onclick="applyPack('${p.pack_id}')" style="background:var(--accent);color:#fff;border-color:var(--accent)">Apply</button>`;
-            return `<div class="pack-card">
-                <div class="pack-name">${esc(p.name)}</div>
-                <div class="pack-meta">v${p.version} &middot; ${changes} changes &middot; <span class="${impactCls}">${p.impact_level || 'low'} impact</span></div>
-                <div class="pack-actions">${actions}</div>
-            </div>`;
-        }).join('');
-    } catch (_) {
-        container.innerHTML = '<div style="font-size:12px;color:var(--text-muted)">Failed to load packs</div>';
-    }
-}
-
-async function applyPack(packId) {
-    try {
-        await apiCall('POST', '/v0/harmony/observer/import-pack', { pack_id: packId });
-        showToast('Pack applied successfully', 'success');
-        loadObserverPacks();
-    } catch (err) {
-        showToast('Failed to apply pack: ' + err.message, 'error');
-    }
-}
-
-async function rollbackPack(packId) {
-    try {
-        await apiCall('POST', '/v0/harmony/observer/rollback-pack', { pack_id: packId });
-        showToast('Pack rolled back', 'success');
-        loadObserverPacks();
-    } catch (err) {
-        showToast('Failed to rollback: ' + err.message, 'error');
-    }
-}
-
-// ──────────────────────────────────────────────────
 // Init
 // ──────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -530,5 +443,4 @@ document.addEventListener('DOMContentLoaded', async () => {
         populateWhatIfNodes(data.nodes || []);
     } catch (_) {}
     loadPendingSuggestions();
-    loadObserverConfig();
 });

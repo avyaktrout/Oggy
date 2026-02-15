@@ -118,44 +118,66 @@ const server = app.listen(PORT, async () => {
             logger.debug('Branded foods dedup skipped', { error: dedupErr.message });
         }
 
-        // Seed additional popular branded foods (ON CONFLICT DO NOTHING — safe to run every boot)
+        // Add caffeine_mg column to v3_diet_items and branded_foods if not exists
         try {
             await query(`
-                INSERT INTO branded_foods (brand, product, serving_size, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, category) VALUES
-                ('Ghost', 'Energy Drink Cherry Limeade', '16 fl oz', 5, 0, 1, 0, 0, 0, 50, 'energy_drink'),
-                ('Ghost', 'Energy Drink Warheads Sour Watermelon', '16 fl oz', 5, 0, 1, 0, 0, 0, 50, 'energy_drink'),
-                ('Ghost', 'Energy Drink Orange Cream', '16 fl oz', 5, 0, 1, 0, 0, 0, 50, 'energy_drink'),
-                ('Ghost', 'Energy Drink Swedish Fish', '16 fl oz', 5, 0, 1, 0, 0, 0, 50, 'energy_drink'),
-                ('Ghost', 'Energy Drink Citrus', '16 fl oz', 5, 0, 1, 0, 0, 0, 50, 'energy_drink'),
-                ('Ghost', 'Energy Drink Tropical Mango', '16 fl oz', 5, 0, 1, 0, 0, 0, 50, 'energy_drink'),
-                ('Ghost', 'Energy Drink Bubblicious', '16 fl oz', 5, 0, 1, 0, 0, 0, 50, 'energy_drink'),
-                ('Reign', 'Total Body Fuel Orange Dreamsicle', '16 fl oz', 10, 0, 3, 0, 0, 0, 200, 'energy_drink'),
-                ('Reign', 'Total Body Fuel Melon Mania', '16 fl oz', 10, 0, 3, 0, 0, 0, 200, 'energy_drink'),
-                ('ZOA', 'Energy Drink Wild Orange', '16 fl oz', 15, 0, 2, 0, 0, 0, 160, 'energy_drink'),
-                ('ZOA', 'Energy Drink Pineapple Coconut', '16 fl oz', 15, 0, 2, 0, 0, 0, 160, 'energy_drink'),
-                ('3D', 'Energy Drink Chrome', '16 fl oz', 5, 0, 0, 0, 0, 0, 10, 'energy_drink'),
-                ('Celsius', 'Sparkling Kiwi Guava', '12 fl oz', 10, 0, 2, 0, 0, 0, 0, 'energy_drink'),
-                ('Celsius', 'Sparkling Grape Rush', '12 fl oz', 10, 0, 2, 0, 0, 0, 0, 'energy_drink'),
-                ('Celsius', 'Sparkling Tropical Vibe', '12 fl oz', 10, 0, 2, 0, 0, 0, 0, 'energy_drink'),
-                ('Monster', 'Ultra Rosa', '16 fl oz', 10, 0, 3, 0, 0, 0, 150, 'energy_drink'),
-                ('Monster', 'Ultra Sunrise', '16 fl oz', 10, 0, 3, 0, 0, 0, 150, 'energy_drink'),
-                ('Monster', 'Ultra Watermelon', '16 fl oz', 10, 0, 3, 0, 0, 0, 150, 'energy_drink'),
-                ('Monster', 'Java Mean Bean', '15 fl oz', 200, 6, 34, 3, 0, 33, 160, 'energy_drink'),
-                ('Alani Nu', 'Energy Drink Cherry Slush', '12 fl oz', 10, 0, 1, 0, 0, 0, 70, 'energy_drink'),
-                ('Alani Nu', 'Energy Drink Hawaiian Shaved Ice', '12 fl oz', 10, 0, 1, 0, 0, 0, 70, 'energy_drink'),
-                ('Alani Nu', 'Energy Drink Tropsicle', '12 fl oz', 10, 0, 1, 0, 0, 0, 70, 'energy_drink'),
-                ('C4', 'Smart Energy Cotton Candy', '16 fl oz', 0, 0, 1, 0, 0, 0, 0, 'energy_drink'),
-                ('Celsius', 'HEAT Inferno Cherry Lime', '16 fl oz', 10, 0, 2, 0, 0, 0, 0, 'energy_drink'),
-                ('PRIME', 'Energy Drink Blue Raspberry', '12 fl oz', 10, 0, 2, 0, 0, 0, 85, 'energy_drink'),
-                ('PRIME', 'Energy Drink Tropical Punch', '12 fl oz', 10, 0, 2, 0, 0, 0, 85, 'energy_drink'),
-                ('PRIME', 'Hydration Drink Ice Pop', '16.9 fl oz', 25, 0, 5, 0, 0, 2, 10, 'sports_drink'),
-                ('Liquid IV', 'Hydration Multiplier Lemon Lime', '1 packet (16g)', 45, 0, 11, 0, 0, 11, 500, 'sports_drink'),
-                ('Bodyarmor', 'Strawberry Banana', '16 fl oz', 70, 0, 18, 0, 0, 18, 30, 'sports_drink'),
-                ('Ghost', 'Whey Protein Peanut Butter Cereal Milk', '1 scoop (36g)', 130, 25, 5, 1.5, 0, 2, 180, 'protein_shake'),
-                ('Ghost', 'Whey Protein Chips Ahoy', '1 scoop (36g)', 130, 25, 5, 1.5, 0, 2, 180, 'protein_shake'),
-                ('Ghost', 'Vegan Protein Peanut Butter Cereal Milk', '1 scoop (42g)', 150, 20, 9, 4, 2, 2, 290, 'protein_shake'),
-                ('Fairlife', 'Core Power Elite Chocolate', '14 fl oz', 230, 42, 13, 3.5, 1, 7, 390, 'protein_shake')
-                ON CONFLICT (brand, product) DO NOTHING
+                DO $$ BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'v3_diet_items' AND column_name = 'caffeine_mg') THEN
+                        ALTER TABLE v3_diet_items ADD COLUMN caffeine_mg REAL DEFAULT 0;
+                    END IF;
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'branded_foods' AND column_name = 'caffeine_mg') THEN
+                        ALTER TABLE branded_foods ADD COLUMN caffeine_mg REAL DEFAULT 0;
+                    END IF;
+                END $$
+            `);
+            logger.info('caffeine_mg column ensured on v3_diet_items and branded_foods');
+        } catch (colErr) {
+            logger.debug('caffeine_mg column add skipped', { error: colErr.message });
+        }
+
+        // Seed additional popular branded foods (ON CONFLICT DO UPDATE — safe to run every boot)
+        try {
+            await query(`
+                INSERT INTO branded_foods (brand, product, serving_size, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, category, caffeine_mg) VALUES
+                ('Ghost', 'Energy Drink Cherry Limeade', '16 fl oz', 10, 0, 2, 0, 0, 0, 50, 'energy_drink', 200),
+                ('Ghost', 'Energy Drink Warheads Sour Watermelon', '16 fl oz', 10, 0, 2, 0, 0, 0, 50, 'energy_drink', 200),
+                ('Ghost', 'Energy Drink Orange Cream', '16 fl oz', 10, 0, 2, 0, 0, 0, 50, 'energy_drink', 200),
+                ('Ghost', 'Energy Drink Swedish Fish', '16 fl oz', 10, 0, 2, 0, 0, 0, 50, 'energy_drink', 200),
+                ('Ghost', 'Energy Drink Citrus', '16 fl oz', 10, 0, 2, 0, 0, 0, 50, 'energy_drink', 200),
+                ('Ghost', 'Energy Drink Tropical Mango', '16 fl oz', 10, 0, 2, 0, 0, 0, 50, 'energy_drink', 200),
+                ('Ghost', 'Energy Drink Bubblicious', '16 fl oz', 10, 0, 2, 0, 0, 0, 50, 'energy_drink', 200),
+                ('Reign', 'Total Body Fuel Orange Dreamsicle', '16 fl oz', 10, 0, 3, 0, 0, 0, 200, 'energy_drink', 300),
+                ('Reign', 'Total Body Fuel Melon Mania', '16 fl oz', 10, 0, 3, 0, 0, 0, 200, 'energy_drink', 300),
+                ('ZOA', 'Energy Drink Wild Orange', '16 fl oz', 15, 0, 2, 0, 0, 0, 160, 'energy_drink', 160),
+                ('ZOA', 'Energy Drink Pineapple Coconut', '16 fl oz', 15, 0, 2, 0, 0, 0, 160, 'energy_drink', 160),
+                ('3D', 'Energy Drink Chrome', '16 fl oz', 5, 0, 0, 0, 0, 0, 10, 'energy_drink', 200),
+                ('Celsius', 'Sparkling Kiwi Guava', '12 fl oz', 10, 0, 2, 0, 0, 0, 0, 'energy_drink', 200),
+                ('Celsius', 'Sparkling Grape Rush', '12 fl oz', 10, 0, 2, 0, 0, 0, 0, 'energy_drink', 200),
+                ('Celsius', 'Sparkling Tropical Vibe', '12 fl oz', 10, 0, 2, 0, 0, 0, 0, 'energy_drink', 200),
+                ('Monster', 'Ultra Rosa', '16 fl oz', 10, 0, 3, 0, 0, 0, 150, 'energy_drink', 150),
+                ('Monster', 'Ultra Sunrise', '16 fl oz', 10, 0, 3, 0, 0, 0, 150, 'energy_drink', 150),
+                ('Monster', 'Ultra Watermelon', '16 fl oz', 10, 0, 3, 0, 0, 0, 150, 'energy_drink', 150),
+                ('Monster', 'Java Mean Bean', '15 fl oz', 200, 6, 34, 3, 0, 33, 160, 'energy_drink', 188),
+                ('Alani Nu', 'Energy Drink Cherry Slush', '12 fl oz', 10, 0, 1, 0, 0, 0, 70, 'energy_drink', 200),
+                ('Alani Nu', 'Energy Drink Hawaiian Shaved Ice', '12 fl oz', 10, 0, 1, 0, 0, 0, 70, 'energy_drink', 200),
+                ('Alani Nu', 'Energy Drink Tropsicle', '12 fl oz', 10, 0, 1, 0, 0, 0, 70, 'energy_drink', 200),
+                ('C4', 'Smart Energy Cotton Candy', '16 fl oz', 0, 0, 1, 0, 0, 0, 0, 'energy_drink', 200),
+                ('Celsius', 'HEAT Inferno Cherry Lime', '16 fl oz', 10, 0, 2, 0, 0, 0, 0, 'energy_drink', 300),
+                ('PRIME', 'Energy Drink Blue Raspberry', '12 fl oz', 10, 0, 2, 0, 0, 0, 85, 'energy_drink', 200),
+                ('PRIME', 'Energy Drink Tropical Punch', '12 fl oz', 10, 0, 2, 0, 0, 0, 85, 'energy_drink', 200),
+                ('PRIME', 'Hydration Drink Ice Pop', '16.9 fl oz', 25, 0, 5, 0, 0, 2, 10, 'sports_drink', 0),
+                ('Liquid IV', 'Hydration Multiplier Lemon Lime', '1 packet (16g)', 45, 0, 11, 0, 0, 11, 500, 'sports_drink', 0),
+                ('Bodyarmor', 'Strawberry Banana', '16 fl oz', 70, 0, 18, 0, 0, 18, 30, 'sports_drink', 0),
+                ('Ghost', 'Whey Protein Peanut Butter Cereal Milk', '1 scoop (36g)', 130, 25, 5, 1.5, 0, 2, 180, 'protein_shake', 0),
+                ('Ghost', 'Whey Protein Chips Ahoy', '1 scoop (36g)', 130, 25, 5, 1.5, 0, 2, 180, 'protein_shake', 0),
+                ('Ghost', 'Vegan Protein Peanut Butter Cereal Milk', '1 scoop (42g)', 150, 20, 9, 4, 2, 2, 290, 'protein_shake', 0),
+                ('Fairlife', 'Core Power Elite Chocolate', '14 fl oz', 230, 42, 13, 3.5, 1, 7, 390, 'protein_shake', 0)
+                ON CONFLICT (brand, product) DO UPDATE SET
+                    serving_size = EXCLUDED.serving_size, calories = EXCLUDED.calories,
+                    protein_g = EXCLUDED.protein_g, carbs_g = EXCLUDED.carbs_g,
+                    fat_g = EXCLUDED.fat_g, fiber_g = EXCLUDED.fiber_g,
+                    sugar_g = EXCLUDED.sugar_g, sodium_mg = EXCLUDED.sodium_mg,
+                    caffeine_mg = EXCLUDED.caffeine_mg
             `);
             logger.info('Branded foods seed check completed');
         } catch (seedErr) {

@@ -232,14 +232,17 @@ async function showExplainability() {
 
 function renderIndicatorTable(indicators) {
     const dimClass = { balance: 'dim-balance', flow: 'dim-flow', compassion: 'dim-compassion', discernment: 'dim-discernment', awareness: 'dim-awareness', expression: 'dim-expression' };
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
     const tbody = document.getElementById('indicator-tbody');
     tbody.innerHTML = indicators.map(ind => {
         const norm = ind.normalized_value != null ? (ind.normalized_value * 100).toFixed(1) + '%' : '—';
         const cls = dimClass[ind.dimension] || '';
         const dirIcon = ind.direction === 'lower_is_better' ? '<span class="dir-icon" title="Lower is better">&#8595;</span>' : '<span class="dir-icon" title="Higher is better">&#8593;</span>';
+        const isNew = ind.created_at && new Date(ind.created_at) > sevenDaysAgo;
+        const newBadge = isNew ? ' <span class="new-badge">NEW</span>' : '';
         return `<tr data-key="${ind.key}" data-dimension="${ind.dimension}">
-            <td title="${ind.description || ''}">${ind.name} ${ind.unit ? '<span style="color:var(--text-muted);font-size:11px">(' + ind.unit + ')</span>' : ''}</td>
+            <td title="${ind.description || ''}">${ind.name}${newBadge} ${ind.unit ? '<span style="color:var(--text-muted);font-size:11px">(' + ind.unit + ')</span>' : ''}</td>
             <td><span class="dim-badge ${cls}">${ind.dimension}</span></td>
             <td>${dirIcon}</td>
             <td>${ind.raw_value}</td>
@@ -406,6 +409,144 @@ function closeNodePanel() {
 }
 
 // ──────────────────────────────────────────────────
+// Observer — Share & Receive Harmony Map Packs
+// ──────────────────────────────────────────────────
+
+async function loadObserverConfig() {
+    try {
+        const data = await apiCall('GET', '/v0/harmony/observer/config');
+        const config = data.config || {};
+        document.getElementById('obs-receive').checked = !!config.receive_harmony_packs;
+        updateObserverDot(config);
+        if (config.receive_harmony_packs) {
+            document.getElementById('observer-packs-section').style.display = 'block';
+            loadObserverPacks();
+        }
+    } catch (_) {
+        updateObserverDot({});
+    }
+}
+
+function updateObserverDot(config) {
+    const dot = document.getElementById('observer-dot');
+    if (!dot) return;
+    if (config.share_changes || config.receive_harmony_packs) {
+        dot.style.background = '#22c55e';
+    } else {
+        dot.style.background = '#94a3b8';
+    }
+}
+
+async function shareHarmonyMap() {
+    const statusEl = document.getElementById('share-status');
+    statusEl.textContent = 'Sharing...';
+    try {
+        // Enable share_changes config
+        await apiCall('PUT', '/v0/harmony/observer/config', { share_changes: true });
+        // Export current map snapshot (this stores the map state)
+        await apiCall('POST', '/v0/harmony/observer/export-map', {});
+        // Trigger observer job to process shared maps into packs
+        try {
+            await apiCall('POST', '/v0/harmony/observer/run-job', {});
+        } catch (_) { /* job may fail if cooldown — that's ok */ }
+        statusEl.textContent = 'Map shared!';
+        updateObserverDot({ share_changes: true, receive_harmony_packs: document.getElementById('obs-receive').checked });
+        showToast('Harmony Map shared with Observer', 'success');
+        setTimeout(() => { statusEl.textContent = ''; }, 5000);
+    } catch (err) {
+        statusEl.textContent = 'Failed';
+        showToast('Failed to share map: ' + err.message, 'error');
+    }
+}
+
+async function updateObserverReceive() {
+    const receive = document.getElementById('obs-receive').checked;
+    try {
+        await apiCall('PUT', '/v0/harmony/observer/config', { receive_harmony_packs: receive });
+        updateObserverDot({ receive_harmony_packs: receive });
+        if (receive) {
+            document.getElementById('observer-packs-section').style.display = 'block';
+            // Trigger observer job to generate packs from shared maps
+            try {
+                await apiCall('POST', '/v0/harmony/observer/run-job', {});
+            } catch (_) {}
+            loadObserverPacks();
+        } else {
+            document.getElementById('observer-packs-section').style.display = 'none';
+        }
+    } catch (err) {
+        showToast('Failed to update observer: ' + err.message, 'error');
+    }
+}
+
+async function loadObserverPacks() {
+    const container = document.getElementById('observer-packs');
+    if (!container) return;
+    try {
+        const data = await apiCall('GET', '/v0/harmony/observer/packs');
+        const packs = data.packs || [];
+        if (packs.length === 0) {
+            container.innerHTML = '<div style="font-size:12px;color:var(--text-muted)">No packs available</div>';
+            return;
+        }
+        const typeLabels = { new_city: 'New Cities', new_indicator: 'New Indicators', new_data_point: 'New Data Points', weight_adjustment: 'Weight Adjustments' };
+        container.innerHTML = packs.map(p => {
+            const changeCount = Array.isArray(p.changes) ? p.changes.length : 0;
+            const impactColor = p.impact_level === 'high' ? '#ef4444' : p.impact_level === 'medium' ? '#f59e0b' : '#22c55e';
+            const isApplied = p.status === 'applied';
+            const applyBtn = '<button onclick="applyPack(\'' + p.pack_id + '\')" style="padding:6px 16px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;border:none;background:#22c55e;color:#fff">Apply Pack</button>';
+            const rollbackBtn = '<button onclick="rollbackPack(\'' + p.pack_id + '\')" style="padding:6px 16px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;border:1px solid #ef4444;background:#fff;color:#ef4444">Rollback</button>';
+            const statusLabel = isApplied
+                ? '<span style="font-size:11px;font-weight:600;color:#22c55e">Applied</span>'
+                : '<span style="font-size:11px;font-weight:600;color:#6366f1">Available</span>';
+            const actions = isApplied ? rollbackBtn : applyBtn;
+            // Group changes by type for breakdown
+            const grouped = (p.changes || []).reduce((acc, c) => { (acc[c.type] = acc[c.type] || []).push(c); return acc; }, {});
+            const detailsHtml = Object.entries(grouped).map(([type, items]) => {
+                const label = typeLabels[type] || type;
+                const list = items.map(i => '<li style="margin:2px 0">' + (i.title || i.description || type) + '</li>').join('');
+                return '<div style="margin-top:6px"><span style="font-weight:600;font-size:11px;color:var(--text)">' + label + ' (' + items.length + ')</span>' +
+                    '<ul style="margin:2px 0 0 16px;padding:0;font-size:11px;color:var(--text-muted);list-style:disc">' + list + '</ul></div>';
+            }).join('');
+            return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin:6px 0;font-size:12px">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center">' +
+                    '<div><div style="font-weight:600;font-size:13px">' + (p.name || 'Pack') + '</div>' +
+                    '<div style="color:var(--text-muted);font-size:11px;margin-top:2px">v' + p.version + ' &middot; ' + changeCount + ' changes &middot; <span style="color:' + impactColor + '">' + (p.impact_level || 'low') + ' impact</span></div></div>' +
+                    statusLabel +
+                '</div>' +
+                (changeCount > 0 ? '<details style="margin-top:8px"><summary style="cursor:pointer;font-size:11px;color:var(--text-muted)">Show changes (' + changeCount + ')</summary>' + detailsHtml + '</details>' : '') +
+                '<div style="margin-top:8px">' + actions + '</div>' +
+            '</div>';
+        }).join('');
+    } catch (_) {
+        container.innerHTML = '<div style="font-size:12px;color:var(--text-muted)">Failed to load packs</div>';
+    }
+}
+
+async function applyPack(packId) {
+    try {
+        const result = await apiCall('POST', '/v0/harmony/observer/import-pack', { pack_id: packId });
+        showToast('Pack applied: ' + (result.changes_applied || 0) + ' changes', 'success');
+        loadObserverPacks();
+        // Reload map to reflect new cities/indicators
+        loadNodes();
+    } catch (err) {
+        showToast('Failed to apply pack: ' + err.message, 'error');
+    }
+}
+
+async function rollbackPack(packId) {
+    try {
+        await apiCall('POST', '/v0/harmony/observer/rollback-pack', { pack_id: packId });
+        showToast('Pack rolled back', 'success');
+        loadObserverPacks();
+        loadNodes();
+    } catch (err) {
+        showToast('Failed to rollback: ' + err.message, 'error');
+    }
+}
+
+// ──────────────────────────────────────────────────
 // Init on page load
 // ──────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -415,4 +556,5 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderSidebar('harmony', 'map');
     startInquiryPolling();
     initMap();
+    loadObserverConfig();
 });

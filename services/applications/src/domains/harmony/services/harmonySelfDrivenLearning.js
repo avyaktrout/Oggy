@@ -28,14 +28,19 @@ class HarmonySelfDrivenLearning {
         if (this.isRunning) return { status: 'already_running' };
         this.isRunning = true;
         this.userId = userId;
+        this.mode = options.mode || 'training';
         // Preserve cumulative stats across stop/restart (e.g. benchmark pause/resume)
         if (!this.sessionStats || !this.sessionStats.questionsAsked) {
             this.sessionStats = { questionsAsked: 0, correct: 0, incorrect: 0 };
         }
 
+        // Suggestion mode: shorter interval, more attempts per session
+        const defaultInterval = this.mode === 'suggestions' ? 1 : 2;
+        const defaultAttempts = this.mode === 'suggestions' ? 5 : 3;
+
         // Accept CLL-standard options: { interval (ms), practiceCount, enabled }
-        const intervalMs = options.interval || (options.intervalMinutes || 2) * 60 * 1000;
-        const attemptsPerSession = options.practiceCount || options.attemptsPerSession || 3;
+        const intervalMs = options.interval || (options.intervalMinutes || defaultInterval) * 60 * 1000;
+        const attemptsPerSession = options.practiceCount || options.attemptsPerSession || defaultAttempts;
 
         this.interval = setInterval(() => {
             this.runLearningSession(attemptsPerSession).catch(err => {
@@ -45,7 +50,7 @@ class HarmonySelfDrivenLearning {
 
         // Run first session immediately
         await this.runLearningSession(attemptsPerSession);
-        return { status: 'started', intervalMs, attemptsPerSession };
+        return { status: 'started', intervalMs, attemptsPerSession, mode: this.mode };
     }
 
     stop() {
@@ -65,7 +70,8 @@ class HarmonySelfDrivenLearning {
             accuracy: total > 0
                 ? (correct / total * 100).toFixed(1) + '%'
                 : '0%',
-            is_running: this.isRunning
+            is_running: this.isRunning,
+            mode: this.mode || 'training'
         };
     }
 
@@ -102,7 +108,8 @@ class HarmonySelfDrivenLearning {
         await this._updateMemory(traceId, assessment, oggyAnswer, evaluation);
 
         // Auto-generate suggestion from high-scoring city_expansion or data_source answers
-        if (evaluation.correct && evaluation.score >= 4 &&
+        const suggestionThreshold = this.mode === 'suggestions' ? 3 : 4;
+        if (evaluation.correct && evaluation.score >= suggestionThreshold &&
             ['city_expansion', 'data_source_recommendation', 'metric_identification'].includes(questionType)) {
             await this._createSuggestionFromLearning(traceId, assessment, oggyAnswer, evaluation);
         }
@@ -119,6 +126,13 @@ class HarmonySelfDrivenLearning {
     }
 
     _selectQuestionType() {
+        // Suggestion mode: 100% bias to types that generate suggestions
+        if (this.mode === 'suggestions') {
+            const r = Math.random();
+            if (r < 0.40) return 'city_expansion';
+            if (r < 0.70) return 'data_source_recommendation';
+            return 'metric_identification';
+        }
         const r = Math.random();
         if (r < 0.20) return 'indicator_classification';
         if (r < 0.35) return 'city_wellness_assessment';
@@ -272,10 +286,17 @@ Return ONLY valid JSON: { "score": <1-5>, "feedback": "..." }` },
 - description: 1-2 sentence explanation of the suggestion
 - payload: object with relevant data depending on type:
   * new_city: { city_name, population, lat, lng, country, state, initial_scores: { balance, flow, compassion, discernment, awareness, expression } (0-100 scale), data_sources: ["source1", "source2"] }
-  * new_indicator: { key: "snake_case_key", name: "Display Name", dimension: "balance|flow|compassion|discernment|awareness|expression", direction: "higher_is_better|lower_is_better", unit: "per 100k|%|index", description: "What it measures", bounds: { min: 0, max: 100 }, weight: 1.0, source_rationale: "Why this metric matters" }
+  * new_indicator: { key: "snake_case_key", name: "Display Name", dimension: "balance|flow|compassion|discernment|awareness|expression", direction: "higher_is_better|lower_is_better", unit: "per 100k|%|index", description: "What it measures", bounds: { min: 0, max: 100 }, weight: 1.0, source_rationale: "Why this metric matters", target_city: "City Name or null if global" }
   * model_update: { change_description: "What to change", rationale: "Why", data_sources: ["source1"], applies_to: "all"|"subset"|"single" }
 
-IMPORTANT: Do NOT use "new_data_point" type. If the answer recommends a data source, use "model_update". If it recommends a new metric, use "new_indicator". If it recommends a new city, use "new_city".
+IMPORTANT: Do NOT use "new_data_point" type. PREFER "new_indicator" over "model_update" whenever the answer mentions a measurable metric, index, score, ranking, or data source — even if it references a specific city, set target_city accordingly. Only use "model_update" for abstract methodology changes that cannot be expressed as an indicator. If it recommends a new city, use "new_city".
+For new_indicator: ONLY suggest GENERAL metrics that apply to ALL cities (e.g., "Air Quality Index", "Median Household Income"). NEVER suggest city-specific indicators.
+CRITICAL SPECIFICITY RULES:
+- Each indicator must measure EXACTLY ONE specific thing. Never combine multiple topics.
+- Indicator names must be concise (under 60 chars) and be a metric name, NOT an action description.
+- BAD: "Integrate American Community Survey data" or "Various socioeconomic and transportation metrics"
+- GOOD: "Labor Force Participation Rate (%)" or "Average Commute Time (minutes)"
+- If a data source covers multiple metrics, create ONLY the single most impactful one.
 Return valid JSON only, no markdown.` },
                 { role: 'user', content: `Question type: ${assessment.questionType}\nQuestion: ${assessment.question.substring(0, 300)}\nAnswer: ${oggyAnswer.substring(0, 800)}\nScore: ${evaluation.score}/5` },
             ];
@@ -292,11 +313,54 @@ Return valid JSON only, no markdown.` },
             const parsed = JSON.parse(jsonMatch[0]);
             if (!parsed.suggestion_type || !parsed.title) return;
 
+            // Resolve city name → node_id UUID
+            let nodeId = null;
+            const cityName = parsed.payload?.target_city || parsed.payload?.city_name || assessment.targetCity;
+            if (cityName) {
+                const nodeResult = await query(
+                    "SELECT node_id FROM harmony_nodes WHERE LOWER(name) = LOWER($1) AND scope = 'city'",
+                    [cityName]
+                );
+                if (nodeResult.rows[0]) nodeId = nodeResult.rows[0].node_id;
+            }
+
+            // Skip suggestions for things that already exist
+            if (parsed.suggestion_type === 'new_city') {
+                const newCityName = parsed.payload?.city_name || parsed.payload?.name;
+                if (newCityName) {
+                    const exists = await query("SELECT node_id FROM harmony_nodes WHERE LOWER(name) = LOWER($1) AND scope = 'city'", [newCityName]);
+                    if (exists.rows.length > 0) {
+                        logger.info('Harmony SDL skipping new_city for existing city', { city: newCityName, traceId });
+                        return;
+                    }
+                }
+            }
+            if (parsed.suggestion_type === 'new_indicator') {
+                const key = parsed.payload?.key;
+                if (key) {
+                    const exists = await query("SELECT indicator_id FROM harmony_indicators WHERE key = $1", [key]);
+                    if (exists.rows.length > 0) {
+                        logger.info('Harmony SDL skipping new_indicator for existing indicator', { key, traceId });
+                        return;
+                    }
+                }
+            }
+            if (parsed.suggestion_type === 'model_update') {
+                const key = parsed.payload?.key || parsed.payload?.indicator_key;
+                if (key) {
+                    const exists = await query("SELECT indicator_id FROM harmony_indicators WHERE key = $1", [key]);
+                    if (exists.rows.length > 0) {
+                        logger.info('Harmony SDL skipping model_update for existing indicator', { key, traceId });
+                        return;
+                    }
+                }
+            }
+
             await query(`
-                INSERT INTO harmony_suggestions (suggestion_id, user_id, suggestion_type, title, description, payload, source, status, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, 'training', 'pending', NOW())
+                INSERT INTO harmony_suggestions (suggestion_id, user_id, node_id, suggestion_type, title, description, payload, source, status, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, 'training', 'pending', NOW())
             `, [
-                uuidv4(), this.userId,
+                uuidv4(), this.userId, nodeId,
                 parsed.suggestion_type,
                 parsed.title.substring(0, 200),
                 (parsed.description || '').substring(0, 500),
@@ -354,13 +418,14 @@ Return valid JSON only, no markdown.` },
     }
 }
 
-function getInstance(userId) {
-    if (!instances.has(userId)) {
+function getInstance(userId, mode = 'training') {
+    const key = mode === 'suggestions' ? `${userId}:suggestions` : userId;
+    if (!instances.has(key)) {
         const inst = new HarmonySelfDrivenLearning();
         inst.userId = userId;
-        instances.set(userId, inst);
+        instances.set(key, inst);
     }
-    return instances.get(userId);
+    return instances.get(key);
 }
 
 module.exports = { getInstance };

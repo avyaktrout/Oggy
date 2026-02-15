@@ -63,6 +63,7 @@
         .e-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; }
         .e-toggle input { cursor: pointer; }
         .dim-filter { padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 12px; background: var(--bg); }
+        .new-badge { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 700; background: #dbeafe; color: #2563eb; margin-left: 4px; vertical-align: middle; }
     </style>
 </head>
 <body class="app-layout">
@@ -91,6 +92,25 @@
 
         <!-- Map -->
         <div id="harmony-map"></div>
+
+        <!-- Observer -->
+        <div class="card" style="margin-bottom:16px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <h3 style="margin:0;font-size:14px">Observer <span class="observer-status-dot" id="observer-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#94a3b8"></span></h3>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+                <button class="btn btn-sm" style="padding:6px 14px;font-size:12px;background:#6366f1;color:#fff;border:1px solid #6366f1;border-radius:var(--radius);cursor:pointer" onclick="shareHarmonyMap()">Share Harmony Map</button>
+                <span id="share-status" style="font-size:11px;color:var(--text-muted)"></span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:6px">
+                <input type="checkbox" id="obs-receive" onchange="updateObserverReceive()" style="cursor:pointer">
+                <label for="obs-receive">Enable Observer Pack Suggestions</label>
+            </div>
+            <div id="observer-packs-section" style="display:none;margin-top:8px">
+                <div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px">Available Packs</div>
+                <div id="observer-packs"><div style="font-size:12px;color:var(--text-muted)">No packs available</div></div>
+            </div>
+        </div>
 
         <!-- Node Detail Panel -->
         <div class="node-panel" id="node-panel">

@@ -96,9 +96,50 @@ class HarmonyObserverService {
             }
 
             // 3. Deduplicate by type+key
-            const deduped = this._deduplicateChanges(allChanges);
+            const dedupedRaw = this._deduplicateChanges(allChanges);
 
-            // 4. Determine impact level
+            // 3b. Filter out suggestions for things that already exist (cities, indicators, weight adjustments for unknown indicators)
+            const existingCities = await query("SELECT LOWER(name) AS name FROM harmony_nodes WHERE scope = 'city'");
+            const existingCityNames = new Set(existingCities.rows.map(r => r.name));
+            const existingIndicators = await query("SELECT key FROM harmony_indicators");
+            const existingIndicatorKeys = new Set(existingIndicators.rows.map(r => r.key));
+            const deduped = dedupedRaw.filter(c => {
+                if (c.type === 'new_city') {
+                    const cityName = (c.payload?.name || c.payload?.city_name || '').toLowerCase();
+                    if (existingCityNames.has(cityName)) {
+                        logger.info('Observer job: filtering out existing city from pack', { city: cityName });
+                        return false;
+                    }
+                }
+                if (c.type === 'new_indicator') {
+                    const key = c.payload?.key;
+                    if (key && existingIndicatorKeys.has(key)) {
+                        logger.info('Observer job: filtering out existing indicator from pack', { key });
+                        return false;
+                    }
+                }
+                if (c.type === 'model_update') {
+                    // model_updates are informational only — not actionable in packs
+                    logger.info('Observer job: filtering out model_update from pack (not actionable)', { title: c.title });
+                    return false;
+                }
+                if (c.type === 'weight_adjustment') {
+                    const key = c.payload?.indicator_key;
+                    if (key && !existingIndicatorKeys.has(key)) {
+                        logger.info('Observer job: filtering out weight_adjustment for non-existent indicator', { key });
+                        return false;
+                    }
+                }
+                return true;
+            });
+
+            // 4. Skip pack creation if no actionable changes remain
+            if (deduped.length === 0) {
+                await this._completeJob(jobId, { tenants_analyzed: tenants.rows.length, changes: 0, reason: 'all changes filtered as duplicates' }, 0);
+                return { success: true, packs_generated: 0, reason: 'No new actionable changes' };
+            }
+
+            // 5. Determine impact level
             const dimensions = new Set();
             const nodeIds = new Set();
             for (const change of deduped) {
@@ -161,11 +202,11 @@ class HarmonyObserverService {
     // ── Pack management ─────────────────────────────
 
     async listPacks(status) {
-        let sql = 'SELECT * FROM harmony_observer_packs';
+        let sql = 'SELECT * FROM harmony_observer_packs WHERE jsonb_array_length(COALESCE(changes, \'[]\'::jsonb)) > 0';
         const params = [];
         if (status) {
             params.push(status);
-            sql += ' WHERE status = $1';
+            sql += ' AND status = $1';
         }
         sql += ' ORDER BY created_at DESC LIMIT 20';
         const result = await query(sql, params);
@@ -394,6 +435,190 @@ class HarmonyObserverService {
             clearInterval(this._scheduleInterval);
             this._scheduleInterval = null;
         }
+    }
+
+    // ── Map Export / Upload / Diff ───────────────────
+
+    async exportMap(userId) {
+        const [nodesResult, indicatorsResult, boundsResult, weightsResult, valuesResult, scoresResult] = await Promise.all([
+            query("SELECT node_id, scope, name, geometry, population, metadata FROM harmony_nodes WHERE scope = 'city' ORDER BY name"),
+            query('SELECT key, name, dimension, direction, unit, description FROM harmony_indicators ORDER BY key'),
+            query("SELECT indicator_key, min_value, max_value FROM harmony_normalization_bounds WHERE version = 1 AND scope = 'global'"),
+            query("SELECT indicator_key, weight FROM harmony_weights WHERE version = 1 AND scope = 'global'"),
+            query(`
+                SELECT n.name AS node_name, hi.key AS indicator_key, hiv.raw_value, hiv.time_window_start, hiv.time_window_end, hiv.source_dataset
+                FROM harmony_indicator_values hiv
+                JOIN harmony_nodes n ON n.node_id = hiv.node_id
+                JOIN harmony_indicators hi ON hi.indicator_id = hiv.indicator_id
+                WHERE n.scope = 'city'
+                ORDER BY n.name, hi.key
+            `),
+            query(`
+                SELECT n.name AS node_name, hs.harmony, hs.e_scaled, hs.balance, hs.flow,
+                       hs.compassion, hs.discernment, hs.care, hs.awareness, hs.expression,
+                       hs.intent_coherence, hs.time_window_start
+                FROM harmony_scores hs
+                JOIN harmony_nodes n ON n.node_id = hs.node_id
+                WHERE n.scope = 'city'
+                ORDER BY n.name
+            `),
+        ]);
+
+        // Build bounds/weights lookup
+        const boundsMap = {};
+        for (const b of boundsResult.rows) boundsMap[b.indicator_key] = { min: parseFloat(b.min_value), max: parseFloat(b.max_value) };
+        const weightsMap = {};
+        for (const w of weightsResult.rows) weightsMap[w.indicator_key] = parseFloat(w.weight);
+
+        return {
+            exported_at: new Date().toISOString(),
+            exported_by: userId,
+            nodes: nodesResult.rows.map(n => ({
+                name: n.name, scope: n.scope,
+                geometry: n.geometry, population: n.population,
+                metadata: n.metadata,
+            })),
+            indicators: indicatorsResult.rows.map(i => ({
+                ...i,
+                bounds: boundsMap[i.key] || null,
+                weight: weightsMap[i.key] || 1.0,
+            })),
+            indicator_values: valuesResult.rows,
+            scores: scoresResult.rows,
+        };
+    }
+
+    async createDiffPack(userId, externalSnapshot) {
+        // Load user's current map state
+        const myMap = await this.exportMap(userId);
+        const changes = [];
+
+        // 1. Find missing cities
+        const myCityNames = new Set(myMap.nodes.map(n => n.name.toLowerCase()));
+        // Also load all existing cities globally to avoid duplicates
+        const allCitiesResult = await query("SELECT LOWER(name) AS name FROM harmony_nodes WHERE scope = 'city'");
+        const allCityNames = new Set(allCitiesResult.rows.map(r => r.name));
+        for (const extNode of (externalSnapshot.nodes || [])) {
+            if (!myCityNames.has(extNode.name.toLowerCase()) && !allCityNames.has(extNode.name.toLowerCase())) {
+                const coords = extNode.geometry?.coordinates || [0, 0];
+                // Look for scores in the external snapshot to get initial dimension values
+                const extScores = (externalSnapshot.scores || []).find(s => s.node_name?.toLowerCase() === extNode.name.toLowerCase());
+                changes.push({
+                    type: 'new_city',
+                    title: `Add city: ${extNode.name}`,
+                    description: `City "${extNode.name}" exists in the uploaded map but not in yours.`,
+                    reason: 'Missing city from uploaded map',
+                    payload: {
+                        name: extNode.name,
+                        lat: coords[1], lng: coords[0],
+                        population: extNode.population,
+                        country: extNode.metadata?.country || '',
+                        state: extNode.metadata?.state || '',
+                        initial_scores: extScores ? {
+                            balance: Math.round((extScores.balance || 0.5) * 100),
+                            flow: Math.round((extScores.flow || 0.5) * 100),
+                            compassion: Math.round((extScores.compassion || 0.5) * 100),
+                            discernment: Math.round((extScores.discernment || 0.5) * 100),
+                            awareness: Math.round((extScores.awareness || 0.5) * 100),
+                            expression: Math.round((extScores.expression || 0.5) * 100),
+                        } : {},
+                    },
+                });
+            }
+        }
+
+        // 2. Find missing indicators
+        const myIndicatorKeys = new Set(myMap.indicators.map(i => i.key));
+        for (const extInd of (externalSnapshot.indicators || [])) {
+            if (!myIndicatorKeys.has(extInd.key)) {
+                changes.push({
+                    type: 'new_indicator',
+                    title: `Add indicator: ${extInd.name}`,
+                    description: `Indicator "${extInd.name}" (${extInd.dimension}) exists in the uploaded map but not in yours.`,
+                    reason: `Missing ${extInd.dimension} indicator from uploaded map`,
+                    payload: {
+                        key: extInd.key,
+                        name: extInd.name,
+                        dimension: extInd.dimension,
+                        direction: extInd.direction,
+                        unit: extInd.unit,
+                        description: extInd.description,
+                        bounds: extInd.bounds || { min: 0, max: 100 },
+                        weight: extInd.weight || 1.0,
+                    },
+                });
+            }
+        }
+
+        // 3. Find missing indicator values (only for cities both maps have)
+        const myValuesSet = new Set(myMap.indicator_values.map(v =>
+            `${v.node_name.toLowerCase()}:${v.indicator_key}`
+        ));
+        for (const extVal of (externalSnapshot.indicator_values || [])) {
+            const key = `${(extVal.node_name || '').toLowerCase()}:${extVal.indicator_key}`;
+            if (!myValuesSet.has(key) && myCityNames.has((extVal.node_name || '').toLowerCase()) && myIndicatorKeys.has(extVal.indicator_key)) {
+                // Need to resolve node_name to node_id in user's map
+                const nodeResult = await query(
+                    "SELECT node_id FROM harmony_nodes WHERE LOWER(name) = LOWER($1) AND scope = 'city'",
+                    [extVal.node_name]
+                );
+                if (nodeResult.rows[0]) {
+                    changes.push({
+                        type: 'new_data_point',
+                        title: `Add ${extVal.indicator_key} data for ${extVal.node_name}`,
+                        description: `Data point for "${extVal.indicator_key}" in ${extVal.node_name} exists in the uploaded map.`,
+                        reason: `Missing data point from uploaded map`,
+                        payload: {
+                            indicator_key: extVal.indicator_key,
+                            node_id: nodeResult.rows[0].node_id,
+                            raw_value: extVal.raw_value,
+                            time_window_start: extVal.time_window_start || '2024-01-01',
+                            time_window_end: extVal.time_window_end || '2024-12-31',
+                            source_dataset: 'map_upload',
+                        },
+                    });
+                }
+            }
+        }
+
+        if (changes.length === 0) {
+            return { diff_summary: { missing_cities: 0, missing_indicators: 0, missing_data_points: 0 }, pack_id: null, changes: [] };
+        }
+
+        // Create a pack from the diff
+        const packId = uuidv4();
+        const versionResult = await query('SELECT COALESCE(MAX(version), 0) + 1 AS next FROM harmony_observer_packs');
+        const version = versionResult.rows[0].next;
+
+        const missingCities = changes.filter(c => c.type === 'new_city').length;
+        const missingIndicators = changes.filter(c => c.type === 'new_indicator').length;
+        const missingDataPoints = changes.filter(c => c.type === 'new_data_point').length;
+        const impactLevel = changes.length > 10 ? 'high' : changes.length > 3 ? 'medium' : 'low';
+
+        await query(`
+            INSERT INTO harmony_observer_packs (pack_id, version, name, changes, evidence, impact_level, status)
+            VALUES ($1, $2, $3, $4, $5, $6, 'available')
+        `, [
+            packId, version,
+            `Map Upload Diff v${version}`,
+            JSON.stringify(changes),
+            JSON.stringify({
+                source: 'map_upload',
+                uploaded_by: externalSnapshot.exported_by || 'unknown',
+                missing_cities: missingCities,
+                missing_indicators: missingIndicators,
+                missing_data_points: missingDataPoints,
+            }),
+            impactLevel,
+        ]);
+
+        logger.info('Created diff pack from map upload', { packId, changes: changes.length, missingCities, missingIndicators, missingDataPoints });
+
+        return {
+            diff_summary: { missing_cities: missingCities, missing_indicators: missingIndicators, missing_data_points: missingDataPoints },
+            pack_id: packId,
+            changes: changes.map(c => ({ type: c.type, title: c.title, description: c.description, reason: c.reason })),
+        };
     }
 }
 

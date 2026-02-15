@@ -185,6 +185,7 @@ class HarmonyEngine {
         // Get indicator values with their normalized scores
         const result = await query(`
             SELECT hi.key, hi.name, hi.dimension, hi.direction, hi.unit,
+                   hi.created_at AS indicator_created_at,
                    iv.raw_value, iv.normalized_value,
                    hnb.min_value AS bound_min, hnb.max_value AS bound_max,
                    hw.weight
@@ -213,6 +214,7 @@ class HarmonyEngine {
                 normalized_value: r.normalized_value != null ? parseFloat(r.normalized_value) : null,
                 bounds: { min: parseFloat(r.bound_min), max: parseFloat(r.bound_max) },
                 weight: parseFloat(r.weight || 1),
+                created_at: r.indicator_created_at,
             })),
             scores: scoresResult.rows[0] || null,
         };

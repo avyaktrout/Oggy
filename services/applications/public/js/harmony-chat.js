@@ -235,5 +235,80 @@ async function rejectSuggestion(id) {
     }
 }
 
+// ──────────────────────────────────────────────────
+// SDL-Driven Suggestion Controls
+// ──────────────────────────────────────────────────
+
+let sdlSugPollInterval = null;
+
+async function startSdlSuggestions() {
+    try {
+        const data = await apiCall('POST', '/v0/harmony/suggestions/sdl/start', {});
+        if (data.status === 'started' || data.status === 'already_running') {
+            document.getElementById('btn-start-sdl-sug').style.display = 'none';
+            document.getElementById('btn-stop-sdl-sug').style.display = '';
+            document.getElementById('sdl-sug-status-row').style.display = '';
+            if (!sdlSugPollInterval) {
+                sdlSugPollInterval = setInterval(pollSdlSuggestionStatus, 10000);
+            }
+        }
+    } catch (err) {
+        console.error('Failed to start SDL suggestions', err);
+        alert('Failed to start SDL suggestions: ' + (err.message || err));
+    }
+}
+window.startSdlSuggestions = startSdlSuggestions;
+
+async function stopSdlSuggestions() {
+    try {
+        await apiCall('POST', '/v0/harmony/suggestions/sdl/stop', {});
+        document.getElementById('btn-start-sdl-sug').style.display = '';
+        document.getElementById('btn-stop-sdl-sug').style.display = 'none';
+        if (sdlSugPollInterval) {
+            clearInterval(sdlSugPollInterval);
+            sdlSugPollInterval = null;
+        }
+    } catch (err) {
+        console.error('Failed to stop SDL suggestions', err);
+    }
+}
+window.stopSdlSuggestions = stopSdlSuggestions;
+
+async function pollSdlSuggestionStatus() {
+    try {
+        const data = await apiCall('GET', '/v0/harmony/suggestions/sdl/status');
+        document.getElementById('sdl-sug-total').textContent = data.total_attempts || 0;
+        document.getElementById('sdl-sug-correct').textContent = data.correct || 0;
+        document.getElementById('sdl-sug-accuracy').textContent = data.accuracy || '0%';
+        if (!data.is_running) {
+            document.getElementById('btn-start-sdl-sug').style.display = '';
+            document.getElementById('btn-stop-sdl-sug').style.display = 'none';
+            if (sdlSugPollInterval) {
+                clearInterval(sdlSugPollInterval);
+                sdlSugPollInterval = null;
+            }
+        }
+        await refreshSuggestions();
+    } catch (err) {
+        console.error('Failed to poll SDL suggestion status', err);
+    }
+}
+
+// Check SDL suggestion status on page load
+(async function checkSdlSuggestionStatus() {
+    try {
+        const data = await apiCall('GET', '/v0/harmony/suggestions/sdl/status');
+        if (data.is_running) {
+            document.getElementById('btn-start-sdl-sug').style.display = 'none';
+            document.getElementById('btn-stop-sdl-sug').style.display = '';
+            document.getElementById('sdl-sug-status-row').style.display = '';
+            document.getElementById('sdl-sug-total').textContent = data.total_attempts || 0;
+            document.getElementById('sdl-sug-correct').textContent = data.correct || 0;
+            document.getElementById('sdl-sug-accuracy').textContent = data.accuracy || '0%';
+            sdlSugPollInterval = setInterval(pollSdlSuggestionStatus, 10000);
+        }
+    } catch (err) { /* ignore on load */ }
+})();
+
 // Load pending suggestions on page load
 refreshSuggestions();

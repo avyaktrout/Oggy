@@ -34,12 +34,16 @@ class DietService {
         try {
             const nutritionData = await this._analyzeNutrition(description, quantity, unit, userId);
             if (nutritionData) {
+                const customNutrients = {};
+                if (nutritionData.saturated_fat_g != null) customNutrients.saturated_fat_g = nutritionData.saturated_fat_g;
+                if (nutritionData.unsaturated_fat_g != null) customNutrients.unsaturated_fat_g = nutritionData.unsaturated_fat_g;
                 await query(
-                    `INSERT INTO v3_diet_items (entry_id, name, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, source)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'ai_estimated')`,
+                    `INSERT INTO v3_diet_items (entry_id, name, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, caffeine_mg, custom_nutrients, source)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'ai_estimated')`,
                     [entry.entry_id, description, nutritionData.calories, nutritionData.protein_g,
                      nutritionData.carbs_g, nutritionData.fat_g, nutritionData.fiber_g,
-                     nutritionData.sugar_g, nutritionData.sodium_mg]
+                     nutritionData.sugar_g, nutritionData.sodium_mg, nutritionData.caffeine_mg || 0,
+                     JSON.stringify(customNutrients)]
                 );
             }
         } catch (err) {
@@ -102,9 +106,12 @@ class DietService {
                 COALESCE(SUM(i.protein_g), 0) as total_protein,
                 COALESCE(SUM(i.carbs_g), 0) as total_carbs,
                 COALESCE(SUM(i.fat_g), 0) as total_fat,
+                COALESCE(SUM((i.custom_nutrients->>'saturated_fat_g')::real), 0) as total_saturated_fat,
+                COALESCE(SUM((i.custom_nutrients->>'unsaturated_fat_g')::real), 0) as total_unsaturated_fat,
                 COALESCE(SUM(i.fiber_g), 0) as total_fiber,
                 COALESCE(SUM(i.sugar_g), 0) as total_sugar,
-                COALESCE(SUM(i.sodium_mg), 0) as total_sodium
+                COALESCE(SUM(i.sodium_mg), 0) as total_sodium,
+                COALESCE(SUM(i.caffeine_mg), 0) as total_caffeine
             FROM v3_diet_entries e
             LEFT JOIN v3_diet_items i ON e.entry_id = i.entry_id
             WHERE e.user_id = $1 AND e.entry_date = $2
@@ -118,12 +125,17 @@ class DietService {
         const check = await query('SELECT entry_id FROM v3_diet_entries WHERE entry_id = $1 AND user_id = $2', [entryId, userId]);
         if (check.rows.length === 0) throw new Error('Entry not found');
 
-        const { calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg } = nutritionData;
+        const { calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, caffeine_mg, saturated_fat_g, unsaturated_fat_g } = nutritionData;
+        const customNutrients = {};
+        if (saturated_fat_g != null) customNutrients.saturated_fat_g = saturated_fat_g;
+        if (unsaturated_fat_g != null) customNutrients.unsaturated_fat_g = unsaturated_fat_g;
         const result = await query(
             `UPDATE v3_diet_items SET calories = $1, protein_g = $2, carbs_g = $3, fat_g = $4,
-             fiber_g = $5, sugar_g = $6, sodium_mg = $7, source = 'user_corrected'
-             WHERE entry_id = $8 RETURNING *`,
-            [calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, entryId]
+             fiber_g = $5, sugar_g = $6, sodium_mg = $7, caffeine_mg = $8,
+             custom_nutrients = COALESCE(custom_nutrients, '{}'::jsonb) || $9::jsonb,
+             source = 'user_corrected'
+             WHERE entry_id = $10 RETURNING *`,
+            [calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, caffeine_mg || 0, JSON.stringify(customNutrients), entryId]
         );
         if (result.rowCount === 0) throw new Error('No nutrition item found for this entry');
         return result.rows[0];
@@ -192,8 +204,8 @@ class DietService {
             nutritionContext = `\n# Today's Nutrition (${dateLabel})
 Entries: ${summary.total_entries}
 Calories: ${Math.round(summary.total_calories)} kcal
-Protein: ${Math.round(summary.total_protein)}g | Carbs: ${Math.round(summary.total_carbs)}g | Fat: ${Math.round(summary.total_fat)}g
-Fiber: ${Math.round(summary.total_fiber)}g | Sugar: ${Math.round(summary.total_sugar)}g | Sodium: ${Math.round(summary.total_sodium)}mg
+Protein: ${Math.round(summary.total_protein)}g | Carbs: ${Math.round(summary.total_carbs)}g | Fat: ${Math.round(summary.total_fat)}g (Sat: ${Math.round(summary.total_saturated_fat || 0)}g, Unsat: ${Math.round(summary.total_unsaturated_fat || 0)}g)
+Fiber: ${Math.round(summary.total_fiber)}g | Sugar: ${Math.round(summary.total_sugar)}g | Sodium: ${Math.round(summary.total_sodium)}mg | Caffeine: ${Math.round(summary.total_caffeine || 0)}mg
 
 Recent entries: ${entries.slice(-5).map(e => `${e.description} (${e.meal_type || e.entry_type})`).join(', ') || 'None yet'}
 
@@ -315,7 +327,9 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
             // 1. Check for previous user-corrected entry with same description
             if (userId) {
                 const prev = await query(
-                    `SELECT i.calories, i.protein_g, i.carbs_g, i.fat_g, i.fiber_g, i.sugar_g, i.sodium_mg
+                    `SELECT i.calories, i.protein_g, i.carbs_g, i.fat_g, i.fiber_g, i.sugar_g, i.sodium_mg, i.caffeine_mg,
+                            (i.custom_nutrients->>'saturated_fat_g')::real AS saturated_fat_g,
+                            (i.custom_nutrients->>'unsaturated_fat_g')::real AS unsaturated_fat_g
                      FROM v3_diet_items i
                      JOIN v3_diet_entries e ON i.entry_id = e.entry_id
                      WHERE e.user_id = $1 AND i.source = 'user_corrected' AND LOWER(e.description) = LOWER($2)
@@ -343,7 +357,7 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
             return await this._aiNutritionEstimate(description, quantity, unit, userId);
         } catch (err) {
             logger.warn('Nutrition analysis failed', { error: err.message, description });
-            return { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0, sugar_g: 0, sodium_mg: 0 };
+            return { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0, sugar_g: 0, sodium_mg: 0, caffeine_mg: 0 };
         }
     }
 
@@ -354,7 +368,7 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
         try {
             // First try exact product match
             const exactMatch = await query(
-                `SELECT calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg
+                `SELECT calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, caffeine_mg
                  FROM branded_foods
                  WHERE LOWER($1) LIKE '%' || LOWER(brand) || '%' AND LOWER($1) LIKE '%' || LOWER(product) || '%'
                  ORDER BY LENGTH(product) DESC LIMIT 1`,
@@ -369,7 +383,7 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
             // Split description into words and match brand + any significant word
             const words = description.toLowerCase().split(/\s+/).filter(w => w.length > 2);
             const brandMatch = await query(
-                `SELECT brand, product, category, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+                `SELECT brand, product, category, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, caffeine_mg,
                         similarity(LOWER(brand || ' ' || product), LOWER($1)) AS sim
                  FROM branded_foods
                  WHERE LOWER($1) LIKE '%' || LOWER(brand) || '%'
@@ -386,7 +400,7 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
             // pg_trgm similarity() may not be available — try simpler fallback
             try {
                 const fallback = await query(
-                    `SELECT calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, brand, product, category
+                    `SELECT calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, caffeine_mg, brand, product, category
                      FROM branded_foods
                      WHERE LOWER($1) LIKE '%' || LOWER(brand) || '%'
                      ORDER BY LENGTH(product) DESC LIMIT 3`,
@@ -446,14 +460,21 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
             const useServing = n['energy-kcal_serving'] != null;
             const suffix = useServing ? '_serving' : '_100g';
 
+            const satFat = n[`saturated-fat${suffix}`] ?? n['saturated-fat_100g'];
+            const unsatFat = (satFat != null && (n[`fat${suffix}`] || n['fat_100g']))
+                ? Math.max(0, (n[`fat${suffix}`] || n['fat_100g']) - satFat)
+                : null;
             const result = {
                 calories: Math.round(n[`energy-kcal${suffix}`] || n['energy-kcal_100g'] || 0),
                 protein_g: Math.round((n[`proteins${suffix}`] || n['proteins_100g'] || 0) * 10) / 10,
                 carbs_g: Math.round((n[`carbohydrates${suffix}`] || n['carbohydrates_100g'] || 0) * 10) / 10,
                 fat_g: Math.round((n[`fat${suffix}`] || n['fat_100g'] || 0) * 10) / 10,
+                saturated_fat_g: satFat != null ? Math.round(satFat * 10) / 10 : null,
+                unsaturated_fat_g: unsatFat != null ? Math.round(unsatFat * 10) / 10 : null,
                 fiber_g: Math.round((n[`fiber${suffix}`] || n['fiber_100g'] || 0) * 10) / 10,
                 sugar_g: Math.round((n[`sugars${suffix}`] || n['sugars_100g'] || 0) * 10) / 10,
                 sodium_mg: Math.round((n[`sodium${suffix}`] || n['sodium_100g'] || 0) * 1000),
+                caffeine_mg: Math.round((n[`caffeine${suffix}`] || n['caffeine_100g'] || 0) * (useServing ? 1000 : 10)),
             };
 
             logger.info('OpenFoodFacts match', {
@@ -476,11 +497,12 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
     async _aiNutritionEstimate(description, quantity, unit, userId) {
         await costGovernor.checkBudget(1000);
 
-        const prompt = `Look up the exact nutritional content for: "${description}"${quantity ? ` (${quantity} ${unit || 'serving'})` : ''}.
-This is a real, commercially available product. Provide the actual nutrition facts from the product label.
-If you cannot identify the exact product, estimate based on similar products in the same category.
+        const prompt = `Estimate the total nutritional content for: "${description}"${quantity ? ` (${quantity} ${unit || 'serving'})` : ''}.
+IMPORTANT: If this is a restaurant meal or plate with multiple items, add up ALL components together (meats, sides, rice, sauces, etc.) for the TOTAL plate nutrition.
+For restaurant plates, portions are typically large (300-500g+ of food). A typical restaurant combo plate is 1000-1500+ calories.
+Do NOT underestimate — if unsure, estimate on the higher side based on typical restaurant serving sizes.
 Respond in JSON only (no markdown), all numeric values must be filled in:
-{"calories":___,"protein_g":___,"carbs_g":___,"fat_g":___,"fiber_g":___,"sugar_g":___,"sodium_mg":___}`;
+{"calories":___,"protein_g":___,"carbs_g":___,"fat_g":___,"saturated_fat_g":___,"unsaturated_fat_g":___,"fiber_g":___,"sugar_g":___,"sodium_mg":___,"caffeine_mg":___}`;
 
         const resolved = userId
             ? await providerResolver.getAdapter(userId, 'oggy')
@@ -489,11 +511,11 @@ Respond in JSON only (no markdown), all numeric values must be filled in:
         const result = await resolved.adapter.chatCompletion({
             model: resolved.model,
             messages: [
-                { role: 'system', content: 'You are a nutrition database expert with comprehensive knowledge of commercially available food and beverages. You know exact nutritional labels for energy drinks (Ghost, Monster, Celsius, Red Bull, Bang, Alani Nu, C4, Reign, ZOA), protein supplements (Ghost, Optimum Nutrition, Dymatize), fast food chains, packaged foods, and grocery items. Always provide realistic nutritional values. Never return all zeros unless the item truly has zero calories (water, black coffee, plain tea). For zero-calorie energy drinks, still include sodium and small carb amounts from flavoring. If unsure of exact values, estimate based on similar products. Respond with JSON only.' },
+                { role: 'system', content: 'You are a nutrition database expert with comprehensive knowledge of food and beverages. You know exact nutritional labels for energy drinks (Ghost, Monster, Celsius, Red Bull, Bang, Alani Nu, C4, Reign, ZOA), protein supplements (Ghost, Optimum Nutrition, Dymatize), fast food chains, restaurant menus, packaged foods, and grocery items. For restaurant combo plates/mix plates with multiple items, SUM the nutrition of ALL components (each meat, each side, rice, sauce, salad). Restaurant portions are large — a typical Hawaiian BBQ plate is 1200-1500 cal, a Chipotle burrito is 1000-1200 cal, etc. NEVER underestimate restaurant meals. Always provide realistic nutritional values. Never return all zeros unless the item truly has zero calories (water, black coffee, plain tea). For zero-calorie energy drinks, still include sodium and small carb amounts from flavoring. Respond with JSON only.' },
                 { role: 'user', content: prompt }
             ],
             temperature: 0.2,
-            max_tokens: 150,
+            max_tokens: 250,
             timeout: 10000
         });
 

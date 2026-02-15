@@ -19,6 +19,59 @@ const { costGovernor } = require('../../../shared/middleware/costGovernor');
 
 class HarmonySuggestionService {
 
+    /**
+     * Specificity guard — rejects indicators that are too broad or vague.
+     * Returns { valid: true } or { valid: false, reason: '...' }
+     */
+    _validateIndicatorSpecificity(key, name, description) {
+        // Reject if name is too long (specific metrics have concise names)
+        if (name && name.length > 80) {
+            return { valid: false, reason: `Indicator name too long (${name.length} chars). Must be a concise metric name under 80 chars.` };
+        }
+
+        // Reject if name contains vague/broad phrases
+        const vaguePatterns = [
+            /\bvarious\b/i, /\bmultiple\b/i, /\bseveral\b/i, /\bnumerous\b/i,
+            /\bintegrate\s+data\b/i, /\bintegrate\s+.{10,}\s+data\b/i,
+            /\binform\s+.*indicators?\b/i, /\brelated\s+to\b/i,
+            /\band\s+\w+\s+and\b/i,  // "X and Y and Z" pattern
+            /\bsocioeconomic\s+status.*transportation/i,
+            /\btransportation.*socioeconomic/i,
+        ];
+        const combined = `${name || ''} ${description || ''}`;
+        for (const pattern of vaguePatterns) {
+            if (pattern.test(combined)) {
+                return { valid: false, reason: `Indicator appears too broad/vague: matches pattern "${pattern}". Indicators must be specific, single-metric measurements.` };
+            }
+        }
+
+        // Reject if name/description mentions 3+ different dimension keywords (multi-topic)
+        const dimensionKeywords = {
+            balance: /\b(safety|crime|housing|income|inequality|homeless|economic stability)\b/i,
+            flow: /\b(commute|transit|transportation|labor|employment|infrastructure|mobility)\b/i,
+            compassion: /\b(health|food security|insecurity|eviction|mental health|uninsured)\b/i,
+            discernment: /\b(education|school|college|graduation|library|voter|civic engagement)\b/i,
+            awareness: /\b(environment|community|transparency|wellbeing|quality of life)\b/i,
+            expression: /\b(arts|culture|creative|freedom|cultural participation)\b/i,
+        };
+        const matchedDimensions = Object.entries(dimensionKeywords)
+            .filter(([, regex]) => regex.test(combined))
+            .map(([dim]) => dim);
+        if (matchedDimensions.length >= 3) {
+            return { valid: false, reason: `Indicator spans ${matchedDimensions.length} dimensions (${matchedDimensions.join(', ')}). Must be a single-metric indicator for one dimension.` };
+        }
+
+        // Reject if key is a vague action phrase (e.g. "integrate_american_community_survey_data")
+        if (key && key.length > 60) {
+            return { valid: false, reason: `Indicator key too long (${key.length} chars). Keys should be concise snake_case metric names.` };
+        }
+        if (key && /^(integrate|add|incorporate|include|use)_/.test(key)) {
+            return { valid: false, reason: `Indicator key "${key}" starts with an action verb. Keys should be metric names, not action descriptions.` };
+        }
+
+        return { valid: true };
+    }
+
     async createSuggestion(userId, { node_id, suggestion_type, title, description, payload, source }) {
         const result = await query(`
             INSERT INTO harmony_suggestions (user_id, node_id, suggestion_type, title, description, payload, source)
@@ -60,8 +113,13 @@ class HarmonySuggestionService {
 
         switch (suggestion.suggestion_type) {
             case 'new_indicator':
-                await this._applyNewIndicator(payload, userId);
-                recomputeAll = true; // Indicators affect all nodes
+                await this._applyNewIndicator(payload, userId, suggestion.node_id);
+                // If scoped to a specific node, only recompute that node
+                if (suggestion.node_id) {
+                    affectedNodeId = suggestion.node_id;
+                } else {
+                    recomputeAll = true;
+                }
                 break;
 
             case 'new_data_point':
@@ -81,7 +139,9 @@ class HarmonySuggestionService {
                 break;
 
             case 'model_update':
-                // Model updates are descriptive — just mark as accepted
+                // Try to apply model_update as a real change if payload has structured data
+                await this._applyModelUpdate(payload, userId, suggestion.node_id);
+                recomputeAll = true;
                 break;
 
             default:
@@ -131,11 +191,34 @@ class HarmonySuggestionService {
     // Apply helpers
     // ──────────────────────────────────────────────────
 
-    async _applyNewIndicator(payload, userId) {
-        const { key, name, dimension, direction, unit, description, bounds, weight } = payload;
+    async _applyNewIndicator(payload, userId, nodeId) {
+        let { key, name, dimension, direction, unit, description, bounds, weight } = payload;
         if (!key || !name || !dimension) throw new Error('new_indicator requires key, name, dimension');
 
-        // Insert indicator
+        // Specificity guard — reject broad/vague indicators
+        const specificity = this._validateIndicatorSpecificity(key, name, description);
+        if (!specificity.valid) {
+            logger.warn('Indicator rejected by specificity guard', { key, name, reason: specificity.reason });
+            throw new Error(`Indicator too broad: ${specificity.reason}`);
+        }
+
+        // Auto-clean city-specific indicator names → strip city prefix to make general
+        const cityNames = await query("SELECT LOWER(name) AS name FROM harmony_nodes WHERE scope = 'city'");
+        for (const { name: city } of cityNames.rows) {
+            const cityUnderscore = city.replace(/\s+/g, '_');
+            if (key.toLowerCase().startsWith(cityUnderscore + '_')) {
+                const oldKey = key;
+                key = key.substring(cityUnderscore.length + 1);
+                logger.info('Auto-cleaned city prefix from indicator key', { oldKey, newKey: key, city });
+            }
+            if (name.toLowerCase().startsWith(city + ' ')) {
+                const oldName = name;
+                name = name.substring(city.length + 1);
+                logger.info('Auto-cleaned city prefix from indicator name', { oldName, newName: name, city });
+            }
+        }
+
+        // Insert indicator (global definition)
         await query(`
             INSERT INTO harmony_indicators (key, name, dimension, direction, unit, description)
             VALUES ($1, $2, $3, $4, $5, $6)
@@ -143,13 +226,13 @@ class HarmonySuggestionService {
         `, [key, name, dimension, direction || 'higher_is_better', unit || '', description || '']);
 
         // Insert bounds
-        if (bounds && bounds.min != null && bounds.max != null) {
-            await query(`
-                INSERT INTO harmony_normalization_bounds (indicator_key, version, min_value, max_value, scope)
-                VALUES ($1, 1, $2, $3, 'global')
-                ON CONFLICT (indicator_key, version, scope) DO NOTHING
-            `, [key, bounds.min, bounds.max]);
-        }
+        const minVal = (bounds && bounds.min != null) ? bounds.min : 0;
+        const maxVal = (bounds && bounds.max != null) ? bounds.max : 100;
+        await query(`
+            INSERT INTO harmony_normalization_bounds (indicator_key, version, min_value, max_value, scope)
+            VALUES ($1, 1, $2, $3, 'global')
+            ON CONFLICT (indicator_key, version, scope) DO NOTHING
+        `, [key, minVal, maxVal]);
 
         // Insert weight
         await query(`
@@ -158,7 +241,47 @@ class HarmonySuggestionService {
             ON CONFLICT (version, indicator_key, scope) DO NOTHING
         `, [key, weight || 1.0, userId]);
 
-        logger.info('New indicator added via suggestion', { key, dimension });
+        // Populate indicator values for the target node(s)
+        const indResult = await query('SELECT indicator_id FROM harmony_indicators WHERE key = $1', [key]);
+        if (indResult.rows[0]) {
+            const indicatorId = indResult.rows[0].indicator_id;
+            const dir = direction || 'higher_is_better';
+
+            // Determine which nodes to populate
+            let targetNodes;
+            if (nodeId) {
+                targetNodes = await query('SELECT node_id FROM harmony_nodes WHERE node_id = $1', [nodeId]);
+            } else {
+                targetNodes = await query("SELECT node_id FROM harmony_nodes WHERE scope = 'city'");
+            }
+
+            for (const node of targetNodes.rows) {
+                // Get the node's existing score for this dimension to reverse-normalize
+                const scoreResult = await query('SELECT * FROM harmony_scores WHERE node_id = $1 ORDER BY time_window_start DESC LIMIT 1', [node.node_id]);
+                const dimScore = scoreResult.rows[0] ? (scoreResult.rows[0][dimension] || 0.5) : 0.5;
+
+                // Reverse normalization with jitter
+                let rawValue;
+                if (dir === 'lower_is_better') {
+                    rawValue = maxVal - dimScore * (maxVal - minVal);
+                } else {
+                    rawValue = minVal + dimScore * (maxVal - minVal);
+                }
+                const jitter = 1 + (Math.random() - 0.5) * 0.10;
+                rawValue = Math.max(minVal, Math.min(maxVal, rawValue * jitter));
+                rawValue = Math.round(rawValue * 100) / 100;
+
+                await query(`
+                    INSERT INTO harmony_indicator_values (node_id, indicator_id, time_window_start, time_window_end, raw_value, source_dataset)
+                    VALUES ($1, $2, '2024-01-01', '2024-12-31', $3, 'suggestion_indicator')
+                    ON CONFLICT (node_id, indicator_id, time_window_start) DO NOTHING
+                `, [node.node_id, indicatorId, rawValue]);
+            }
+
+            logger.info('New indicator added via suggestion with data populated', { key, dimension, nodeId, nodesPopulated: targetNodes.rows.length });
+        } else {
+            logger.info('New indicator added via suggestion', { key, dimension });
+        }
     }
 
     async _applyNewDataPoint(payload, userId) {
@@ -199,6 +322,94 @@ class HarmonySuggestionService {
         logger.info('Weight adjusted via suggestion', { indicator_key, weight: proposed_weight });
     }
 
+    async _applyModelUpdate(payload, userId, nodeId) {
+        // Model updates often describe adding a new metric or data source.
+        // Try to extract structured indicator data and apply it.
+        const desc = (payload.change_description || payload.rationale || '').toLowerCase();
+        const title = (payload.title || '').toLowerCase();
+
+        // If the payload has indicator-like fields, treat as new_indicator
+        if (payload.key || payload.indicator_key || payload.dimension) {
+            const indicatorPayload = {
+                key: payload.key || payload.indicator_key || desc.replace(/[^a-z0-9]+/g, '_').substring(0, 50),
+                name: payload.name || payload.change_description || 'Model Update Indicator',
+                dimension: payload.dimension || 'awareness',
+                direction: payload.direction || 'higher_is_better',
+                unit: payload.unit || 'index',
+                description: payload.description || payload.change_description || '',
+                bounds: payload.bounds || { min: 0, max: 100 },
+                weight: payload.weight || 1.0,
+            };
+            try {
+                await this._applyNewIndicator(indicatorPayload, userId, nodeId);
+                return;
+            } catch (err) {
+                logger.warn('Model update failed to apply as indicator', { error: err.message });
+            }
+        }
+
+        // If the description mentions adding a metric/index, try to auto-generate an indicator
+        if (desc.includes('index') || desc.includes('metric') || desc.includes('indicator') ||
+            title.includes('index') || title.includes('metric') || title.includes('add')) {
+            // Extract a general key from the description — strip city names
+            const cityNames = await query("SELECT LOWER(name) AS name FROM harmony_nodes WHERE scope = 'city'");
+            let cleanName = payload.change_description || payload.title || 'Unknown Metric';
+            for (const { name: city } of cityNames.rows) {
+                cleanName = cleanName.replace(new RegExp(city, 'gi'), '').trim();
+            }
+            cleanName = cleanName.replace(/^(add|incorporate|include|the)\s+/i, '').trim();
+            if (!cleanName) cleanName = 'Quality of Life Index';
+
+            // Specificity guard — don't auto-convert broad model_updates to indicators
+            const cleanKey = cleanName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+            const specificity = this._validateIndicatorSpecificity(cleanKey, cleanName, payload.rationale || '');
+            if (!specificity.valid) {
+                logger.info('Model update skipped auto-indicator conversion (too broad)', { cleanName, reason: specificity.reason });
+                return; // Accept as informational only
+            }
+
+            // Determine dimension from context
+            let dimension = 'awareness';
+            const dimKeywords = {
+                balance: ['safety', 'crime', 'housing', 'income', 'inequality', 'homeless'],
+                flow: ['commute', 'transit', 'employment', 'labor', 'job', 'economic'],
+                compassion: ['health', 'food', 'insecurity', 'eviction', 'mental', 'uninsured'],
+                discernment: ['education', 'school', 'college', 'graduation', 'library', 'voter'],
+                awareness: ['civic', 'community', 'transparency', 'engagement', 'wellbeing', 'quality of life'],
+                expression: ['arts', 'culture', 'creative', 'protest', 'freedom'],
+            };
+            const combined = (cleanName + ' ' + (payload.rationale || '')).toLowerCase();
+            for (const [dim, keywords] of Object.entries(dimKeywords)) {
+                if (keywords.some(kw => combined.includes(kw))) {
+                    dimension = dim;
+                    break;
+                }
+            }
+
+            const indicatorPayload = {
+                key: cleanKey,
+                name: cleanName,
+                dimension,
+                direction: 'higher_is_better',
+                unit: 'index',
+                description: payload.rationale || payload.change_description || '',
+                bounds: { min: 0, max: 100 },
+                weight: 1.0,
+            };
+
+            try {
+                await this._applyNewIndicator(indicatorPayload, userId, nodeId);
+                logger.info('Model update applied as new indicator', { key: cleanKey, name: cleanName, dimension });
+                return;
+            } catch (err) {
+                logger.warn('Model update auto-indicator failed', { error: err.message, cleanName });
+            }
+        }
+
+        // Fallback: just log that it was accepted (informational only)
+        logger.info('Model update accepted (informational)', { description: payload.change_description || 'N/A' });
+    }
+
     async _applyNewCity(payload, userId) {
         // Accept both 'name' and 'city_name' fields
         const cityName = payload.name || payload.city_name;
@@ -206,7 +417,10 @@ class HarmonySuggestionService {
         if (!cityName || lat == null || lng == null) throw new Error('new_city requires name, lat, lng');
 
         const existing = await query('SELECT node_id FROM harmony_nodes WHERE LOWER(name) = LOWER($1) AND scope = $2', [cityName, 'city']);
-        if (existing.rows.length > 0) throw new Error(`City '${cityName}' already exists`);
+        if (existing.rows.length > 0) {
+            logger.info('City already exists, skipping add', { cityName });
+            return existing.rows[0].node_id;
+        }
 
         const result = await query(`
             INSERT INTO harmony_nodes (scope, name, geometry, population, metadata)
@@ -343,8 +557,13 @@ class HarmonySuggestionService {
 
         const indicatorList = indicators.rows.map(i => `${i.key} (${i.dimension}, ${i.direction}, ${i.unit})`).join('\n');
         const nodeList = nodes.rows.map(n =>
-            `${n.name}: H=${((n.harmony||0)*100).toFixed(1)}% E=${((n.e_scaled||0)*100).toFixed(1)}% B=${((n.balance||0)*100).toFixed(1)}% F=${((n.flow||0)*100).toFixed(1)}% C=${((n.care||0)*100).toFixed(1)}%`
+            `${n.name} [${n.node_id}]: H=${((n.harmony||0)*100).toFixed(1)}% E=${((n.e_scaled||0)*100).toFixed(1)}% B=${((n.balance||0)*100).toFixed(1)}% F=${((n.flow||0)*100).toFixed(1)}% C=${((n.care||0)*100).toFixed(1)}%`
         ).join('\n');
+        // Build city name→UUID lookup for post-processing
+        const cityNameToId = {};
+        for (const n of nodes.rows) {
+            cityNameToId[n.name.toLowerCase()] = n.node_id;
+        }
         const freshnessInfo = freshness.rows.map(f => `${f.name}: ${f.data_points} data points`).join('\n');
 
         const focusInstruction = focus === 'all' ? 'all types' :
@@ -374,13 +593,25 @@ For each suggestion, respond with a JSON array. Each item must have:
 - "title": short descriptive title
 - "description": 1-2 sentence explanation of why this improves the model
 - "payload": structured data for the suggestion type:
-  - new_indicator: {"key":"snake_case_key","name":"Display Name","dimension":"balance|flow|compassion|discernment|awareness|expression","direction":"higher_is_better|lower_is_better","unit":"per 100k|%|index","description":"What this measures","bounds":{"min":0,"max":100},"weight":1.0,"source_rationale":"Why this metric matters"}
+  - new_indicator: {"key":"snake_case_key","name":"Display Name","dimension":"balance|flow|compassion|discernment|awareness|expression","direction":"higher_is_better|lower_is_better","unit":"per 100k|%|index","description":"What this measures","bounds":{"min":0,"max":100},"weight":1.0,"source_rationale":"Why this metric matters","target_city":"City Name or null if applies globally"}
   - new_data_point: {"indicator_key":"existing_key","node_id":"city_uuid","raw_value":123.4,"source_dataset":"Source name","time_window_start":"2024-01-01"}
   - weight_adjustment: {"indicator_key":"existing_key","current_weight":1.0,"proposed_weight":1.5,"rationale":"Why adjust"}
   - model_update: {"change_description":"What to change","rationale":"Why"}
   - new_city: {"name":"City Name","lat":37.8044,"lng":-122.2712,"population":433031,"country":"US","state":"California","rationale":"Why this city should be tracked"}
 
-Only suggest publicly available, credible data sources. Respond ONLY with the JSON array, no other text.`;
+IMPORTANT RULES:
+- For new_indicator: ONLY suggest GENERAL metrics that apply to ALL cities (e.g., "Air Quality Index", "Median Household Income"). NEVER suggest city-specific indicators (e.g., "Detroit Creative Corridor Index", "Portland Transit Ridership"). The indicator must be a universally measurable metric.
+- EACH indicator must measure EXACTLY ONE specific thing. Never combine multiple topics into one indicator. BAD: "Community Survey covering transportation, education, and health". GOOD: "Average Commute Time (minutes)", "High School Graduation Rate (%)", "Uninsured Rate (%)".
+- Indicator names must be concise (under 60 chars) and be the name of a measurable metric, NOT a description of an action. BAD: "Integrate American Community Survey data into metrics". GOOD: "Labor Force Participation Rate (%)".
+- Each indicator belongs to exactly ONE dimension. If a data source covers multiple dimensions, create SEPARATE indicators for each.
+- For city-specific suggestions, include "target_city" with the exact city name from the list above.
+- Use the UUID shown in brackets [uuid] for node_id fields.
+- Only suggest publicly available, credible data sources.
+- For new_city: NEVER suggest a city that already exists in the list above. Only suggest cities NOT already on the map.
+- For new_indicator: NEVER suggest an indicator with a key that already exists in the indicator list above. Only suggest NEW metrics not already tracked.
+- For model_update: NEVER suggest adding a metric or index that already exists as an indicator above. Only suggest genuinely new methodology changes.
+- For weight_adjustment: ONLY adjust weights for indicators that exist in the list above.
+Respond ONLY with the JSON array, no other text.`;
 
         await costGovernor.checkBudget(8000);
 
@@ -400,12 +631,48 @@ Only suggest publicly available, credible data sources. Respond ONLY with the JS
         // Parse JSON from response
         const suggestions = this._parseJsonSuggestions(r.text);
 
-        // Store each suggestion
+        // Store each suggestion, resolving target_city → node_id
         const stored = [];
         for (const s of suggestions.slice(0, count)) {
             try {
+                // Skip suggestions for things that already exist
+                if (s.suggestion_type === 'new_city') {
+                    const cityName = s.payload?.name || s.payload?.city_name;
+                    if (cityName) {
+                        const exists = await query("SELECT node_id FROM harmony_nodes WHERE LOWER(name) = LOWER($1) AND scope = 'city'", [cityName]);
+                        if (exists.rows.length > 0) {
+                            logger.info('Skipping new_city suggestion for existing city', { cityName });
+                            continue;
+                        }
+                    }
+                }
+                if (s.suggestion_type === 'new_indicator') {
+                    const key = s.payload?.key;
+                    if (key) {
+                        const exists = await query("SELECT indicator_id FROM harmony_indicators WHERE key = $1", [key]);
+                        if (exists.rows.length > 0) {
+                            logger.info('Skipping new_indicator suggestion for existing indicator', { key });
+                            continue;
+                        }
+                    }
+                }
+                if (s.suggestion_type === 'model_update') {
+                    const key = s.payload?.key || s.payload?.indicator_key;
+                    if (key) {
+                        const exists = await query("SELECT indicator_id FROM harmony_indicators WHERE key = $1", [key]);
+                        if (exists.rows.length > 0) {
+                            logger.info('Skipping model_update suggestion for existing indicator', { key });
+                            continue;
+                        }
+                    }
+                }
+                // Resolve target_city to node_id if present
+                let resolvedNodeId = s.payload?.node_id || null;
+                if (!resolvedNodeId && s.payload?.target_city) {
+                    resolvedNodeId = cityNameToId[s.payload.target_city.toLowerCase()] || null;
+                }
                 const saved = await this.createSuggestion(userId, {
-                    node_id: s.payload?.node_id || null,
+                    node_id: resolvedNodeId,
                     suggestion_type: s.suggestion_type,
                     title: s.title,
                     description: s.description,

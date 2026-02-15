@@ -43,7 +43,14 @@ async function loadNutritionSummary(date) {
         document.getElementById('nc-protein').textContent = Math.round(data.total_protein || 0) + 'g';
         document.getElementById('nc-carbs').textContent = Math.round(data.total_carbs || 0) + 'g';
         document.getElementById('nc-fat').textContent = Math.round(data.total_fat || 0) + 'g';
+        const satFat = Math.round(data.total_saturated_fat || 0);
+        const unsatFat = Math.round(data.total_unsaturated_fat || 0);
+        const fatDetail = document.getElementById('nc-fat-detail');
+        if (fatDetail) fatDetail.textContent = (satFat || unsatFat) ? 'Sat ' + satFat + 'g / Unsat ' + unsatFat + 'g' : '';
         document.getElementById('nc-fiber').textContent = Math.round(data.total_fiber || 0) + 'g';
+        document.getElementById('nc-sugar').textContent = Math.round(data.total_sugar || 0) + 'g';
+        document.getElementById('nc-sodium').textContent = Math.round(data.total_sodium || 0) + 'mg';
+        document.getElementById('nc-caffeine').textContent = Math.round(data.total_caffeine || 0) + 'mg';
         document.getElementById('nc-entries').textContent = data.total_entries || 0;
     } catch (e) { /* ignore */ }
 }
@@ -74,7 +81,12 @@ window.editDietNutrition = function(entryId, currentData) {
             '<label>Protein<input type="number" id="edit-pro-' + entryId + '" value="' + (currentData.protein_g || 0) + '"></label>' +
             '<label>Carbs<input type="number" id="edit-carb-' + entryId + '" value="' + (currentData.carbs_g || 0) + '"></label>' +
             '<label>Fat<input type="number" id="edit-fat-' + entryId + '" value="' + (currentData.fat_g || 0) + '"></label>' +
+            '<label>Sat Fat<input type="number" id="edit-satfat-' + entryId + '" value="' + (currentData.saturated_fat_g || 0) + '" step="0.1"></label>' +
+            '<label>Unsat Fat<input type="number" id="edit-unsatfat-' + entryId + '" value="' + (currentData.unsaturated_fat_g || 0) + '" step="0.1"></label>' +
             '<label>Fiber<input type="number" id="edit-fib-' + entryId + '" value="' + (currentData.fiber_g || 0) + '"></label>' +
+            '<label>Sugar<input type="number" id="edit-sug-' + entryId + '" value="' + (currentData.sugar_g || 0) + '"></label>' +
+            '<label>Sodium<input type="number" id="edit-sod-' + entryId + '" value="' + (currentData.sodium_mg || 0) + '"></label>' +
+            '<label>Caffeine<input type="number" id="edit-caf-' + entryId + '" value="' + (currentData.caffeine_mg || 0) + '"></label>' +
         '</div>' +
         '<div class="diet-edit-actions">' +
             '<button class="diet-edit-save" onclick="saveDietNutrition(\'' + entryId + '\')">Save</button>' +
@@ -90,9 +102,12 @@ window.saveDietNutrition = async function(entryId) {
         protein_g: parseFloat(document.getElementById('edit-pro-' + entryId).value) || 0,
         carbs_g: parseFloat(document.getElementById('edit-carb-' + entryId).value) || 0,
         fat_g: parseFloat(document.getElementById('edit-fat-' + entryId).value) || 0,
+        saturated_fat_g: parseFloat(document.getElementById('edit-satfat-' + entryId).value) || 0,
+        unsaturated_fat_g: parseFloat(document.getElementById('edit-unsatfat-' + entryId).value) || 0,
         fiber_g: parseFloat(document.getElementById('edit-fib-' + entryId).value) || 0,
-        sugar_g: 0,
-        sodium_mg: 0
+        sugar_g: parseFloat(document.getElementById('edit-sug-' + entryId).value) || 0,
+        sodium_mg: parseFloat(document.getElementById('edit-sod-' + entryId).value) || 0,
+        caffeine_mg: parseFloat(document.getElementById('edit-caf-' + entryId).value) || 0
     };
     try {
         await apiCall('PUT', '/v0/diet/entries/' + entryId + '/nutrition', data);
@@ -116,9 +131,13 @@ async function loadEntries(date) {
             const item = items.length > 0 ? items[0] : {};
             const cal = items.length > 0 ? Math.round(item.calories || 0) : '?';
             const pro = items.length > 0 ? Math.round(item.protein_g || 0) : '?';
+            const cn = item.custom_nutrients || {};
             const itemJson = items.length > 0 ? JSON.stringify({
                 calories: item.calories || 0, protein_g: item.protein_g || 0,
-                carbs_g: item.carbs_g || 0, fat_g: item.fat_g || 0, fiber_g: item.fiber_g || 0
+                carbs_g: item.carbs_g || 0, fat_g: item.fat_g || 0,
+                saturated_fat_g: cn.saturated_fat_g || 0, unsaturated_fat_g: cn.unsaturated_fat_g || 0,
+                fiber_g: item.fiber_g || 0,
+                sugar_g: item.sugar_g || 0, sodium_mg: item.sodium_mg || 0, caffeine_mg: item.caffeine_mg || 0
             }).replace(/"/g, '&quot;') : '{}';
             return '<div class="diet-entry-card" data-entry-id="' + e.entry_id + '">' +
                 '<div class="diet-entry-info">' +

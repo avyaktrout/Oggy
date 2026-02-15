@@ -10,6 +10,7 @@ const scenarioService = require('../services/scenarioService');
 const auditService = require('../services/auditService');
 const harmonySuggestionService = require('../services/harmonySuggestionService');
 const suggestionLoop = require('../services/harmonySuggestionLoop');
+const harmonySdl = require('../services/harmonySelfDrivenLearning');
 
 // ──────────────────────────────────────────────────
 // Nodes
@@ -736,6 +737,109 @@ router.get('/suggestions/auto/status', async (req, res) => {
         res.json(loop.getStatus());
     } catch (err) {
         logger.logError(err, { operation: 'harmony-suggestion-loop-status' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ──────────────────────────────────────────────────
+// Maintenance: Clean up broad/vague indicators
+// ──────────────────────────────────────────────────
+
+router.post('/maintenance/cleanup-broad-indicators', async (req, res) => {
+    try {
+        const userId = req.userId || req.body.user_id;
+        const dryRun = req.body.dry_run !== false; // default dry_run=true
+
+        // Find indicators that fail the specificity guard
+        const allIndicators = await query('SELECT indicator_id, key, name, description FROM harmony_indicators');
+        const broad = [];
+
+        for (const ind of allIndicators.rows) {
+            const check = harmonySuggestionService._validateIndicatorSpecificity(ind.key, ind.name, ind.description);
+            if (!check.valid) {
+                broad.push({ ...ind, reason: check.reason });
+            }
+        }
+
+        if (dryRun) {
+            return res.json({ dry_run: true, broad_indicators: broad, count: broad.length });
+        }
+
+        // Actually remove broad indicators and their associated data
+        const removed = [];
+        for (const ind of broad) {
+            // Remove indicator values
+            await query('DELETE FROM harmony_indicator_values WHERE indicator_id = $1', [ind.indicator_id]);
+            // Remove weights
+            await query('DELETE FROM harmony_weights WHERE indicator_key = $1', [ind.key]);
+            // Remove normalization bounds
+            await query('DELETE FROM harmony_normalization_bounds WHERE indicator_key = $1', [ind.key]);
+            // Remove the indicator itself
+            await query('DELETE FROM harmony_indicators WHERE indicator_id = $1', [ind.indicator_id]);
+            removed.push({ key: ind.key, name: ind.name, reason: ind.reason });
+            logger.info('Removed broad indicator', { key: ind.key, name: ind.name, reason: ind.reason });
+        }
+
+        // Recompute scores for all city nodes after cleanup
+        if (removed.length > 0) {
+            const allNodes = await query("SELECT node_id FROM harmony_nodes WHERE scope = 'city'");
+            for (const n of allNodes.rows) {
+                try {
+                    await harmonyEngine.computeScores(n.node_id);
+                } catch (err) {
+                    logger.warn('Score recompute after cleanup failed', { nodeId: n.node_id, error: err.message });
+                }
+            }
+        }
+
+        await auditService.logAction(userId, 'cleanup_broad_indicators', 'maintenance', null, null, { removed_count: removed.length, removed });
+
+        res.json({ dry_run: false, removed, count: removed.length });
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-cleanup-broad-indicators' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ──────────────────────────────────────────────────
+// SDL-driven suggestion generation
+// ──────────────────────────────────────────────────
+
+router.post('/suggestions/sdl/start', async (req, res) => {
+    try {
+        const userId = req.userId || req.body.user_id;
+        const sdl = harmonySdl.getInstance(userId, 'suggestions');
+        const result = await sdl.start(userId, {
+            mode: 'suggestions',
+            intervalMinutes: req.body.interval_minutes || 1,
+            attemptsPerSession: req.body.attempts || 5
+        });
+        res.json(result);
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-sdl-suggestion-start' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.post('/suggestions/sdl/stop', async (req, res) => {
+    try {
+        const userId = req.userId || req.body.user_id;
+        const sdl = harmonySdl.getInstance(userId, 'suggestions');
+        const result = sdl.stop();
+        res.json(result);
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-sdl-suggestion-stop' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.get('/suggestions/sdl/status', async (req, res) => {
+    try {
+        const userId = req.userId || req.query.user_id;
+        const sdl = harmonySdl.getInstance(userId, 'suggestions');
+        res.json(sdl.getStats());
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-sdl-suggestion-status' });
         res.status(500).json({ error: err.message });
     }
 });

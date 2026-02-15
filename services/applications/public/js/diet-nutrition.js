@@ -34,7 +34,14 @@ async function loadSummary(date) {
         document.getElementById('nc-protein').textContent = Math.round(data.total_protein || 0) + 'g';
         document.getElementById('nc-carbs').textContent = Math.round(data.total_carbs || 0) + 'g';
         document.getElementById('nc-fat').textContent = Math.round(data.total_fat || 0) + 'g';
+        const satFat = Math.round(data.total_saturated_fat || 0);
+        const unsatFat = Math.round(data.total_unsaturated_fat || 0);
+        const fatDetail = document.getElementById('nc-fat-detail');
+        if (fatDetail) fatDetail.textContent = (satFat || unsatFat) ? 'Sat ' + satFat + 'g / Unsat ' + unsatFat + 'g' : '';
         document.getElementById('nc-fiber').textContent = Math.round(data.total_fiber || 0) + 'g';
+        document.getElementById('nc-sugar').textContent = Math.round(data.total_sugar || 0) + 'g';
+        document.getElementById('nc-sodium').textContent = Math.round(data.total_sodium || 0) + 'mg';
+        document.getElementById('nc-caffeine').textContent = Math.round(data.total_caffeine || 0) + 'mg';
         document.getElementById('nc-entries').textContent = data.total_entries || 0;
     } catch (e) { /* ignore */ }
 }
