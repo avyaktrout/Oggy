@@ -10,12 +10,15 @@ const { v4: uuidv4 } = require('uuid');
 const { query, close } = require('./shared/utils/db');
 const logger = require('./shared/utils/logger');
 const { injectUserIdFromHeader } = require('./shared/middleware/internalService');
+const { getClient: getRedisClient } = require('./shared/utils/redisClient');
 
 // Domain routes
 const harmonyRouter = require('./domains/harmony/routes/harmony');
 const harmonyObserverRouter = require('./domains/harmony/routes/harmonyObserver');
 const continuousLearningRouter = require('./shared/routes/continuousLearning');
 const harmonyEngine = require('./domains/harmony/services/harmonyEngine');
+const harmonySuggestionService = require('./domains/harmony/services/harmonySuggestionService');
+const harmonyObserverService = require('./domains/harmony/services/harmonyObserverService');
 
 const app = express();
 const PORT = process.env.PORT || 3013;
@@ -98,6 +101,21 @@ const server = app.listen(PORT, async () => {
     try {
         await query('SELECT 1');
         logger.info('Database connection verified (harmony)');
+
+        // Initialize Redis and inject into domain services
+        try {
+            const redis = await getRedisClient();
+            if (redis) {
+                harmonyEngine.setRedisClient(redis);
+                harmonySuggestionService.setRedisClient(redis);
+                harmonyObserverService.setRedisClient(redis);
+                logger.info('Redis connected and injected into harmony services');
+            } else {
+                logger.warn('Redis unavailable — NEW indicator badges disabled');
+            }
+        } catch (redisErr) {
+            logger.warn('Redis init failed (non-blocking)', { error: redisErr.message });
+        }
 
         // Auto-migrate: add 'new_city' to suggestion type constraint
         try {

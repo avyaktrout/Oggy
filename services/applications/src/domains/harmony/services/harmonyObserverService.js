@@ -10,9 +10,16 @@ const { query } = require('../../../shared/utils/db');
 const logger = require('../../../shared/utils/logger');
 const harmonyEngine = require('./harmonyEngine');
 
+const REDIS_KEY = 'harmony:new_indicators';
+
 class HarmonyObserverService {
     constructor() {
         this._scheduleInterval = null;
+        this.redis = null;
+    }
+
+    setRedisClient(client) {
+        this.redis = client;
     }
 
     // ── Config ───────────────────────────────────────
@@ -219,6 +226,11 @@ class HarmonyObserverService {
     }
 
     async applyPack(packId, userId) {
+        // Clear new indicator badges — any new indicators added below will be re-marked
+        if (this.redis) {
+            try { await this.redis.del(REDIS_KEY); } catch (_) {}
+        }
+
         const pack = await this.getPack(packId);
         if (!pack) throw new Error('Pack not found');
 
@@ -364,6 +376,11 @@ class HarmonyObserverService {
             INSERT INTO harmony_weights (version, indicator_key, weight, scope, created_by)
             VALUES (1, $1, $2, 'global', 'observer') ON CONFLICT (version, indicator_key, scope) DO NOTHING
         `, [payload.key, payload.weight || 1.0]);
+
+        // Mark indicator as new in Redis
+        if (this.redis) {
+            try { await this.redis.sAdd(REDIS_KEY, payload.key); } catch (_) {}
+        }
     }
 
     async _applyNewDataPoint(payload) {

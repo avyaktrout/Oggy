@@ -17,7 +17,16 @@ const auditService = require('./auditService');
 const providerResolver = require('../../../shared/providers/providerResolver');
 const { costGovernor } = require('../../../shared/middleware/costGovernor');
 
+const REDIS_KEY = 'harmony:new_indicators';
+
 class HarmonySuggestionService {
+    constructor() {
+        this.redis = null;
+    }
+
+    setRedisClient(client) {
+        this.redis = client;
+    }
 
     /**
      * Specificity guard — rejects indicators that are too broad or vague.
@@ -105,6 +114,12 @@ class HarmonySuggestionService {
         if (!sugResult.rows[0]) throw new Error('Suggestion not found');
         const suggestion = sugResult.rows[0];
         if (suggestion.status !== 'pending') throw new Error(`Suggestion already ${suggestion.status}`);
+
+        // Only clear NEW badges when the suggestion type can add indicators
+        // (new_indicator always adds; model_update may fall through to _applyNewIndicator)
+        if (this.redis && (suggestion.suggestion_type === 'new_indicator' || suggestion.suggestion_type === 'model_update')) {
+            try { await this.redis.del(REDIS_KEY); } catch (_) {}
+        }
 
         const payload = suggestion.payload;
         let affectedNodeId = suggestion.node_id;
@@ -281,6 +296,11 @@ class HarmonySuggestionService {
             logger.info('New indicator added via suggestion with data populated', { key, dimension, nodeId, nodesPopulated: targetNodes.rows.length });
         } else {
             logger.info('New indicator added via suggestion', { key, dimension });
+        }
+
+        // Mark indicator as new in Redis
+        if (this.redis) {
+            try { await this.redis.sAdd(REDIS_KEY, key); } catch (_) {}
         }
     }
 

@@ -19,7 +19,16 @@ const { query } = require('../../../shared/utils/db');
 const logger = require('../../../shared/utils/logger');
 const crypto = require('crypto');
 
+const REDIS_KEY = 'harmony:new_indicators';
+
 class HarmonyEngine {
+    constructor() {
+        this.redis = null;
+    }
+
+    setRedisClient(client) {
+        this.redis = client;
+    }
 
     /**
      * Normalize a raw value to 0-1 using min-max bounds
@@ -169,6 +178,11 @@ class HarmonyEngine {
      * Compute scores for all nodes of a given scope
      */
     async computeAllNodes(scope = 'city', timeWindowStart = '2024-01-01', timeWindowEnd = '2024-12-31') {
+        // Clear new indicator badges on full recompute
+        if (this.redis) {
+            try { await this.redis.del(REDIS_KEY); } catch (_) {}
+        }
+
         const nodesResult = await query('SELECT node_id FROM harmony_nodes WHERE scope = $1', [scope]);
         const results = [];
         for (const row of nodesResult.rows) {
@@ -203,6 +217,34 @@ class HarmonyEngine {
             WHERE node_id = $1 AND time_window_start = $2
         `, [nodeId, timeWindowStart]);
 
+        // Check Redis for new indicator keys
+        let newIndicatorKeys = new Set();
+        if (this.redis) {
+            try {
+                const members = await this.redis.sMembers(REDIS_KEY);
+                newIndicatorKeys = new Set(members);
+            } catch (err) {
+                logger.debug('Redis SMEMBERS failed (graceful)', { error: err.message });
+            }
+        }
+
+        // Get recent accepted actions (last 5)
+        let recentActions = [];
+        try {
+            const actionsResult = await query(`
+                SELECT suggestion_type, title, description, resolved_at
+                FROM harmony_suggestions
+                WHERE status = 'accepted'
+                ORDER BY resolved_at DESC LIMIT 5
+            `);
+            recentActions = actionsResult.rows.map(r => ({
+                type: r.suggestion_type,
+                title: r.title,
+                description: r.description,
+                resolved_at: r.resolved_at,
+            }));
+        } catch (_) {}
+
         return {
             indicators: result.rows.map(r => ({
                 key: r.key,
@@ -214,9 +256,10 @@ class HarmonyEngine {
                 normalized_value: r.normalized_value != null ? parseFloat(r.normalized_value) : null,
                 bounds: { min: parseFloat(r.bound_min), max: parseFloat(r.bound_max) },
                 weight: parseFloat(r.weight || 1),
-                created_at: r.indicator_created_at,
+                is_new: newIndicatorKeys.has(r.key),
             })),
             scores: scoresResult.rows[0] || null,
+            recent_actions: recentActions,
         };
     }
 

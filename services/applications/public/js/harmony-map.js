@@ -221,6 +221,7 @@ async function showExplainability() {
 
         renderIndicatorTable(explainData.indicators || []);
         renderDrivers(driversData);
+        renderRecentActions(explainData.recent_actions || []);
 
         document.getElementById('explain-section').style.display = 'block';
         document.getElementById('drivers-section').style.display = 'grid';
@@ -232,15 +233,13 @@ async function showExplainability() {
 
 function renderIndicatorTable(indicators) {
     const dimClass = { balance: 'dim-balance', flow: 'dim-flow', compassion: 'dim-compassion', discernment: 'dim-discernment', awareness: 'dim-awareness', expression: 'dim-expression' };
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
     const tbody = document.getElementById('indicator-tbody');
     tbody.innerHTML = indicators.map(ind => {
         const norm = ind.normalized_value != null ? (ind.normalized_value * 100).toFixed(1) + '%' : '—';
         const cls = dimClass[ind.dimension] || '';
         const dirIcon = ind.direction === 'lower_is_better' ? '<span class="dir-icon" title="Lower is better">&#8595;</span>' : '<span class="dir-icon" title="Higher is better">&#8593;</span>';
-        const isNew = ind.created_at && new Date(ind.created_at) > sevenDaysAgo;
-        const newBadge = isNew ? ' <span class="new-badge">NEW</span>' : '';
+        const newBadge = ind.is_new ? ' <span class="new-badge">NEW</span>' : '';
         return `<tr data-key="${ind.key}" data-dimension="${ind.dimension}">
             <td title="${ind.description || ''}">${ind.name}${newBadge} ${ind.unit ? '<span style="color:var(--text-muted);font-size:11px">(' + ind.unit + ')</span>' : ''}</td>
             <td><span class="dim-badge ${cls}">${ind.dimension}</span></td>
@@ -250,6 +249,52 @@ function renderIndicatorTable(indicators) {
             <td>${ind.weight}</td>
         </tr>`;
     }).join('');
+}
+
+function renderRecentActions(actions) {
+    const container = document.getElementById('recent-actions');
+    if (!container) return;
+    if (!actions || actions.length === 0) {
+        container.style.display = 'none';
+        return;
+    }
+
+    const typeLabels = {
+        new_indicator: 'New Indicator',
+        model_update: 'Model Update',
+        weight_adjustment: 'Weight Change',
+        new_data_point: 'New Data',
+        new_city: 'New City',
+    };
+
+    const timeAgo = (dateStr) => {
+        if (!dateStr) return '';
+        const diff = Date.now() - new Date(dateStr).getTime();
+        const mins = Math.floor(diff / 60000);
+        if (mins < 1) return 'just now';
+        if (mins < 60) return `${mins}m ago`;
+        const hrs = Math.floor(mins / 60);
+        if (hrs < 24) return `${hrs}h ago`;
+        const days = Math.floor(hrs / 24);
+        return `${days}d ago`;
+    };
+
+    container.style.display = 'block';
+    container.innerHTML = `
+        <h3 style="font-size:14px;margin:0 0 8px;color:var(--text)">Recent Actions</h3>
+        ${actions.map(a => `
+            <div style="padding:8px 10px;margin:4px 0;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:12px">
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                    <div>
+                        <span class="action-type action-type-${a.type}">${typeLabels[a.type] || a.type}</span>
+                        <span style="font-weight:600;margin-left:6px">${a.title}</span>
+                    </div>
+                    <span style="color:var(--text-muted);font-size:11px">${timeAgo(a.resolved_at)}</span>
+                </div>
+                ${a.description ? `<div style="color:var(--text-muted);font-size:11px;margin-top:3px">${a.description}</div>` : ''}
+            </div>
+        `).join('')}
+    `;
 }
 
 function renderDrivers(data) {
