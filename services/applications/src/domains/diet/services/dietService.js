@@ -9,6 +9,7 @@ const logger = require('../../../shared/utils/logger');
 const { costGovernor } = require('../../../shared/middleware/costGovernor');
 const circuitBreakerRegistry = require('../../../shared/utils/circuitBreakerRegistry');
 const providerResolver = require('../../../shared/providers/providerResolver');
+const usdaService = require('../../../shared/services/usdaService');
 
 const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory-service:3000';
 
@@ -37,13 +38,14 @@ class DietService {
                 const customNutrients = {};
                 if (nutritionData.saturated_fat_g != null) customNutrients.saturated_fat_g = nutritionData.saturated_fat_g;
                 if (nutritionData.unsaturated_fat_g != null) customNutrients.unsaturated_fat_g = nutritionData.unsaturated_fat_g;
+                const source = nutritionData._source || 'ai_estimated';
                 await query(
                     `INSERT INTO v3_diet_items (entry_id, name, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, caffeine_mg, custom_nutrients, source)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'ai_estimated')`,
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
                     [entry.entry_id, description, nutritionData.calories, nutritionData.protein_g,
                      nutritionData.carbs_g, nutritionData.fat_g, nutritionData.fiber_g,
                      nutritionData.sugar_g, nutritionData.sodium_mg, nutritionData.caffeine_mg || 0,
-                     JSON.stringify(customNutrients)]
+                     JSON.stringify(customNutrients), source]
                 );
             }
         } catch (err) {
@@ -321,7 +323,7 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
     }
 
     // --- Nutrition Analysis ---
-    // Lookup chain: user-corrected → branded_foods (fuzzy) → OpenFoodFacts API → AI estimation
+    // Lookup chain: user-corrected → branded_foods → USDA (with LLM decomposition) → OpenFoodFacts → AI estimation
     async _analyzeNutrition(description, quantity, unit, userId) {
         try {
             // 1. Check for previous user-corrected entry with same description
@@ -344,20 +346,204 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
 
             // 2. Check branded foods database (fuzzy: match brand + any word overlap)
             const brandedResult = await this._lookupBrandedFoods(description);
-            if (brandedResult) return brandedResult;
+            if (brandedResult) { brandedResult._source = 'branded_db'; return brandedResult; }
 
-            // 3. Try OpenFoodFacts API (free, no key needed, massive product database)
+            // 3. USDA FoodData Central (with LLM decomposition for complex foods)
+            const usdaResult = await this._lookupUSDA(description, quantity, unit, userId);
+            if (usdaResult) return usdaResult;
+
+            // 4. Try OpenFoodFacts API (free, no key needed, massive product database)
             const offResult = await this._lookupOpenFoodFacts(description);
             if (offResult) {
                 logger.debug('Using OpenFoodFacts data for: ' + description);
+                offResult._source = 'openfoodfacts';
                 return offResult;
             }
 
-            // 4. Fall back to AI estimation
+            // 5. Fall back to AI estimation
             return await this._aiNutritionEstimate(description, quantity, unit, userId);
         } catch (err) {
             logger.warn('Nutrition analysis failed', { error: err.message, description });
             return { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0, sugar_g: 0, sodium_mg: 0, caffeine_mg: 0 };
+        }
+    }
+
+    /**
+     * USDA lookup with LLM decomposition for complex foods.
+     * Simple foods ("banana") → direct USDA search.
+     * Complex foods ("chicken burrito with rice and beans") → LLM breaks into items → USDA each → sum.
+     */
+    async _lookupUSDA(description, quantity, unit, userId) {
+        try {
+            const words = description.trim().split(/\s+/);
+            const isComplex = words.length >= 4 ||
+                /\b(with|and|plus|also)\b/i.test(description) ||
+                description.includes(',');
+
+            if (isComplex) {
+                const decomposed = await this._decomposeFood(description, userId);
+                if (decomposed && decomposed.length > 0) {
+                    const results = await Promise.all(
+                        decomposed.map(async (item) => {
+                            const nutrition = await usdaService.lookup(item.item);
+                            if (!nutrition) return null;
+                            return usdaService.scaleByQuantity(nutrition, item.grams, 'g');
+                        })
+                    );
+
+                    const valid = results.filter(r => r !== null);
+                    if (valid.length > 0 && valid.length >= decomposed.length * 0.5) {
+                        // Sum all components
+                        const summed = {
+                            calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0,
+                            saturated_fat_g: 0, unsaturated_fat_g: 0,
+                            fiber_g: 0, sugar_g: 0, sodium_mg: 0, caffeine_mg: 0
+                        };
+                        for (const r of valid) {
+                            summed.calories += r.calories || 0;
+                            summed.protein_g += r.protein_g || 0;
+                            summed.carbs_g += r.carbs_g || 0;
+                            summed.fat_g += r.fat_g || 0;
+                            summed.saturated_fat_g += r.saturated_fat_g || 0;
+                            summed.unsaturated_fat_g += (r.unsaturated_fat_g || 0);
+                            summed.fiber_g += r.fiber_g || 0;
+                            summed.sugar_g += r.sugar_g || 0;
+                            summed.sodium_mg += r.sodium_mg || 0;
+                            summed.caffeine_mg += r.caffeine_mg || 0;
+                        }
+                        // Round totals
+                        summed.calories = Math.round(summed.calories);
+                        summed.protein_g = Math.round(summed.protein_g * 10) / 10;
+                        summed.carbs_g = Math.round(summed.carbs_g * 10) / 10;
+                        summed.fat_g = Math.round(summed.fat_g * 10) / 10;
+                        summed.saturated_fat_g = Math.round(summed.saturated_fat_g * 10) / 10;
+                        summed.unsaturated_fat_g = Math.round(summed.unsaturated_fat_g * 10) / 10;
+                        summed.fiber_g = Math.round(summed.fiber_g * 10) / 10;
+                        summed.sugar_g = Math.round(summed.sugar_g * 10) / 10;
+                        summed.sodium_mg = Math.round(summed.sodium_mg);
+                        summed.caffeine_mg = Math.round(summed.caffeine_mg);
+
+                        logger.info('USDA decomposed lookup', {
+                            description,
+                            components: decomposed.length,
+                            matched: valid.length,
+                            totalCalories: summed.calories
+                        });
+                        summed._source = 'usda';
+                        return summed;
+                    }
+                }
+            }
+
+            // Simple food or decomposition failed — try direct USDA search
+            const nutrition = await usdaService.lookup(description);
+            if (!nutrition) return null;
+
+            // Scale by quantity if provided
+            let scaled = usdaService.scaleByQuantity(nutrition, quantity, unit);
+
+            // If still per-100g (no USDA serving size, unit was 'serving'/unrecognized),
+            // estimate a typical serving size via LLM
+            const isUnscaled = scaled.calories === nutrition.calories && !nutrition._servingSizeG;
+            const needsServing = !unit || ['serving', 'piece', 'cup', 'bowl', 'plate', 'glass', 'bottle', 'can', 'slice'].includes((unit || '').toLowerCase());
+            if (isUnscaled && needsServing) {
+                const estimatedG = await this._estimateServingSize(description, userId);
+                if (estimatedG > 0) {
+                    scaled = usdaService.scaleByQuantity({ ...nutrition, _servingSizeG: estimatedG }, quantity || 1, unit || 'serving');
+                    logger.info('USDA serving size estimated by LLM', { description, estimatedG, scaledCalories: scaled.calories });
+                }
+            }
+
+            scaled._source = 'usda';
+            return scaled;
+        } catch (err) {
+            logger.debug('USDA lookup failed', { error: err.message, description });
+            return null;
+        }
+    }
+
+    /**
+     * Use LLM to decompose a complex food description into individual USDA-searchable items.
+     * Returns: [{ item: "chicken breast", grams: 170 }, { item: "white rice", grams: 200 }]
+     */
+    async _decomposeFood(description, userId) {
+        try {
+            await costGovernor.checkBudget(500);
+
+            const resolved = userId
+                ? await providerResolver.getAdapter(userId, 'oggy')
+                : await providerResolver.getAdapter('system', 'oggy');
+
+            const result = await resolved.adapter.chatCompletion({
+                model: resolved.model,
+                messages: [
+                    { role: 'system', content: 'Break down composite food descriptions into individual ingredients with estimated gram weights for nutritional database lookup. Return ONLY a JSON array. Each item should be a simple, common food name that would appear in USDA FoodData Central (e.g. "chicken breast cooked" not "grilled herb-crusted chicken"). Estimate realistic portion sizes in grams. For restaurant meals, use generous portions.' },
+                    { role: 'user', content: `Break this into individual items with gram weights:\n"${description}"\n\nReturn JSON array only: [{"item":"...","grams":...}]` }
+                ],
+                temperature: 0,
+                max_tokens: 200,
+                timeout: 5000
+            });
+
+            costGovernor.recordUsage(result.tokens_used || 150);
+
+            const jsonStr = result.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            const match = jsonStr.match(/\[[\s\S]*\]/);
+            if (!match) return null;
+
+            const items = JSON.parse(match[0]);
+            if (!Array.isArray(items) || items.length === 0) return null;
+
+            // Validate structure
+            const valid = items.filter(i => i.item && typeof i.item === 'string' && i.grams > 0);
+            logger.debug('Food decomposition', { description, items: valid });
+            return valid.length > 0 ? valid : null;
+        } catch (err) {
+            logger.debug('Food decomposition failed', { error: err.message, description });
+            return null;
+        }
+    }
+
+    /**
+     * Estimate typical serving size in grams for a food item via LLM.
+     * Used when USDA returns per-100g data but no serving size, and user said "1 serving".
+     * Returns grams (number) or 0 on failure.
+     */
+    async _estimateServingSize(description, userId) {
+        try {
+            await costGovernor.checkBudget(200);
+
+            const resolved = userId
+                ? await providerResolver.getAdapter(userId, 'oggy')
+                : await providerResolver.getAdapter('system', 'oggy');
+
+            const result = await resolved.adapter.chatCompletion({
+                model: resolved.model,
+                messages: [
+                    { role: 'system', content: 'Estimate the typical serving size in grams for a food or drink item. Consider standard restaurant/commercial portions. For drinks, use ml (≈ grams). Return ONLY a JSON object: {"grams": <number>}' },
+                    { role: 'user', content: `What is one typical serving of "${description}" in grams?\nReturn JSON only: {"grams": <number>}` }
+                ],
+                temperature: 0,
+                max_tokens: 50,
+                timeout: 5000
+            });
+
+            costGovernor.recordUsage(result.tokens_used || 80);
+
+            const jsonStr = result.text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            const match = jsonStr.match(/\{[\s\S]*\}/);
+            if (!match) return 0;
+
+            const parsed = JSON.parse(match[0]);
+            const grams = parsed.grams || parsed.g || 0;
+            if (grams > 0 && grams < 5000) {
+                logger.debug('Serving size estimated', { description, grams });
+                return grams;
+            }
+            return 0;
+        } catch (err) {
+            logger.debug('Serving size estimation failed', { error: err.message, description });
+            return 0;
         }
     }
 

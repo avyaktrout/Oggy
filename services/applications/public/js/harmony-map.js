@@ -259,14 +259,6 @@ function renderRecentActions(actions) {
         return;
     }
 
-    const typeLabels = {
-        new_indicator: 'New Indicator',
-        model_update: 'Model Update',
-        weight_adjustment: 'Weight Change',
-        new_data_point: 'New Data',
-        new_city: 'New City',
-    };
-
     const timeAgo = (dateStr) => {
         if (!dateStr) return '';
         const diff = Date.now() - new Date(dateStr).getTime();
@@ -281,62 +273,45 @@ function renderRecentActions(actions) {
 
     const esc = (s) => { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
 
-    const buildDetails = (a) => {
-        const p = a.payload || {};
-        const lines = [];
-        if (a.type === 'new_indicator') {
-            if (p.name) lines.push(`<strong>Indicator:</strong> ${esc(p.name)}`);
-            if (p.dimension) lines.push(`<strong>Dimension:</strong> ${p.dimension}`);
-            if (p.unit) lines.push(`<strong>Unit:</strong> ${esc(p.unit)}`);
-            if (p.direction) lines.push(`<strong>Direction:</strong> ${p.direction === 'lower_is_better' ? 'Lower is better' : 'Higher is better'}`);
-            if (p.bounds) lines.push(`<strong>Range:</strong> ${p.bounds.min} – ${p.bounds.max}`);
-            if (p.weight) lines.push(`<strong>Weight:</strong> ${p.weight}`);
-            if (p.dataset_name) lines.push(`<strong>Data source:</strong> ${esc(p.dataset_name)}`);
-            if (p.dataset_url) lines.push(`<strong>URL:</strong> <a href="${p.dataset_url}" target="_blank" rel="noopener" style="color:#6366f1">${esc(p.dataset_url)}</a>`);
-            if (p.description) lines.push(`<strong>What it measures:</strong> ${esc(p.description)}`);
-        } else if (a.type === 'weight_adjustment') {
-            if (p.indicator_key) lines.push(`<strong>Indicator:</strong> ${esc(p.indicator_key)}`);
-            if (p.current_weight != null) lines.push(`<strong>Previous weight:</strong> ${p.current_weight}`);
-            if (p.proposed_weight != null) lines.push(`<strong>New weight:</strong> ${p.proposed_weight}`);
-            if (p.rationale) lines.push(`<strong>Rationale:</strong> ${esc(p.rationale)}`);
-        } else if (a.type === 'new_data_point') {
-            if (p.indicator_key) lines.push(`<strong>Indicator:</strong> ${esc(p.indicator_key)}`);
-            if (p.raw_value != null) lines.push(`<strong>Value:</strong> ${p.raw_value}`);
-            if (p.source_dataset) lines.push(`<strong>Source:</strong> ${esc(p.source_dataset)}`);
-        } else if (a.type === 'model_update') {
-            if (p.change_description) lines.push(`<strong>Change:</strong> ${esc(p.change_description)}`);
-            if (p.rationale) lines.push(`<strong>Rationale:</strong> ${esc(p.rationale)}`);
-            if (p.name) lines.push(`<strong>Indicator created:</strong> ${esc(p.name)}`);
-            if (p.dimension) lines.push(`<strong>Dimension:</strong> ${p.dimension}`);
-        } else if (a.type === 'new_city') {
-            if (p.name || p.city_name) lines.push(`<strong>City:</strong> ${esc(p.name || p.city_name)}`);
-            if (p.state) lines.push(`<strong>State:</strong> ${esc(p.state)}`);
-            if (p.population) lines.push(`<strong>Population:</strong> ${Number(p.population).toLocaleString()}`);
+    const renderAction = (a) => {
+        if (a.type === 'score_change') {
+            const color = a.direction === 'up' ? '#22c55e' : '#ef4444';
+            const arrow = a.direction === 'up' ? '&#9650;' : '&#9660;';
+            return `<div style="padding:6px 10px;margin:4px 0;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:12px;display:flex;justify-content:space-between;align-items:center">
+                <div style="display:flex;align-items:center;gap:6px">
+                    <span style="color:${color};font-size:10px">${arrow}</span>
+                    <span style="font-weight:600">${esc(a.title)}</span>
+                    <span style="color:${color};font-size:11px">(${esc(a.description)})</span>
+                </div>
+                <span style="color:var(--text-muted);font-size:11px;white-space:nowrap">${timeAgo(a.date)}</span>
+            </div>`;
+        } else if (a.type === 'new_data') {
+            const dimClass = { balance: 'dim-balance', flow: 'dim-flow', compassion: 'dim-compassion', discernment: 'dim-discernment', awareness: 'dim-awareness', expression: 'dim-expression' };
+            return `<div style="padding:6px 10px;margin:4px 0;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:12px;display:flex;justify-content:space-between;align-items:center">
+                <div style="display:flex;align-items:center;gap:6px">
+                    <span style="color:#6366f1;font-size:10px">&#9679;</span>
+                    <span style="font-weight:600">${esc(a.title)}</span>
+                    <span class="dim-badge ${dimClass[a.description] || ''}" style="font-size:10px">${esc(a.description)}</span>
+                </div>
+                <span style="color:var(--text-muted);font-size:11px;white-space:nowrap">${timeAgo(a.date)}</span>
+            </div>`;
+        } else if (a.type === 'alert') {
+            const sColor = a.severity === 'critical' ? '#ef4444' : '#f59e0b';
+            return `<div style="padding:6px 10px;margin:4px 0;background:var(--surface);border:1px solid var(--border);border-left:3px solid ${sColor};border-radius:var(--radius);font-size:12px;display:flex;justify-content:space-between;align-items:center">
+                <div style="display:flex;align-items:center;gap:6px">
+                    <span style="color:${sColor};font-size:11px">&#9888;</span>
+                    <span>${esc(a.title)}</span>
+                </div>
+                <span style="color:var(--text-muted);font-size:11px;white-space:nowrap">${timeAgo(a.date)}</span>
+            </div>`;
         }
-        if (lines.length === 0 && a.description) {
-            lines.push(esc(a.description));
-        }
-        return lines.length ? lines.join('<br>') : 'No additional details available.';
+        return '';
     };
 
     container.style.display = 'block';
     container.innerHTML = `
-        <h3 style="font-size:14px;margin:0 0 8px;color:var(--text)">Recent Actions</h3>
-        ${actions.map((a, i) => `
-            <div class="action-card" style="padding:8px 10px;margin:4px 0;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:12px;cursor:pointer" onclick="this.querySelector('.action-details').style.display=this.querySelector('.action-details').style.display==='none'?'block':'none';this.querySelector('.action-chevron').textContent=this.querySelector('.action-details').style.display==='none'?'›':'⌄'">
-                <div style="display:flex;justify-content:space-between;align-items:center">
-                    <div style="display:flex;align-items:center;gap:6px">
-                        <span class="action-chevron" style="color:var(--text-muted);font-size:13px;width:10px">›</span>
-                        <span class="action-type action-type-${a.type}">${typeLabels[a.type] || a.type}</span>
-                        <span style="font-weight:600">${esc(a.title)}</span>
-                    </div>
-                    <span style="color:var(--text-muted);font-size:11px;white-space:nowrap;margin-left:8px">${timeAgo(a.resolved_at)}</span>
-                </div>
-                <div class="action-details" style="display:none;margin-top:8px;padding:8px;background:var(--bg);border-radius:var(--radius);font-size:11px;line-height:1.6;color:var(--text-muted)" onclick="event.stopPropagation()">
-                    ${buildDetails(a)}
-                </div>
-            </div>
-        `).join('')}
+        <h3 style="font-size:14px;margin:0 0 8px;color:var(--text)">Recent Activity</h3>
+        ${actions.map(renderAction).join('')}
     `;
 }
 

@@ -1,9 +1,12 @@
 // Harmony Analytics — Chart.js trend visualization
 let trendChart = null;
 
+// 20 distinct colors for cities
 const COLORS = [
     '#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6',
     '#ec4899', '#14b8a6', '#f97316', '#06b6d4', '#84cc16',
+    '#a855f7', '#f43f5e', '#0ea5e9', '#d946ef', '#10b981',
+    '#e11d48', '#7c3aed', '#0891b2', '#ca8a04', '#64748b',
 ];
 
 async function loadCities() {
@@ -31,10 +34,88 @@ async function loadSnapshots() {
         if (nodeId) url += `&node_id=${nodeId}`;
 
         const data = await apiCall('GET', url);
-        renderChart(data.snapshots || [], metric);
+        const snapshots = data.snapshots || [];
+        renderChart(snapshots, metric);
+        updateStats(snapshots, metric);
+        updateRankings(snapshots, metric);
     } catch (err) {
         showToast('Failed to load snapshots: ' + err.message, 'error');
     }
+}
+
+function updateStats(snapshots, metric) {
+    if (!snapshots.length) return;
+
+    // Get latest snapshot per city
+    const latestByCity = {};
+    for (const s of snapshots) {
+        const name = s.node_name || s.node_id;
+        if (!latestByCity[name] || s.snapshot_date > latestByCity[name].snapshot_date) {
+            latestByCity[name] = s;
+        }
+    }
+
+    const cities = Object.keys(latestByCity);
+    const values = cities.map(c => ({ name: c, value: parseFloat(latestByCity[c][metric] || 0) * 100 }));
+    values.sort((a, b) => b.value - a.value);
+
+    const avg = values.reduce((s, v) => s + v.value, 0) / values.length;
+    const top = values[0];
+    const bottom = values[values.length - 1];
+
+    // Unique dates
+    const dates = [...new Set(snapshots.map(s => s.snapshot_date))].sort();
+
+    document.getElementById('stat-cities').textContent = cities.length;
+    document.getElementById('stat-avg').textContent = avg.toFixed(1) + '%';
+    document.getElementById('stat-top').textContent = top.value.toFixed(1) + '%';
+    document.getElementById('stat-top-name').textContent = top.name;
+    document.getElementById('stat-bottom').textContent = bottom.value.toFixed(1) + '%';
+    document.getElementById('stat-bottom-name').textContent = bottom.name;
+    document.getElementById('stat-snapshots').textContent = dates.length;
+
+    if (dates.length >= 2) {
+        const first = new Date(dates[0]).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const last = new Date(dates[dates.length - 1]).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        document.getElementById('stat-snap-range').textContent = `${first} - ${last}`;
+    }
+}
+
+function updateRankings(snapshots, metric) {
+    const latestByCity = {};
+    for (const s of snapshots) {
+        const name = s.node_name || s.node_id;
+        if (!latestByCity[name] || s.snapshot_date > latestByCity[name].snapshot_date) {
+            latestByCity[name] = s;
+        }
+    }
+
+    const values = Object.keys(latestByCity).map(c => ({
+        name: c, value: parseFloat(latestByCity[c][metric] || 0) * 100
+    }));
+    values.sort((a, b) => b.value - a.value);
+
+    if (values.length < 2) {
+        document.getElementById('rankings-row').style.display = 'none';
+        return;
+    }
+
+    document.getElementById('rankings-row').style.display = 'grid';
+    const top5 = values.slice(0, 5);
+    const bottom5 = values.slice(-5).reverse();
+
+    const renderRanking = (items, startRank) => items.map((item, i) => {
+        const pct = item.value;
+        const color = pct >= 60 ? '#22c55e' : pct >= 40 ? '#f59e0b' : '#ef4444';
+        return `<div class="ranking-item">
+            <span class="ranking-rank">${startRank + i}</span>
+            <span class="ranking-name">${item.name}</span>
+            <span class="ranking-value" style="color:${color}">${pct.toFixed(1)}%</span>
+        </div>`;
+    }).join('');
+
+    document.getElementById('top-rankings').innerHTML = renderRanking(top5, 1);
+    document.getElementById('bottom-rankings').innerHTML = renderRanking(bottom5, values.length - 4);
 }
 
 function renderChart(snapshots, metric) {
@@ -43,7 +124,9 @@ function renderChart(snapshots, metric) {
     for (const s of snapshots) {
         const name = s.node_name || s.node_id;
         if (!byNode[name]) byNode[name] = [];
-        byNode[name].push({ date: s.snapshot_date, value: s[metric] });
+        const d = new Date(s.snapshot_date);
+        const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        byNode[name].push({ date: s.snapshot_date, dateLabel: dateStr, value: s[metric] });
     }
 
     const nodeNames = Object.keys(byNode).sort();
@@ -51,11 +134,13 @@ function renderChart(snapshots, metric) {
         const sorted = byNode[name].sort((a, b) => a.date.localeCompare(b.date));
         return {
             label: name,
-            data: sorted.map(p => ({ x: p.date, y: p.value != null ? (parseFloat(p.value) * 100).toFixed(1) : null })),
+            data: sorted.map(p => ({ x: p.dateLabel, y: p.value != null ? (parseFloat(p.value) * 100).toFixed(1) : null })),
             borderColor: COLORS[i % COLORS.length],
             backgroundColor: COLORS[i % COLORS.length] + '20',
+            borderWidth: 2,
             tension: 0.3,
-            pointRadius: 3,
+            pointRadius: 4,
+            pointHoverRadius: 6,
             fill: false,
         };
     });
@@ -76,9 +161,15 @@ function renderChart(snapshots, metric) {
         options: {
             responsive: true,
             maintainAspectRatio: true,
+            interaction: { mode: 'nearest', intersect: false },
             plugins: {
                 legend: { display: false },
                 tooltip: {
+                    backgroundColor: 'rgba(0,0,0,0.8)',
+                    titleFont: { size: 13 },
+                    bodyFont: { size: 12 },
+                    padding: 10,
+                    cornerRadius: 6,
                     callbacks: {
                         label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y}%`
                     }
@@ -87,13 +178,16 @@ function renderChart(snapshots, metric) {
             scales: {
                 x: {
                     type: 'category',
-                    title: { display: true, text: 'Date' },
-                    ticks: { maxTicksLimit: 15 }
+                    title: { display: true, text: 'Date', font: { size: 12 } },
+                    ticks: { maxTicksLimit: 15, font: { size: 11 } },
+                    grid: { color: 'rgba(0,0,0,0.05)' }
                 },
                 y: {
-                    title: { display: true, text: metricLabel + ' (%)' },
+                    title: { display: true, text: metricLabel + ' (%)', font: { size: 12 } },
                     min: 0,
                     max: 100,
+                    ticks: { font: { size: 11 }, stepSize: 10 },
+                    grid: { color: 'rgba(0,0,0,0.05)' }
                 }
             }
         }
@@ -108,7 +202,6 @@ async function snapshotNow() {
         const data = await apiCall('POST', '/v0/harmony/analytics/snapshot-now', { scope: 'city' });
         statusEl.textContent = `Snapshot saved (${data.snapshots} cities)`;
         showToast(`Snapshot captured for ${data.snapshots} cities`, 'success');
-        // Reload chart
         await loadSnapshots();
     } catch (err) {
         statusEl.textContent = 'Failed';

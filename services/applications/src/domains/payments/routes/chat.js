@@ -9,7 +9,7 @@ const logger = require('../../../shared/utils/logger');
 
 // POST /v0/chat
 router.post('/', async (req, res) => {
-    const { user_id, message, conversation_history, learn_from_chat } = req.body;
+    const { user_id, message, conversation_history, learn_from_chat, client_date } = req.body;
 
     if (!user_id || !message) {
         return res.status(400).json({ error: 'user_id and message are required' });
@@ -18,7 +18,8 @@ router.post('/', async (req, res) => {
     try {
         const result = await chatHandler.handleChat(user_id, message, conversation_history || [], {
             learnFromChat: !!learn_from_chat,
-            requestId: req.requestId
+            requestId: req.requestId,
+            clientDate: client_date
         });
         res.json(result);
     } catch (error) {

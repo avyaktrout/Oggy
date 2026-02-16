@@ -77,7 +77,7 @@ class ChatHandler {
 
         let contextData = null;
         if (intent === 'spending_query') {
-            contextData = await this._queryExpenses(userId, message);
+            contextData = await this._queryExpenses(userId, message, options.clientDate);
         }
 
         const [oggyResponse, baseResponse] = await Promise.all([
@@ -128,11 +128,11 @@ class ChatHandler {
         return 'general';
     }
 
-    _parseDateRange(message) {
+    _parseDateRange(message, clientDate) {
         const lower = message.toLowerCase();
-        // Use US Eastern (UTC-5) as default timezone since server runs UTC
-        const now = new Date(Date.now() - 5 * 60 * 60 * 1000);
-        const today = now.toISOString().slice(0, 10);
+        // Use client's local date if provided, otherwise fall back to UTC-5
+        const now = clientDate ? new Date(clientDate + 'T12:00:00') : new Date(Date.now() - 5 * 60 * 60 * 1000);
+        const today = clientDate || now.toISOString().slice(0, 10);
 
         // "today" or "today's"
         if (/\btoday\b/.test(lower)) {
@@ -185,9 +185,9 @@ class ChatHandler {
         return null;
     }
 
-    async _queryExpenses(userId, message) {
+    async _queryExpenses(userId, message, clientDate) {
         try {
-            const dateRange = this._parseDateRange(message);
+            const dateRange = this._parseDateRange(message, clientDate);
 
             const dateFilter = dateRange
                 ? `AND transaction_date >= '${dateRange.start}' AND transaction_date <= '${dateRange.end}'`

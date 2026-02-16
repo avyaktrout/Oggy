@@ -51,7 +51,7 @@ class AgentShell {
             }
         }, config);
 
-        this.STORAGE_KEY = `oggy_${this.config.domain}_chat`;
+        this.STORAGE_KEY = this.config.storageKey || `oggy_${this.config.domain}_chat`;
         this.MAX_TURNS = 50;
         this.messages = [];
         this.conversationHistory = [];
@@ -440,6 +440,7 @@ class AgentShell {
                 message: msg,
                 conversation_history: this.conversationHistory.slice(-10),
                 learn_from_chat: this.learnFromChat,
+                client_date: todayStr(),
                 ...ctx
             });
 

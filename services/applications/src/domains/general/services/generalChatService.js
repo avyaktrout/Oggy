@@ -23,6 +23,11 @@ class GeneralChatService {
         const { project_id = null, conversation_history = [], learn_from_chat = false } = options;
         const startTime = Date.now();
 
+        // Handle explicit "remember that..." requests
+        if (this._isMemoryStoreRequest(message)) {
+            return this._handleExplicitMemoryStore(userId, message, conversation_history, startTime);
+        }
+
         // Retrieve relevant memory
         let memoryCards = [];
         let traceId = null;
@@ -227,6 +232,12 @@ IMPORTANT: The user is asking about the Oggy application, its architecture, secu
         );
     }
 
+    async deleteProject(userId, projectId) {
+        await query('DELETE FROM v2_project_messages WHERE project_id = $1 AND user_id = $2', [projectId, userId]);
+        const result = await query('DELETE FROM v2_projects WHERE project_id = $1 AND user_id = $2 RETURNING project_id', [projectId, userId]);
+        return result.rowCount > 0;
+    }
+
     async getProjectMessages(userId, projectId, limit = 50) {
         const result = await query(
             `SELECT * FROM v2_project_messages
@@ -235,6 +246,110 @@ IMPORTANT: The user is asking about the Oggy application, its architecture, secu
             [projectId, userId, limit]
         );
         return result.rows;
+    }
+
+    _isMemoryStoreRequest(message) {
+        const lower = message.toLowerCase();
+        return /\b(remember that|store this|save this|don't forget|keep in mind|note that|memorize)\b/.test(lower);
+    }
+
+    async _handleExplicitMemoryStore(userId, message, conversationHistory, startTime) {
+        try {
+            const recentContext = conversationHistory.slice(-6).map(m =>
+                `${m.role === 'user' ? 'User' : 'Oggy'}: ${m.content}`
+            ).join('\n');
+
+            const extractPrompt = `The user is explicitly asking you to remember something. Extract ALL facts they want stored.
+
+Recent conversation:
+${recentContext}
+
+User: ${message}
+
+Return a JSON ARRAY of objects. Each object should have:
+- "fact": the concise statement to remember (e.g., "User prefers dark mode")
+- "type": one of "preference", "fact"
+
+Respond with ONLY the JSON array, no markdown.`;
+
+            const oggyResolved = await providerResolver.getAdapter(userId, 'oggy');
+            const llmResult = await this.openaiBreaker.execute(() =>
+                oggyResolved.adapter.chatCompletion({
+                    model: oggyResolved.model,
+                    messages: [{ role: 'user', content: extractPrompt }],
+                    temperature: 0.1,
+                    max_tokens: 400
+                })
+            );
+            costGovernor.recordUsage(llmResult.tokens_used || 2000);
+            providerResolver.logRequest(userId, oggyResolved.provider, oggyResolved.model, 'oggy', 'memoryStore', llmResult.tokens_used, llmResult.latency_ms, true, null);
+
+            let facts;
+            try {
+                const parsed = JSON.parse(llmResult.text);
+                facts = Array.isArray(parsed) ? parsed : [parsed];
+            } catch {
+                return {
+                    oggy_response: { text: "I understood you want me to remember something, but I couldn't parse it clearly. Could you rephrase?", used_memory: false },
+                    base_response: { text: "I can't store memories." },
+                    latency_ms: Date.now() - startTime
+                };
+            }
+
+            facts = facts.filter(f => f && f.fact);
+            if (facts.length === 0) {
+                return {
+                    oggy_response: { text: "I couldn't determine what you'd like me to remember. Could you be more specific?", used_memory: false },
+                    base_response: { text: "I can't store memories." },
+                    latency_ms: Date.now() - startTime
+                };
+            }
+
+            const storedFacts = [];
+            for (const parsed of facts) {
+                try {
+                    await axios.post(`${MEMORY_SERVICE_URL}/cards`, {
+                        owner_type: 'user',
+                        owner_id: userId,
+                        tier: 2,
+                        kind: 'user_preference',
+                        content: {
+                            type: 'PATTERN',
+                            text: `USER STATED: ${parsed.fact}`,
+                            source: 'explicit_user_request',
+                            confidence: 1.0
+                        },
+                        tags: ['general', 'conversation', 'user_explicit'],
+                        utility_weight: 0.95,
+                        reliability: 0.95
+                    }, {
+                        timeout: 5000,
+                        headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
+                    });
+                    storedFacts.push(parsed.fact);
+                    logger.info('Explicit memory stored from general chat', { fact: parsed.fact });
+                } catch (err) {
+                    logger.warn('Failed to store explicit memory', { error: err.message });
+                }
+            }
+
+            const confirmText = storedFacts.length === 1
+                ? `Got it! I'll remember: "${storedFacts[0]}"`
+                : `Got it! I've stored ${storedFacts.length} things to memory:\n${storedFacts.map(f => `• ${f}`).join('\n')}`;
+
+            return {
+                oggy_response: { text: confirmText, used_memory: false },
+                base_response: { text: "I don't have memory capabilities. I can't store or recall information between conversations." },
+                latency_ms: Date.now() - startTime
+            };
+        } catch (err) {
+            logger.logError(err, { operation: 'generalMemoryStore', userId });
+            return {
+                oggy_response: { text: 'Sorry, I had trouble storing that to memory. Please try again.', used_memory: false },
+                base_response: { text: "I can't store memories." },
+                latency_ms: Date.now() - startTime
+            };
+        }
     }
 
     /**

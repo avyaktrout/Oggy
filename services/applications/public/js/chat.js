@@ -111,7 +111,8 @@
                 user_id: USER_ID,
                 message: msg,
                 conversation_history: conversationHistory.slice(-10),
-                learn_from_chat: learnFromChat
+                learn_from_chat: learnFromChat,
+                client_date: todayStr()
             });
 
             // Remove typing indicators

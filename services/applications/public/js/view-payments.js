@@ -22,6 +22,7 @@
         renderExpenses(allExpenses);
     });
     const FOOD_CATEGORIES = ['dining', 'groceries', 'coffee', 'business_meal'];
+    const FOOD_KEYWORDS = /\b(food|eat|lunch|dinner|breakfast|brunch|restaurant|burger|pizza|taco|burrito|sushi|ramen|sandwich|salad|chicken|steak|pasta|rice|noodle|soup|coffee|tea|juice|smoothie|drink|beverage|bar|grill|cafe|diner|bakery|chipotle|mcdonald|wendy|subway|panera|chick-fil-a|popeyes|taco bell|dunkin|starbucks|panda express|five guys|shake shack|wingstop|domino|papa john|little caesars|buffalo wild wings|ihop|waffle house|denny|cracker barrel|olive garden|applebee|chili|outback|red lobster|cheesecake factory|grocery|kroger|walmart|target|aldi|trader joe|whole foods|publix|safeway|costco|sam's club)\b/i;
 
     let currentOffset = 0;
     const PAGE_SIZE = 50;
@@ -52,24 +53,19 @@
             body.innerHTML = '<tr><td colspan="6" class="loading"><span class="spinner"></span>Loading...</td></tr>';
         }
 
-        const filters = {};
+        const params = { user_id: USER_ID, limit: PAGE_SIZE, offset: currentOffset };
         const from = document.getElementById('filter-from').value;
         const to = document.getElementById('filter-to').value;
         const cat = document.getElementById('filter-category').value;
         const merchant = document.getElementById('filter-merchant').value.trim();
 
-        if (from) filters.date_from = from;
-        if (to) filters.date_to = to;
-        if (cat) filters.category = cat;
-        if (merchant) filters.merchant = merchant;
+        if (from) params.start_date = from;
+        if (to) params.end_date = to;
+        if (cat) params.category = cat;
+        if (merchant) params.merchant = merchant;
 
         try {
-            const data = await apiCall('POST', '/v0/query', {
-                user_id: USER_ID,
-                filters,
-                limit: PAGE_SIZE,
-                offset: currentOffset
-            });
+            const data = await apiCall('POST', '/v0/query', params);
 
             const expenses = data.expenses || data.results || [];
             if (append) {
@@ -104,7 +100,9 @@
 
         const showDiet = dietToggle.checked;
         body.innerHTML = expenses.map(e => {
-            const isFood = showDiet && FOOD_CATEGORIES.includes(e.category);
+            const catLower = (e.category || '').toLowerCase();
+            const combined = `${e.description || ''} ${e.merchant || ''} ${catLower}`;
+            const isFood = showDiet && (FOOD_CATEGORIES.includes(catLower) || FOOD_KEYWORDS.test(combined));
             const dietBtn = isFood ? `<button class="btn-diet" onclick="openDietTransfer('${e.expense_id}')" title="Send to Diet" style="background:none;border:none;cursor:pointer;font-size:16px;padding:2px 4px">&#127869;</button>` : '';
             return `<tr>
                 <td>${formatDate(e.transaction_date)}</td>

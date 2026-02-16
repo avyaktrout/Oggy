@@ -228,30 +228,83 @@ class HarmonyEngine {
             }
         }
 
-        // Get recent accepted actions (last 5) — contextual to this node
+        // Get city-specific recent activity from multiple sources
         let recentActions = [];
         try {
-            const actionsResult = await query(`
-                SELECT s.suggestion_type, s.title, s.description, s.resolved_at, s.payload
-                FROM harmony_suggestions s
-                WHERE s.status = 'accepted'
-                  AND (
-                    (s.suggestion_type IN ('new_indicator', 'model_update') AND EXISTS (
-                      SELECT 1 FROM harmony_indicator_values iv
-                      JOIN harmony_indicators hi ON hi.indicator_id = iv.indicator_id
-                      WHERE iv.node_id = $1 AND hi.key = COALESCE(s.payload->>'key', s.payload->>'indicator_key')
-                    ))
-                    OR s.suggestion_type IN ('weight_adjustment', 'new_data_point')
-                  )
-                ORDER BY s.resolved_at DESC LIMIT 5
-            `, [nodeId]);
-            recentActions = actionsResult.rows.map(r => ({
-                type: r.suggestion_type,
-                title: r.title,
-                description: r.description,
-                resolved_at: r.resolved_at,
-                payload: r.payload || {},
-            }));
+            const [snapshotsRes, dataRes, alertsRes] = await Promise.all([
+                // Score changes from daily snapshots
+                query(`
+                    SELECT snapshot_date, harmony, balance, flow, care, awareness,
+                           expression, discernment, intent_coherence, e_scaled
+                    FROM harmony_daily_snapshots
+                    WHERE node_id = $1
+                    ORDER BY snapshot_date DESC LIMIT 10
+                `, [nodeId]),
+                // Recently added indicator data
+                query(`
+                    SELECT hi.name, hi.dimension, iv.created_at
+                    FROM harmony_indicator_values iv
+                    JOIN harmony_indicators hi ON iv.indicator_id = hi.indicator_id
+                    WHERE iv.node_id = $1 AND iv.created_at >= NOW() - INTERVAL '30 days'
+                    ORDER BY iv.created_at DESC LIMIT 5
+                `, [nodeId]),
+                // Recent alerts
+                query(`
+                    SELECT alert_type, severity, message, created_at
+                    FROM harmony_alerts
+                    WHERE node_id = $1 AND created_at >= NOW() - INTERVAL '30 days'
+                    ORDER BY created_at DESC LIMIT 3
+                `, [nodeId]),
+            ]);
+
+            // Process score changes: compare consecutive snapshots
+            const snapshots = snapshotsRes.rows;
+            if (snapshots.length >= 2) {
+                const dims = ['harmony', 'balance', 'flow', 'care', 'awareness', 'expression', 'discernment', 'intent_coherence'];
+                const latest = snapshots[0];
+                const previous = snapshots[1];
+                for (const dim of dims) {
+                    const curr = parseFloat(latest[dim]);
+                    const prev = parseFloat(previous[dim]);
+                    if (isNaN(curr) || isNaN(prev) || curr === prev) continue;
+                    const diff = (curr - prev) * 100;
+                    if (Math.abs(diff) >= 0.5) { // Only show meaningful changes (>= 0.5%)
+                        const dimLabel = dim === 'intent_coherence' ? 'Intent' : dim.charAt(0).toUpperCase() + dim.slice(1);
+                        recentActions.push({
+                            type: 'score_change',
+                            title: `${dimLabel}: ${(prev * 100).toFixed(1)}% → ${(curr * 100).toFixed(1)}%`,
+                            description: `${diff > 0 ? '+' : ''}${diff.toFixed(1)}% change`,
+                            date: latest.snapshot_date,
+                            direction: diff > 0 ? 'up' : 'down',
+                        });
+                    }
+                }
+            }
+
+            // Process new data points
+            for (const row of dataRes.rows) {
+                recentActions.push({
+                    type: 'new_data',
+                    title: row.name,
+                    description: row.dimension,
+                    date: row.created_at,
+                });
+            }
+
+            // Process alerts
+            for (const row of alertsRes.rows) {
+                recentActions.push({
+                    type: 'alert',
+                    title: row.message,
+                    description: row.alert_type,
+                    date: row.created_at,
+                    severity: row.severity,
+                });
+            }
+
+            // Sort by date descending, limit to 8
+            recentActions.sort((a, b) => new Date(b.date) - new Date(a.date));
+            recentActions = recentActions.slice(0, 8);
         } catch (_) {}
 
         return {

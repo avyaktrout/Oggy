@@ -14,6 +14,7 @@ const shell = new AgentShell({
     trainingEndpoint: "/v0/continuous-learning",
     chatPlaceholder: "Ask about this project...",
     welcomeMessage: "Hi! Ask me anything about this project.",
+    storageKey: `oggy_general_project_${projectId}`,
     contextProvider: async () => ({ project_id: projectId }),
     capabilities: {
         training: false,

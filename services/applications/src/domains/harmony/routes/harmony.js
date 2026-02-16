@@ -483,8 +483,8 @@ Help users understand what drives city scores, suggest improvements, and explain
         ]);
 
         res.json({
-            oggy_response: oggyResult.text,
-            base_response: baseResult.text,
+            oggy_response: { text: oggyResult.text, used_memory: false },
+            base_response: { text: baseResult.text, used_memory: false },
             domain: 'harmony',
         });
     } catch (err) {
@@ -649,8 +649,8 @@ Be concise, data-driven, and actionable.`;
         }
 
         res.json({
-            oggy_response: oggyText,
-            base_response: baseResult.text,
+            oggy_response: { text: oggyText, used_memory: false },
+            base_response: { text: baseResult.text, used_memory: false },
             suggestions,
             domain: 'harmony',
         });

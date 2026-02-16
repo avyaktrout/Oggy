@@ -158,7 +158,12 @@
         const isFoodCategory = category && foodCategories.includes(category);
         const hasReceiptFood = receiptFoodItems && receiptFoodItems.length > 0;
 
-        if (!isFoodCategory && !hasReceiptFood) return;
+        // Also check description/merchant for food-related keywords
+        const combined = `${description || ''} ${merchant || ''}`.toLowerCase();
+        const foodKeywords = /\b(food|eat|lunch|dinner|breakfast|brunch|restaurant|burger|pizza|taco|burrito|sushi|ramen|sandwich|salad|chicken|steak|pasta|rice|noodle|soup|coffee|tea|juice|smoothie|drink|bar|grill|cafe|diner|bakery|chipotle|mcdonald|wendy|subway|panera|chick-fil-a|popeyes|taco bell|dunkin|starbucks|panda express|five guys|shake shack|wingstop|domino|papa john|little caesars|buffalo wild wings|ihop|waffle house|denny|cracker barrel|olive garden|applebee|chili|outback|red lobster|cheesecake factory|grocery|kroger|walmart|target|aldi|trader joe|whole foods|publix|safeway|costco|sam's club)\b/;
+        const isFoodDescription = foodKeywords.test(combined);
+
+        if (!isFoodCategory && !hasReceiptFood && !isFoodDescription) return;
 
         // Build food description
         let foodDesc = '';
