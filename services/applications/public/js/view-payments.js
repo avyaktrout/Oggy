@@ -14,6 +14,15 @@
         catFilter.appendChild(opt);
     });
 
+    // Diet transfer toggle persistence
+    const dietToggle = document.getElementById('diet-transfer-toggle');
+    dietToggle.checked = localStorage.getItem('oggy_view_diet_transfer') === 'true';
+    dietToggle.addEventListener('change', () => {
+        localStorage.setItem('oggy_view_diet_transfer', dietToggle.checked);
+        renderExpenses(allExpenses);
+    });
+    const FOOD_CATEGORIES = ['dining', 'groceries', 'coffee', 'business_meal'];
+
     let currentOffset = 0;
     const PAGE_SIZE = 50;
     let allExpenses = [];
@@ -93,16 +102,19 @@
             return;
         }
 
-        body.innerHTML = expenses.map(e => `
-            <tr>
+        const showDiet = dietToggle.checked;
+        body.innerHTML = expenses.map(e => {
+            const isFood = showDiet && FOOD_CATEGORIES.includes(e.category);
+            const dietBtn = isFood ? `<button class="btn-diet" onclick="openDietTransfer('${e.expense_id}')" title="Send to Diet" style="background:none;border:none;cursor:pointer;font-size:16px;padding:2px 4px">&#127869;</button>` : '';
+            return `<tr>
                 <td>${formatDate(e.transaction_date)}</td>
                 <td>${e.merchant || '-'}</td>
                 <td>${e.description || ''}</td>
                 <td>${formatCategory(e.category)}</td>
                 <td style="text-align:right;font-weight:600">${formatCurrency(e.amount)}</td>
-                <td style="text-align:center;white-space:nowrap"><button class="btn-edit" onclick="editExpense('${e.expense_id}')" title="Edit payment">&#x270E;</button><button class="btn-delete" onclick="deleteExpense('${e.expense_id}')" title="Remove payment">&#x2715;</button></td>
-            </tr>
-        `).join('');
+                <td style="text-align:center;white-space:nowrap">${dietBtn}<button class="btn-edit" onclick="editExpense('${e.expense_id}')" title="Edit payment">&#x270E;</button><button class="btn-delete" onclick="deleteExpense('${e.expense_id}')" title="Remove payment">&#x2715;</button></td>
+            </tr>`;
+        }).join('');
     }
 
     // --- Edit ---
@@ -184,6 +196,72 @@
             showToast('Failed to remove: ' + err.message, 'error');
         }
     };
+
+    // --- Diet Transfer ---
+    window.openDietTransfer = function(expenseId) {
+        const expense = allExpenses.find(e => e.expense_id === expenseId);
+        if (!expense) return;
+
+        const desc = expense.merchant
+            ? `${expense.description || ''} at ${expense.merchant}`.trim()
+            : (expense.description || '');
+        document.getElementById('diet-modal-desc').value = desc;
+        document.getElementById('diet-modal-date').value = expense.transaction_date
+            ? expense.transaction_date.split('T')[0]
+            : todayStr();
+
+        // Guess meal type from description
+        const lower = desc.toLowerCase();
+        const isLiquid = /\b(drink|coffee|tea|juice|soda|water|smoothie|latte|cappuccino|beer|wine|cocktail|energy)\b/.test(lower);
+        document.getElementById('diet-modal-type').value = isLiquid ? 'liquid' : 'food';
+
+        // Guess meal from time or category
+        let meal = 'snack';
+        if (expense.category === 'coffee') meal = 'snack';
+        else {
+            const hour = new Date().getHours();
+            if (hour >= 5 && hour < 11) meal = 'breakfast';
+            else if (hour >= 11 && hour < 14) meal = 'lunch';
+            else if (hour >= 17 && hour < 21) meal = 'dinner';
+        }
+        document.getElementById('diet-modal-meal').value = meal;
+
+        document.getElementById('diet-modal').style.display = 'flex';
+    };
+
+    window.closeDietModal = function() {
+        document.getElementById('diet-modal').style.display = 'none';
+    };
+
+    window.sendToDiet = async function() {
+        const desc = document.getElementById('diet-modal-desc').value.trim();
+        if (!desc) { showToast('Enter a food description', 'error'); return; }
+
+        const btn = document.getElementById('diet-modal-send');
+        btn.disabled = true;
+        btn.textContent = 'Sending...';
+        try {
+            await apiCall('POST', '/v0/diet/entries', {
+                user_id: USER_ID,
+                entry_type: document.getElementById('diet-modal-type').value,
+                description: desc,
+                meal_type: document.getElementById('diet-modal-meal').value,
+                entry_date: document.getElementById('diet-modal-date').value
+            });
+            showToast('Added to diet log!');
+            closeDietModal();
+        } catch (err) {
+            showToast('Failed: ' + err.message, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Send to Diet';
+        }
+    };
+
+    // Close diet modal on overlay click
+    document.getElementById('diet-modal').addEventListener('click', function(e) {
+        if (e.target === this) closeDietModal();
+    });
 
     // Initial load
     loadExpenses();

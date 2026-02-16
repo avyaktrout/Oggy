@@ -233,6 +233,15 @@ class HarmonySuggestionService {
             }
         }
 
+        // Reject indicators that still reference a specific city after prefix stripping
+        const combinedLower = `${key} ${name}`.toLowerCase();
+        for (const { name: city } of cityNames.rows) {
+            if (combinedLower.includes(city)) {
+                logger.warn('Indicator rejected: city-specific after cleanup', { key, name, city });
+                throw new Error(`Indicator "${name}" is city-specific (references "${city}"). Indicators must be general metrics.`);
+            }
+        }
+
         // Insert indicator (global definition)
         await query(`
             INSERT INTO harmony_indicators (key, name, dimension, direction, unit, description)
@@ -296,6 +305,20 @@ class HarmonySuggestionService {
             logger.info('New indicator added via suggestion with data populated', { key, dimension, nodeId, nodesPopulated: targetNodes.rows.length });
         } else {
             logger.info('New indicator added via suggestion', { key, dimension });
+        }
+
+        // If suggestion includes dataset info, add to data catalog
+        if (payload.dataset_name) {
+            try {
+                await query(`
+                    INSERT INTO harmony_datasets (name, source_url, license, refresh_cadence, fields)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT DO NOTHING
+                `, [payload.dataset_name, payload.dataset_url || '', payload.dataset_license || 'Public Domain',
+                    payload.refresh_cadence || 'yearly', JSON.stringify([{ field: key, type: unit || 'index' }])]);
+            } catch (dsErr) {
+                logger.debug('Dataset insert skipped', { error: dsErr.message });
+            }
         }
 
         // Mark indicator as new in Redis
@@ -702,6 +725,109 @@ Respond ONLY with the JSON array, no other text.`;
                 stored.push(saved);
             } catch (err) {
                 logger.warn('Failed to store suggestion', { title: s.title, error: err.message });
+            }
+        }
+
+        return stored;
+    }
+
+    // ──────────────────────────────────────────────────
+    // Data Catalog — check for new datasets/metrics
+    // ──────────────────────────────────────────────────
+
+    async generateDataCatalogSuggestions(userId, count = 5) {
+        const [datasets, indicators] = await Promise.all([
+            query('SELECT name, source_url, license, fields FROM harmony_datasets ORDER BY name'),
+            query('SELECT key, name, dimension, direction, unit FROM harmony_indicators ORDER BY dimension, key'),
+        ]);
+
+        const datasetList = datasets.rows.map(d => {
+            const fields = (d.fields || []).map(f => f.field).join(', ');
+            return `${d.name} (${d.source_url || 'no url'}) — fields: ${fields || 'none'}`;
+        }).join('\n');
+
+        const indicatorList = indicators.rows.map(i =>
+            `${i.key} (${i.dimension}, ${i.direction}, ${i.unit})`
+        ).join('\n');
+
+        const systemPrompt = `You are Oggy, an expert at finding publicly available datasets to improve city well-being measurement.
+
+Current datasets in the catalog (${datasets.rows.length} total):
+${datasetList || '(none)'}
+
+Current indicators (${indicators.rows.length} total):
+${indicatorList || '(none)'}
+
+The Equilibrium Canon framework dimensions: balance, flow, compassion, discernment, awareness, expression.
+
+Suggest exactly ${count} NEW publicly-available data sources that could add metrics to the Harmony Map.
+Each suggestion must be a data source NOT already in the catalog, with specific measurable metrics.
+
+For each suggestion, respond with a JSON array. Each item must have:
+- "title": short title for the suggestion
+- "description": 1-2 sentence explanation of what this data source adds
+- "payload": {
+    "key": "snake_case_metric_key",
+    "name": "Display Name of Metric",
+    "dimension": "balance|flow|compassion|discernment|awareness|expression",
+    "direction": "higher_is_better|lower_is_better",
+    "unit": "per 100k|%|index|score 0-1|minutes|rate",
+    "description": "What this metric measures",
+    "bounds": {"min": 0, "max": 100},
+    "weight": 1.0,
+    "dataset_name": "Name of the Data Source",
+    "dataset_url": "https://example.gov/data",
+    "dataset_license": "Public Domain|CC BY 4.0|Open Data",
+    "refresh_cadence": "yearly|monthly|quarterly"
+  }
+
+RULES:
+- NEVER suggest a dataset or metric that already exists in the lists above
+- Each metric must be GENERAL (applicable to ALL US cities), not city-specific
+- Metric names must be concise (under 60 chars) and measure ONE specific thing
+- Only suggest real, publicly accessible government or institutional data sources
+- Include the actual URL where the data can be found
+
+Respond ONLY with the JSON array, no other text.`;
+
+        await costGovernor.checkBudget(6000);
+
+        const resolved = await providerResolver.getAdapter(userId, 'oggy');
+        const r = await resolved.adapter.chatCompletion({
+            model: resolved.model,
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: `Suggest ${count} new data sources for the Harmony Map data catalog.` }
+            ],
+            temperature: 0.7,
+            max_tokens: 2500,
+            timeout: 45000
+        });
+        costGovernor.recordUsage(r.tokens_used || 1500);
+        providerResolver.logRequest(userId, resolved.provider, resolved.model, 'oggy', 'dataCatalogSuggestions', r.tokens_used, r.latency_ms, true, null);
+
+        const suggestions = this._parseJsonSuggestions(r.text);
+
+        // Store each suggestion
+        const stored = [];
+        for (const s of suggestions.slice(0, count)) {
+            try {
+                const key = s.payload?.key;
+                if (key) {
+                    const exists = await query("SELECT indicator_id FROM harmony_indicators WHERE key = $1", [key]);
+                    if (exists.rows.length > 0) continue;
+                }
+                const saved = await this.createSuggestion(userId, {
+                    node_id: null,
+                    suggestion_type: 'new_indicator',
+                    title: s.title,
+                    description: s.description,
+                    payload: s.payload || {},
+                    source: 'data_catalog',
+                });
+                stored.push(saved);
+            } catch (err) {
+                logger.warn('Failed to store catalog suggestion', { title: s.title, error: err.message });
             }
         }
 

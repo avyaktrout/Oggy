@@ -35,6 +35,7 @@ const serviceHealthRouter = require('./shared/routes/serviceHealth');
 const benchmarkAnalyticsRouter = require('./shared/routes/benchmarkAnalytics');
 const memoryPruningRouter = require('./shared/routes/memoryPruning');
 const { migrationExportRouter, migrationImportRouter } = require('./shared/routes/migration');
+const receiptAnalysisRouter = require('./shared/routes/receiptAnalysis');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -254,6 +255,7 @@ app.use('/v0/settings', settingsRouter);
 app.use('/v0/service-health', serviceHealthRouter);
 app.use('/v0/benchmark-analytics', benchmarkAnalyticsRouter);
 app.use('/v0/memory-pruning', memoryPruningRouter);
+app.use('/v0/receipt', receiptAnalysisRouter);
 app.use('/v0/migration', migrationImportRouter);
 
 // ──────────────────────────────────────────────────

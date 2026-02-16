@@ -1,6 +1,6 @@
 # Oggy
 
-A continuously learning AI agent that improves from user feedback and benchmark-driven training. Oggy powers three domain agents — expense categorization, general conversation, and diet tracking — each with its own training pipeline, memory system, and performance analytics.
+A continuously learning AI agent that improves from user feedback and benchmark-driven training. Oggy powers four domain agents — expense categorization, general conversation, diet tracking, and harmony mapping — each with its own training pipeline, memory system, and performance analytics.
 
 Live at **https://oggy-v1.com**
 
@@ -13,6 +13,7 @@ Browser --> Cloudflare Tunnel --> Gateway (:3001)
                                     |-- proxy --> Payments Service (:3010)
                                     |-- proxy --> General Service  (:3011)
                                     |-- proxy --> Diet Service     (:3012)
+                                    |-- proxy --> Harmony Service  (:3013)
                                     |
                                  Memory Service (:3000)
                                     |
@@ -35,6 +36,7 @@ All application services share a single Docker image (`oggy-app`) with different
 | Payments | 3010 | Node.js/Express | Expense categorization, chat, training, benchmarks |
 | General | 3011 | Node.js/Express | General conversation, projects |
 | Diet | 3012 | Node.js/Express | Diet tracking, nutrition, meal logging |
+| Harmony | 3013 | Node.js/Express | Harmony Map, city scores, indicators, scenarios |
 | Memory | 3000 | Node.js/Express | Vector memory CRUD, semantic retrieval, utility updates |
 | Learning | 8000 | Python/FastAPI | Agent orchestration, scoring, training loops |
 | PostgreSQL | 5432 | Postgres 15 | Persistent storage |
@@ -51,6 +53,8 @@ All application services share a single Docker image (`oggy-app`) with different
 
 **Payments Domain**
 - Expense entry with AI categorization suggestions
+- Receipt scanning via vision LLM (images + PDF)
+- Diet transfer toggle — suggest diet entries for food/drink purchases
 - Oggy vs Base model comparison (side-by-side chat)
 - Self-driven inquiries for ambiguous expenses
 - Domain knowledge storage for categorization rules
@@ -61,12 +65,27 @@ All application services share a single Docker image (`oggy-app`) with different
 
 **Diet Domain**
 - Natural language meal logging
-- Nutritional breakdown and daily tracking
+- Receipt scanning — extract food items from receipts and bulk-add to diet log
+- Nutritional breakdown and daily tracking (calories, protein, carbs, fat, fiber, sugar, sodium, caffeine)
+- Inline nutrition editing per entry
 - Custom dietary rules
+
+**Harmony Domain**
+- Interactive city map with E, S, H scoring (Equilibrium Canon model)
+- 6-dimension framework: Balance, Flow, Compassion, Discernment, Awareness, Expression
+- Score equations: E = (B * F * C)^(1/3), S = sqrt(A * X), H = sqrt(E * S)
+- Data catalog with indicator explainability (normalized values, weights, bounds)
+- AI-generated suggestions: new indicators, data points, weight adjustments, model updates, new cities
+- Specificity guard rejects vague or overly broad indicators
+- What-if scenario sandbox with projected score comparisons
+- Federated learning via Observer (cross-tenant harmony packs)
+- Daily score snapshots for progression analytics
+- NEW indicator badges via Redis
+- Recent actions panel with expandable details
 
 **Platform**
 - Magic link authentication (email-based, no passwords)
-- BYO-Model settings (OpenAI, Anthropic, Google, xAI)
+- BYO-Model settings (OpenAI, Anthropic, Google, xAI) with vision support
 - Training email reports with configurable intervals
 - Performance analytics dashboard per domain
 - Full audit trail with evidence requirements
@@ -173,6 +192,24 @@ Hosted on a t3.small via Cloudflare Tunnel. Resource limits tuned for 2GB RAM.
 | GET | `/v0/diet/nutrition` | Nutrition summary |
 | GET | `/v0/diet/rules` | Dietary rules |
 
+### Harmony
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v0/harmony/nodes` | List all city nodes with scores |
+| GET | `/v0/harmony/node/:id/explain` | Indicator explainability + recent actions |
+| POST | `/v0/harmony/compute/:id` | Recompute scores for a node |
+| POST | `/v0/harmony/compute-all` | Recompute all city scores |
+| POST | `/v0/harmony/generate-suggestions` | AI-generate suggestions for a node |
+| POST | `/v0/harmony/suggestions/:id/accept` | Accept a suggestion (triggers recompute) |
+| POST | `/v0/harmony/scenario` | Create what-if scenario |
+| GET | `/v0/harmony/scenario/:id/compare` | Compare scenario projections |
+| POST | `/v0/harmony/chat` | Chat with harmony agent |
+
+### Receipt Analysis
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v0/receipt/analyze` | Extract items from receipt image/PDF via vision LLM |
+
 ### Shared
 | Method | Path | Description |
 |--------|------|-------------|
@@ -191,11 +228,13 @@ services/
       payments-entry.js  # Payments domain entry point
       general-entry.js   # General domain entry point
       diet-entry.js      # Diet domain entry point
+      harmony-entry.js   # Harmony domain entry point
       index.js           # Monolith fallback (npm start)
       domains/
         payments/        # Payments routes + services
         general/         # General routes + services
         diet/            # Diet routes + services
+        harmony/         # Harmony Map routes, services, DB migrations
       shared/
         middleware/       # Auth, CSRF, cost governor, internal service
         routes/           # Shared routes (training, evaluation, settings, etc.)

@@ -116,7 +116,9 @@ class ChatHandler {
         const spendingKeywords = [
             'spend', 'spent', 'how much', 'total', 'summary', 'expenses', 'payments', 'cost', 'budget',
             'description', 'merchant', 'recent', 'transaction', 'purchased', 'bought', 'paid',
-            'what did i', 'what have i', 'show me', 'list my', 'my expense', 'details'
+            'what did i', 'what have i', 'show me', 'list my', 'my expense', 'details',
+            'today', 'yesterday', 'this week', 'this month', 'last week', 'last month',
+            'entered', 'logged', 'recorded', 'added'
         ];
         const categoryKeywords = ['categorize', 'category', 'classify', 'what type', 'is this'];
 
@@ -126,25 +128,91 @@ class ChatHandler {
         return 'general';
     }
 
+    _parseDateRange(message) {
+        const lower = message.toLowerCase();
+        // Use US Eastern (UTC-5) as default timezone since server runs UTC
+        const now = new Date(Date.now() - 5 * 60 * 60 * 1000);
+        const today = now.toISOString().slice(0, 10);
+
+        // "today" or "today's"
+        if (/\btoday\b/.test(lower)) {
+            return { start: today, end: today, label: 'today' };
+        }
+        // "yesterday"
+        if (/\byesterday\b/.test(lower)) {
+            const d = new Date(now); d.setDate(d.getDate() - 1);
+            const y = d.toISOString().slice(0, 10);
+            return { start: y, end: y, label: 'yesterday' };
+        }
+        // "this week"
+        if (/\bthis week\b/.test(lower)) {
+            const d = new Date(now); d.setDate(d.getDate() - d.getDay());
+            return { start: d.toISOString().slice(0, 10), end: today, label: 'this week' };
+        }
+        // "last week"
+        if (/\blast week\b/.test(lower)) {
+            const d = new Date(now); d.setDate(d.getDate() - d.getDay() - 7);
+            const e = new Date(d); e.setDate(e.getDate() + 6);
+            return { start: d.toISOString().slice(0, 10), end: e.toISOString().slice(0, 10), label: 'last week' };
+        }
+        // "this month"
+        if (/\bthis month\b/.test(lower)) {
+            return { start: `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`, end: today, label: 'this month' };
+        }
+        // "last month"
+        if (/\blast month\b/.test(lower)) {
+            const m = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+            const e = new Date(now.getFullYear(), now.getMonth(), 0);
+            return { start: m.toISOString().slice(0, 10), end: e.toISOString().slice(0, 10), label: 'last month' };
+        }
+        // Specific date like "February 15" or "Feb 15th" or "2/15"
+        const monthNames = { jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3, may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7, sep: 8, september: 8, oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11 };
+        const dateMatch = lower.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})(?:st|nd|rd|th)?\b/);
+        if (dateMatch) {
+            const month = monthNames[dateMatch[1]];
+            const day = parseInt(dateMatch[2]);
+            const d = new Date(now.getFullYear(), month, day);
+            const ds = d.toISOString().slice(0, 10);
+            return { start: ds, end: ds, label: `${dateMatch[1]} ${dateMatch[2]}` };
+        }
+        // Numeric date like "2/15" or "02/15"
+        const numMatch = lower.match(/\b(\d{1,2})\/(\d{1,2})\b/);
+        if (numMatch) {
+            const d = new Date(now.getFullYear(), parseInt(numMatch[1]) - 1, parseInt(numMatch[2]));
+            const ds = d.toISOString().slice(0, 10);
+            return { start: ds, end: ds, label: `${numMatch[1]}/${numMatch[2]}` };
+        }
+        return null;
+    }
+
     async _queryExpenses(userId, message) {
         try {
+            const dateRange = this._parseDateRange(message);
+
+            const dateFilter = dateRange
+                ? `AND transaction_date >= '${dateRange.start}' AND transaction_date <= '${dateRange.end}'`
+                : '';
+            const dateLabel = dateRange ? dateRange.label : 'all time';
+
             const result = await query(
                 `SELECT category, COUNT(*) as count, SUM(amount) as total
-                 FROM expenses WHERE user_id = $1 AND status = 'active'
+                 FROM expenses WHERE user_id = $1 AND status = 'active' ${dateFilter}
                  GROUP BY category ORDER BY total DESC`,
                 [userId]
             );
 
             const recentResult = await query(
                 `SELECT merchant, amount, category, description, transaction_date
-                 FROM expenses WHERE user_id = $1 AND status = 'active'
+                 FROM expenses WHERE user_id = $1 AND status = 'active' ${dateFilter}
                  ORDER BY transaction_date DESC LIMIT 20`,
                 [userId]
             );
 
             return {
                 category_summary: result.rows,
-                recent_expenses: recentResult.rows
+                recent_expenses: recentResult.rows,
+                date_label: dateLabel,
+                date_range: dateRange,
             };
         } catch (err) {
             logger.warn('Chat: failed to query expenses', { error: err.message });
@@ -247,15 +315,18 @@ Do NOT say you can't remember things or that you don't have memory — you DO.\n
         }
 
         if (contextData) {
+            const scope = contextData.date_label || 'all time';
             if (contextData.category_summary?.length > 0) {
-                prompt += 'Spending by category:\n';
+                prompt += `Spending by category (${scope}):\n`;
                 contextData.category_summary.forEach(row => {
                     prompt += `- ${row.category || 'uncategorized'}: ${row.count} payments, $${parseFloat(row.total).toFixed(2)}\n`;
                 });
                 prompt += '\n';
+            } else if (contextData.date_range) {
+                prompt += `No expenses found for ${scope}.\n\n`;
             }
             if (contextData.recent_expenses?.length > 0) {
-                prompt += 'Recent expenses:\n';
+                prompt += `Expenses (${scope}):\n`;
                 contextData.recent_expenses.slice(0, 10).forEach(e => {
                     const desc = e.description ? ` — "${e.description}"` : '';
                     prompt += `- ${e.transaction_date}: ${e.merchant || 'unknown'} - $${parseFloat(e.amount).toFixed(2)} (${e.category || 'uncategorized'})${desc}\n`;

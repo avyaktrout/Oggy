@@ -1,6 +1,7 @@
 /**
  * Google Gemini Provider Adapter
  * Uses generateContent endpoint with API key in URL.
+ * Supports vision via content arrays with inline_data parts.
  */
 
 const axios = require('axios');
@@ -12,6 +13,30 @@ class GeminiAdapter extends ProviderAdapter {
         this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
     }
 
+    /**
+     * Convert OpenAI-style content (string or array) to Gemini parts format.
+     */
+    _contentToParts(content) {
+        if (typeof content === 'string') return [{ text: content }];
+        if (!Array.isArray(content)) return [{ text: String(content || '') }];
+
+        return content.map(part => {
+            if (part.type === 'text') {
+                return { text: part.text };
+            }
+            if (part.type === 'image_url' && part.image_url?.url) {
+                const url = part.image_url.url;
+                const dataMatch = url.match(/^data:([^;]+);base64,(.+)$/s);
+                if (dataMatch) {
+                    return { inline_data: { mime_type: dataMatch[1], data: dataMatch[2] } };
+                }
+                // For URL-based images, include as text fallback
+                return { text: `[Image: ${url}]` };
+            }
+            return { text: JSON.stringify(part) };
+        });
+    }
+
     async chatCompletion({ model, messages, temperature = 0.7, max_tokens = 1000, timeout = 30000 }) {
         const start = Date.now();
 
@@ -21,11 +46,13 @@ class GeminiAdapter extends ProviderAdapter {
 
         for (const msg of messages) {
             if (msg.role === 'system') {
-                systemInstruction += (systemInstruction ? '\n' : '') + msg.content;
+                if (typeof msg.content === 'string') {
+                    systemInstruction += (systemInstruction ? '\n' : '') + msg.content;
+                }
             } else {
                 contents.push({
                     role: msg.role === 'assistant' ? 'model' : 'user',
-                    parts: [{ text: msg.content }]
+                    parts: this._contentToParts(msg.content)
                 });
             }
         }

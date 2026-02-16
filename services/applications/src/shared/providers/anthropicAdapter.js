@@ -1,6 +1,7 @@
 /**
  * Anthropic (Claude) Provider Adapter
  * Different API format: system prompt is separate, messages use different structure.
+ * Supports vision via content arrays with image blocks.
  */
 
 const axios = require('axios');
@@ -12,6 +13,40 @@ class AnthropicAdapter extends ProviderAdapter {
         this.baseUrl = 'https://api.anthropic.com/v1';
     }
 
+    /**
+     * Convert OpenAI-style content array to Anthropic format.
+     * Handles both string content and array content (for vision).
+     */
+    _convertContent(content) {
+        if (typeof content === 'string') return content;
+        if (!Array.isArray(content)) return String(content || '');
+
+        return content.map(part => {
+            if (part.type === 'text') {
+                return { type: 'text', text: part.text };
+            }
+            if (part.type === 'image_url' && part.image_url?.url) {
+                // Parse data URL: "data:image/jpeg;base64,/9j/4AAQ..."
+                const url = part.image_url.url;
+                const dataMatch = url.match(/^data:([^;]+);base64,(.+)$/s);
+                if (dataMatch) {
+                    return {
+                        type: 'image',
+                        source: {
+                            type: 'base64',
+                            media_type: dataMatch[1],
+                            data: dataMatch[2]
+                        }
+                    };
+                }
+                // URL-based image (not base64)
+                return { type: 'image', source: { type: 'url', url } };
+            }
+            // Fallback: treat as text
+            return { type: 'text', text: JSON.stringify(part) };
+        });
+    }
+
     async chatCompletion({ model, messages, temperature = 0.7, max_tokens = 1000, timeout = 30000 }) {
         const start = Date.now();
 
@@ -20,9 +55,15 @@ class AnthropicAdapter extends ProviderAdapter {
         const chatMessages = [];
         for (const msg of messages) {
             if (msg.role === 'system') {
-                system += (system ? '\n' : '') + msg.content;
+                // Only extract text from system messages
+                if (typeof msg.content === 'string') {
+                    system += (system ? '\n' : '') + msg.content;
+                }
             } else {
-                chatMessages.push({ role: msg.role, content: msg.content });
+                chatMessages.push({
+                    role: msg.role,
+                    content: this._convertContent(msg.content)
+                });
             }
         }
 
@@ -62,7 +103,7 @@ class AnthropicAdapter extends ProviderAdapter {
 
     /**
      * Ensure messages alternate between user and assistant.
-     * Merge consecutive same-role messages.
+     * Merge consecutive same-role messages. Handles both string and array content.
      */
     _ensureAlternating(messages) {
         if (messages.length === 0) return [{ role: 'user', content: '' }];
@@ -70,7 +111,11 @@ class AnthropicAdapter extends ProviderAdapter {
         const result = [];
         for (const msg of messages) {
             if (result.length > 0 && result[result.length - 1].role === msg.role) {
-                result[result.length - 1].content += '\n' + msg.content;
+                const prev = result[result.length - 1];
+                // Normalize both to arrays and concatenate
+                const prevArr = Array.isArray(prev.content) ? prev.content : [{ type: 'text', text: prev.content }];
+                const currArr = Array.isArray(msg.content) ? msg.content : [{ type: 'text', text: msg.content }];
+                prev.content = [...prevArr, ...currArr];
             } else {
                 result.push({ ...msg });
             }

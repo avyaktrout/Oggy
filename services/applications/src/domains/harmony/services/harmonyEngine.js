@@ -228,20 +228,29 @@ class HarmonyEngine {
             }
         }
 
-        // Get recent accepted actions (last 5)
+        // Get recent accepted actions (last 5) — contextual to this node
         let recentActions = [];
         try {
             const actionsResult = await query(`
-                SELECT suggestion_type, title, description, resolved_at
-                FROM harmony_suggestions
-                WHERE status = 'accepted'
-                ORDER BY resolved_at DESC LIMIT 5
-            `);
+                SELECT s.suggestion_type, s.title, s.description, s.resolved_at, s.payload
+                FROM harmony_suggestions s
+                WHERE s.status = 'accepted'
+                  AND (
+                    (s.suggestion_type IN ('new_indicator', 'model_update') AND EXISTS (
+                      SELECT 1 FROM harmony_indicator_values iv
+                      JOIN harmony_indicators hi ON hi.indicator_id = iv.indicator_id
+                      WHERE iv.node_id = $1 AND hi.key = COALESCE(s.payload->>'key', s.payload->>'indicator_key')
+                    ))
+                    OR s.suggestion_type IN ('weight_adjustment', 'new_data_point')
+                  )
+                ORDER BY s.resolved_at DESC LIMIT 5
+            `, [nodeId]);
             recentActions = actionsResult.rows.map(r => ({
                 type: r.suggestion_type,
                 title: r.title,
                 description: r.description,
                 resolved_at: r.resolved_at,
+                payload: r.payload || {},
             }));
         } catch (_) {}
 

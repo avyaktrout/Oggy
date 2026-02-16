@@ -6,6 +6,145 @@
     renderSidebar('diet', 'enter');
     document.getElementById('diet-date').value = todayStr();
     loadDietData();
+
+    // ── Receipt scanning ──
+    let receiptFoodItems = null;
+
+    document.getElementById('receipt-file').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const status = document.getElementById('receipt-status');
+        const review = document.getElementById('receipt-review');
+        status.textContent = 'Scanning receipt...';
+        status.style.color = 'var(--primary)';
+        review.style.display = 'none';
+
+        try {
+            const { base64, mimeType } = await readFileAsBase64(file);
+            const result = await apiCall('POST', '/v0/receipt/analyze', {
+                image_base64: base64,
+                mime_type: mimeType
+            });
+
+            if (result.error && !result.merchant) {
+                status.textContent = result.error;
+                status.style.color = 'var(--danger)';
+                return;
+            }
+
+            if (result.is_food_receipt && result.food_items && result.food_items.length > 0) {
+                receiptFoodItems = result.food_items;
+                renderReceiptItems(result.food_items);
+                review.style.display = 'block';
+                status.textContent = `Found ${result.food_items.length} food item(s) from ${result.merchant || 'receipt'}`;
+                status.style.color = 'var(--success)';
+            } else if (result.items && result.items.length > 0) {
+                // Not a food receipt but has items — put first item description in the form
+                document.getElementById('diet-description').value = result.items.map(i => i.name).join(', ');
+                status.textContent = `Receipt scanned (${result.items.length} items) — not detected as food`;
+                status.style.color = 'var(--warning, orange)';
+            } else {
+                status.textContent = 'No food items found on receipt';
+                status.style.color = 'var(--warning, orange)';
+            }
+        } catch (err) {
+            status.textContent = 'Scan failed: ' + err.message;
+            status.style.color = 'var(--danger)';
+        }
+
+        e.target.value = '';
+    });
+
+    function renderReceiptItems(items) {
+        const container = document.getElementById('receipt-items-list');
+        container.innerHTML = items.map((f, i) => {
+            const meal = f.meal_type_guess || guessMealType();
+            const isLiquid = /\b(drink|coffee|tea|juice|soda|water|smoothie|latte|cappuccino|beer|wine|cocktail|energy)\b/i.test(f.name);
+            const entryType = isLiquid ? 'liquid' : 'food';
+            return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">' +
+                '<input type="checkbox" checked data-receipt-idx="' + i + '" style="margin:0">' +
+                '<select data-receipt-meal="' + i + '" style="padding:3px 6px;border:1px solid var(--border);border-radius:var(--radius);font-size:12px">' +
+                    '<option value="breakfast"' + (meal === 'breakfast' ? ' selected' : '') + '>Breakfast</option>' +
+                    '<option value="lunch"' + (meal === 'lunch' ? ' selected' : '') + '>Lunch</option>' +
+                    '<option value="dinner"' + (meal === 'dinner' ? ' selected' : '') + '>Dinner</option>' +
+                    '<option value="snack"' + (meal === 'snack' ? ' selected' : '') + '>Snack</option>' +
+                '</select>' +
+                '<select data-receipt-type="' + i + '" style="padding:3px 6px;border:1px solid var(--border);border-radius:var(--radius);font-size:12px">' +
+                    '<option value="food"' + (entryType === 'food' ? ' selected' : '') + '>Food</option>' +
+                    '<option value="liquid"' + (entryType === 'liquid' ? ' selected' : '') + '>Liquid</option>' +
+                '</select>' +
+                '<input type="text" data-receipt-desc="' + i + '" value="' + (f.name || '').replace(/"/g, '&quot;') + '" style="flex:1;padding:4px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:12px">' +
+                '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap">~' + (f.estimated_calories || '?') + ' cal</span>' +
+            '</div>';
+        }).join('');
+    }
+
+    function guessMealType() {
+        const hour = new Date().getHours();
+        if (hour >= 5 && hour < 11) return 'breakfast';
+        if (hour >= 11 && hour < 14) return 'lunch';
+        if (hour >= 17 && hour < 21) return 'dinner';
+        return 'snack';
+    }
+
+    document.getElementById('receipt-add-all').addEventListener('click', async () => {
+        if (!receiptFoodItems) return;
+        const date = document.getElementById('diet-date').value;
+        let added = 0;
+
+        for (let i = 0; i < receiptFoodItems.length; i++) {
+            const cb = document.querySelector('[data-receipt-idx="' + i + '"]');
+            if (!cb || !cb.checked) continue;
+
+            const desc = document.querySelector('[data-receipt-desc="' + i + '"]');
+            const meal = document.querySelector('[data-receipt-meal="' + i + '"]');
+            const type = document.querySelector('[data-receipt-type="' + i + '"]');
+            const description = desc ? desc.value.trim() : receiptFoodItems[i].name;
+            if (!description) continue;
+
+            try {
+                await apiCall('POST', '/v0/diet/entries', {
+                    user_id: USER_ID,
+                    entry_type: type ? type.value : 'food',
+                    description: description,
+                    meal_type: meal ? meal.value : 'snack',
+                    entry_date: date
+                });
+                added++;
+            } catch (err) {
+                showToast('Failed to add: ' + description, 'error');
+            }
+        }
+
+        if (added > 0) {
+            showToast(added + ' item(s) added to diet log!');
+            loadDietData();
+        }
+        document.getElementById('receipt-review').style.display = 'none';
+        receiptFoodItems = null;
+    });
+
+    document.getElementById('receipt-dismiss').addEventListener('click', () => {
+        document.getElementById('receipt-review').style.display = 'none';
+        receiptFoodItems = null;
+    });
+
+    function readFileAsBase64(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                const dataUrl = reader.result;
+                const commaIdx = dataUrl.indexOf(',');
+                const meta = dataUrl.substring(0, commaIdx);
+                const base64 = dataUrl.substring(commaIdx + 1);
+                const mimeMatch = meta.match(/data:([^;]+)/);
+                resolve({ base64, mimeType: mimeMatch ? mimeMatch[1] : 'image/jpeg' });
+            };
+            reader.onerror = () => reject(new Error('Failed to read file'));
+            reader.readAsDataURL(file);
+        });
+    }
 })();
 
 window.addDietEntry = async function() {

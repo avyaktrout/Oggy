@@ -241,6 +241,17 @@ router.get('/datasets', async (req, res) => {
     }
 });
 
+router.post('/datasets/check-updates', async (req, res) => {
+    try {
+        const userId = req.userId || req.body.user_id;
+        const suggestions = await harmonySuggestionService.generateDataCatalogSuggestions(userId);
+        res.json({ suggestions });
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-datasets-check-updates' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ──────────────────────────────────────────────────
 // Audit
 // ──────────────────────────────────────────────────

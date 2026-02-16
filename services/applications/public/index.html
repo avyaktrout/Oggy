@@ -18,6 +18,12 @@
         <h1 class="page-title">Enter Payment</h1>
 
         <div class="card">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+                <input type="file" id="receipt-file" accept="image/*,.pdf" style="display:none">
+                <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('receipt-file').click()" style="white-space:nowrap">Scan Receipt</button>
+                <span id="receipt-status" style="font-size:12px;color:var(--text-muted)"></span>
+            </div>
+
             <form id="expense-form">
                 <div class="form-row">
                     <div class="form-group">
@@ -59,7 +65,36 @@
                 </div>
 
                 <button type="submit" class="btn btn-primary" id="submit-btn">Add Payment</button>
+
+                <div style="margin-top:10px">
+                    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-muted);cursor:pointer">
+                        <input type="checkbox" id="diet-transfer-enabled">
+                        Transfer food/drink info to Diet Agent?
+                    </label>
+                </div>
             </form>
+
+            <div class="suggestion-box" id="diet-suggestion-box" style="margin-top:12px">
+                <div style="font-size:13px;color:var(--text-muted);margin-bottom:6px">Oggy detected food/drink. Add to your diet log?</div>
+                <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+                    <select id="diet-sug-meal" style="padding:4px 8px;border-radius:var(--radius);border:1px solid var(--border);font-size:13px">
+                        <option value="breakfast">Breakfast</option>
+                        <option value="lunch">Lunch</option>
+                        <option value="dinner">Dinner</option>
+                        <option value="snack">Snack</option>
+                    </select>
+                    <select id="diet-sug-type" style="padding:4px 8px;border-radius:var(--radius);border:1px solid var(--border);font-size:13px">
+                        <option value="food">Food</option>
+                        <option value="liquid">Liquid</option>
+                    </select>
+                </div>
+                <input type="text" id="diet-sug-description" placeholder="Food description" style="width:100%;padding:6px 10px;border-radius:var(--radius);border:1px solid var(--border);font-size:13px;margin-bottom:8px">
+                <div id="diet-sug-items" style="font-size:12px;color:var(--text-muted);margin-bottom:8px"></div>
+                <div style="display:flex;gap:8px">
+                    <button class="btn btn-success btn-sm" id="diet-sug-accept">Add to Diet</button>
+                    <button class="btn btn-outline btn-sm" id="diet-sug-dismiss">Skip</button>
+                </div>
+            </div>
 
             <div class="suggestion-box" id="suggestion-box">
                 <div style="font-size:13px;color:var(--text-muted);margin-bottom:4px">Oggy suggests:</div>
