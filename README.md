@@ -71,17 +71,43 @@ All application services share a single Docker image (`oggy-app`) with different
 - Custom dietary rules
 
 **Harmony Domain**
-- Interactive city map with E, S, H scoring (Equilibrium Canon model)
-- 6-dimension framework: Balance, Flow, Compassion, Discernment, Awareness, Expression
-- Score equations: E = (B * F * C)^(1/3), S = sqrt(A * X), H = sqrt(E * S)
-- Data catalog with indicator explainability (normalized values, weights, bounds)
-- AI-generated suggestions: new indicators, data points, weight adjustments, model updates, new cities
-- Specificity guard rejects vague or overly broad indicators
-- What-if scenario sandbox with projected score comparisons
-- Federated learning via Observer (cross-tenant harmony packs)
-- Daily score snapshots for progression analytics
-- NEW indicator badges via Redis
-- Recent actions panel with expandable details
+
+The Harmony Map is an interactive city well-being dashboard. It measures how well a city is doing across multiple real-world metrics — things like crime rates, employment, education, healthcare access, and civic engagement — and distills them into a single **Harmony score (H)** per city.
+
+*How it works:*
+
+Every city on the map is evaluated using **indicators** — measurable data points like "violent crime rate per 100k" or "high school graduation rate (%)". Each indicator belongs to one of **6 dimensions**:
+
+| Dimension | What it measures | Example indicators |
+|-----------|-----------------|-------------------|
+| **Balance (B)** | Safety and economic stability | Violent crime rate, income inequality, homelessness rate |
+| **Flow (F)** | Mobility and employment | Unemployment rate, commute time, transit access |
+| **Compassion** | Health and welfare | Uninsured rate, food insecurity, mental health providers |
+| **Discernment** | Education and civic engagement | Graduation rates, voter turnout, library access |
+| **Awareness (A)** | Community and transparency | Civic engagement index, government transparency |
+| **Expression (X)** | Culture and freedom | Arts organizations per capita, protest freedom |
+
+These 6 dimensions roll up into **3 top-level scores** using geometric aggregation:
+
+```
+Care (C)        = Compassion × Discernment
+Economic (E)    = cube_root(Balance × Flow × Care)
+Social (S)      = sqrt(Awareness × Expression)
+Harmony (H)     = sqrt(E × S)
+```
+
+All indicator values are **normalized to 0–1** using min-max bounds (e.g., violent crime ranges from 100 to 2,500 per 100k). Indicators where lower is better (like crime) are inverted so a low raw value produces a high score. Each indicator also has a **weight** (default 1.0) that controls its influence within its dimension.
+
+*Key features:*
+
+- **Data catalog** — Browse every indicator for a city with its raw value, normalized score, bounds, weight, and dimension. See what's driving scores up or dragging them down.
+- **AI-generated suggestions** — Oggy can suggest new indicators, new data points, weight adjustments, model updates, or entirely new cities. Each suggestion goes through a **specificity guard** that rejects vague or overly broad metrics.
+- **Suggestion acceptance triggers score recomputation** — When you accept a new indicator or weight change, all affected city scores are recalculated automatically.
+- **What-if scenarios** — Create sandbox scenarios to project how changing an indicator value or weight would affect a city's scores, without persisting any changes.
+- **Federated learning via Observer** — Users can opt-in to share accepted suggestions. The Observer aggregates them into versioned "Harmony Packs" that other users can import.
+- **Daily score snapshots** — Scores are snapshotted daily for progression charts and trend analysis.
+- **NEW indicator badges** — Redis-backed badges highlight recently added indicators so you can see what changed.
+- **Recent actions panel** — Expandable cards showing what each accepted suggestion actually changed (indicator details, weight values, model update rationale).
 
 **Platform**
 - Magic link authentication (email-based, no passwords)
