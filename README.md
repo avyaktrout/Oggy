@@ -45,11 +45,13 @@ All application services share a single Docker image (`oggy-app`) with different
 ## Features
 
 **Learning System**
-- Memory-augmented responses using retrieved context
-- Continuous training with auto-generated benchmarks (Tessa)
-- Difficulty scaling across 5 levels (S1-S5) with 3 sub-levels each
-- Benchmark-driven targeted learning from weakness analysis
+- Memory-augmented responses using vector-based semantic retrieval
+- Continuous training with auto-generated benchmarks per domain (Tessa for payments, LLM-as-judge for general/diet/harmony)
+- Adaptive difficulty scaling across 10 scales (S1-S10) with 5 levels each
+- Parallelized benchmark generation and evaluation for faster training cycles
+- Benchmark-driven targeted learning from weakness analysis and confusion pair detection
 - Federated learning via Observer (cross-tenant knowledge packs)
+- Domain-specific email reports with per-scenario performance breakdowns
 
 **Payments Domain**
 - Expense entry with AI categorization suggestions
@@ -60,8 +62,15 @@ All application services share a single Docker image (`oggy-app`) with different
 - Domain knowledge storage for categorization rules
 
 **General Domain**
-- Conversational AI with persistent memory
-- Project-scoped conversations
+- Conversational AI with persistent memory and project-scoped conversations
+- Oggy vs Base model side-by-side comparison chat
+- **Behavior Learning** — automatically extracts user preferences, tone, and workflow patterns from chat conversations and stores them as memory cards
+- **Domain Learning** — AI-suggested domain tags per project, with buildable knowledge packs (10-20 cards each) that inject domain expertise into chat
+- Knowledge pack lifecycle: build → review → apply → rollback, with full diff viewer between pack versions
+- **Study Plan generation** — LLM-generated structured learning plans with validated resource links, saveable per project
+- Dual-mode benchmarks testing both context retention/preference adherence (behavior) and domain knowledge recall/application
+- Parallelized training sessions (3 concurrent practice exercises per round) with LLM-as-judge evaluation
+- Proactive suggestions — Oggy detects domain learning opportunities during training and suggests tags for untagged projects
 
 **Diet Domain**
 - Natural language meal logging
@@ -207,8 +216,17 @@ Hosted on a t3.small via Cloudflare Tunnel. Resource limits tuned for 2GB RAM.
 ### General
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/v0/general/chat` | Chat with general assistant |
+| POST | `/v0/general/chat` | Chat with general assistant (Oggy + Base) |
 | GET | `/v0/general/projects` | List projects |
+| GET | `/v0/general/projects/:id/learning-settings` | Get behavior/domain learning toggles |
+| PUT | `/v0/general/projects/:id/learning-settings` | Update learning mode toggles |
+| POST | `/v0/general/domain-tags/suggest` | AI-suggest domain tags for a project |
+| POST | `/v0/general/domain-tags/enable` | Enable a domain tag on a project |
+| POST | `/v0/general/domain-learning/build-pack` | Build knowledge pack for a tag |
+| POST | `/v0/general/domain-learning/packs/:id/apply` | Apply pack (creates memory cards) |
+| POST | `/v0/general/domain-learning/rollback` | Rollback an applied pack |
+| POST | `/v0/general/domain-learning/study-plan` | Generate study plan for a domain tag |
+| GET | `/v0/general/domain-learning/study-plans` | List saved study plans for a project |
 
 ### Diet
 | Method | Path | Description |
