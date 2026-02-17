@@ -25,11 +25,20 @@ const providerResolver = require('../../../shared/providers/providerResolver');
 const { costGovernor } = require('../../../shared/middleware/costGovernor');
 const { parallelMap } = require('../../../shared/utils/parallel');
 
-// Scenario type distribution
-const SCENARIO_TYPE_DISTRIBUTION = {
+// Scenario type distribution (base: no domain learning active)
+const SCENARIO_TYPE_DISTRIBUTION_BASE = {
     context_retention: 0.40,
     preference_adherence: 0.30,
     general_helpfulness: 0.30
+};
+
+// Scenario type distribution (with domain learning active)
+const SCENARIO_TYPE_DISTRIBUTION_DL = {
+    context_retention: 0.25,
+    preference_adherence: 0.20,
+    general_helpfulness: 0.20,
+    domain_knowledge_recall: 0.20,
+    domain_knowledge_application: 0.15
 };
 
 // Scale complexity definitions (conversation-specific)
@@ -132,7 +141,7 @@ class ConversationBenchmarkGenerator {
         });
 
         // Distribute scenario types
-        const scenarioTasks = this._buildScenarioTasks(count, difficulty_mix, scale, level, userId);
+        const scenarioTasks = await this._buildScenarioTasks(count, difficulty_mix, scale, level, userId);
 
         // Generate scenarios in parallel (5 concurrency to stay within rate limits)
         const parallelResult = await parallelMap(
@@ -227,11 +236,23 @@ class ConversationBenchmarkGenerator {
     /**
      * Build the list of scenario generation tasks with proper type distribution.
      */
-    _buildScenarioTasks(count, difficulty_mix, scale, level, userId) {
+    async _buildScenarioTasks(count, difficulty_mix, scale, level, userId) {
+        // Check if user has active domain learning
+        let hasDomainLearning = false;
+        try {
+            const dlResult = await query(
+                `SELECT COUNT(*) as cnt FROM dl_domain_tags WHERE user_id = $1 AND status = 'enabled'`,
+                [userId]
+            );
+            hasDomainLearning = parseInt(dlResult.rows[0].cnt) > 0;
+        } catch { /* table may not exist */ }
+
+        const distribution = hasDomainLearning ? SCENARIO_TYPE_DISTRIBUTION_DL : SCENARIO_TYPE_DISTRIBUTION_BASE;
+
         const tasks = [];
 
         for (let i = 0; i < count; i++) {
-            const scenarioType = this._selectScenarioType(i, count);
+            const scenarioType = this._selectScenarioType(i, count, distribution);
             const difficulty = this._selectDifficulty(difficulty_mix, i, count);
 
             tasks.push({
@@ -258,6 +279,10 @@ class ConversationBenchmarkGenerator {
                 return await this._generatePreferenceAdherenceScenario(task, userId);
             case 'general_helpfulness':
                 return await this._generateGeneralHelpfulnessScenario(task, userId);
+            case 'domain_knowledge_recall':
+                return await this._generateDomainKnowledgeRecallScenario(task, userId);
+            case 'domain_knowledge_application':
+                return await this._generateDomainKnowledgeApplicationScenario(task, userId);
             default:
                 return await this._generateGeneralHelpfulnessScenario(task, userId);
         }
@@ -560,6 +585,176 @@ Return JSON:
         };
     }
 
+    /**
+     * Generate a domain knowledge recall scenario.
+     * Tests whether Oggy can recall specific facts from applied knowledge packs.
+     */
+    async _generateDomainKnowledgeRecallScenario(task, userId) {
+        // Pull knowledge cards from user's applied packs
+        const cardsResult = await query(
+            `SELECT kc.topic, kc.summary, t.display_name, t.tag
+             FROM dl_knowledge_cards kc
+             JOIN dl_knowledge_packs kp ON kp.pack_id = kc.pack_id
+             JOIN dl_domain_tags t ON t.tag_id = kc.tag_id
+             WHERE kp.user_id = $1 AND kp.status = 'applied'
+             ORDER BY RANDOM() LIMIT 3`,
+            [userId]
+        );
+
+        if (cardsResult.rows.length === 0) {
+            // Fallback to general helpfulness if no applied packs
+            return await this._generateGeneralHelpfulnessScenario(task, userId);
+        }
+
+        const card = cardsResult.rows[0];
+        await costGovernor.checkBudget(1500);
+
+        const scaleConfig = this.scaleComplexity[Math.min(task.scale, 5)];
+        const resolved = await providerResolver.getAdapter(userId, 'oggy');
+
+        const result = await resolved.adapter.chatCompletion({
+            model: resolved.model,
+            messages: [
+                {
+                    role: 'system',
+                    content: `You create benchmark scenarios testing an AI assistant's domain knowledge recall.
+Scale: ${scaleConfig.name} - ${scaleConfig.description}
+Difficulty: ${task.difficulty}/5
+
+The assistant has been taught domain knowledge. Create a question that directly tests recall of specific facts.
+Return ONLY valid JSON.`
+                },
+                {
+                    role: 'user',
+                    content: `Domain: ${card.display_name || card.tag}
+Knowledge card topic: ${card.topic}
+Knowledge card content: ${card.summary}
+
+Generate a question that tests if the assistant can recall this knowledge at difficulty ${task.difficulty}/5.
+
+Return JSON:
+{
+  "prompt": "A question about this domain topic",
+  "expected_behavior": "The specific facts/details the assistant should recall",
+  "evaluation_criteria": "How to judge accuracy of domain knowledge recall",
+  "reasoning": "Why this tests domain knowledge recall"
+}`
+                }
+            ],
+            temperature: 0.6,
+            max_tokens: 600
+        });
+
+        const tokensUsed = result.tokens_used || 600;
+        costGovernor.recordUsage(tokensUsed);
+        providerResolver.logRequest(userId, resolved.provider, resolved.model, 'oggy', 'convBenchmarkGen', tokensUsed, result.latency_ms, true, null);
+
+        const parsed = this._safeParseJson(result.text);
+
+        return {
+            merchant: 'domain_knowledge_recall',
+            description: parsed.prompt || `Tell me about ${card.topic}`,
+            correct_category: JSON.stringify({
+                expected_behavior: parsed.expected_behavior || card.summary,
+                evaluation_criteria: parsed.evaluation_criteria || 'recalls_domain_facts',
+                domain_tag: card.tag,
+                knowledge_topic: card.topic
+            }),
+            reasoning: parsed.reasoning || `Tests recall of ${card.tag} domain knowledge`,
+            amount: task.difficulty,
+            generator: 'conversation_benchmark',
+            model: resolved.model,
+            scenario_type: 'domain_knowledge_recall',
+            context: [],
+            scale: task.scale
+        };
+    }
+
+    /**
+     * Generate a domain knowledge application scenario.
+     * Tests whether Oggy can apply domain knowledge to novel problems.
+     */
+    async _generateDomainKnowledgeApplicationScenario(task, userId) {
+        // Pull knowledge cards from user's applied packs
+        const cardsResult = await query(
+            `SELECT kc.topic, kc.summary, t.display_name, t.tag
+             FROM dl_knowledge_cards kc
+             JOIN dl_knowledge_packs kp ON kp.pack_id = kc.pack_id
+             JOIN dl_domain_tags t ON t.tag_id = kc.tag_id
+             WHERE kp.user_id = $1 AND kp.status = 'applied'
+             ORDER BY RANDOM() LIMIT 3`,
+            [userId]
+        );
+
+        if (cardsResult.rows.length === 0) {
+            return await this._generateGeneralHelpfulnessScenario(task, userId);
+        }
+
+        // Use multiple cards to create a novel application scenario
+        const cards = cardsResult.rows;
+        await costGovernor.checkBudget(1500);
+
+        const scaleConfig = this.scaleComplexity[Math.min(task.scale, 5)];
+        const resolved = await providerResolver.getAdapter(userId, 'oggy');
+
+        const result = await resolved.adapter.chatCompletion({
+            model: resolved.model,
+            messages: [
+                {
+                    role: 'system',
+                    content: `You create benchmark scenarios testing an AI assistant's ability to APPLY domain knowledge to novel problems.
+Scale: ${scaleConfig.name} - ${scaleConfig.description}
+Difficulty: ${task.difficulty}/5
+
+The assistant has domain knowledge loaded. Create a novel problem that requires applying that knowledge creatively.
+Return ONLY valid JSON.`
+                },
+                {
+                    role: 'user',
+                    content: `Domain: ${cards[0].display_name || cards[0].tag}
+Available knowledge:
+${cards.map(c => `- ${c.topic}: ${c.summary.substring(0, 150)}`).join('\n')}
+
+Generate a novel application problem at difficulty ${task.difficulty}/5 that requires using this domain knowledge to solve a new problem or scenario.
+
+Return JSON:
+{
+  "prompt": "A practical problem or scenario requiring domain knowledge application",
+  "expected_behavior": "How the assistant should apply the domain knowledge",
+  "evaluation_criteria": "How to judge the quality of knowledge application",
+  "reasoning": "Why this tests knowledge application vs just recall"
+}`
+                }
+            ],
+            temperature: 0.8,
+            max_tokens: 600
+        });
+
+        const tokensUsed = result.tokens_used || 600;
+        costGovernor.recordUsage(tokensUsed);
+        providerResolver.logRequest(userId, resolved.provider, resolved.model, 'oggy', 'convBenchmarkGen', tokensUsed, result.latency_ms, true, null);
+
+        const parsed = this._safeParseJson(result.text);
+
+        return {
+            merchant: 'domain_knowledge_application',
+            description: parsed.prompt || `Help me solve a problem using ${cards[0].tag} concepts`,
+            correct_category: JSON.stringify({
+                expected_behavior: parsed.expected_behavior || 'Should apply domain concepts to solve the problem',
+                evaluation_criteria: parsed.evaluation_criteria || 'applies_domain_knowledge',
+                domain_tag: cards[0].tag,
+                knowledge_topics: cards.map(c => c.topic)
+            }),
+            reasoning: parsed.reasoning || `Tests application of ${cards[0].tag} domain knowledge`,
+            amount: task.difficulty,
+            generator: 'conversation_benchmark',
+            model: resolved.model,
+            scenario_type: 'domain_knowledge_application',
+            context: [],
+            scale: task.scale
+        };
+    }
+
     // ─── Storage ───────────────────────────────────────────────────────
 
     /**
@@ -672,11 +867,11 @@ Return JSON:
     /**
      * Select scenario type based on distribution weights.
      */
-    _selectScenarioType(index, total) {
+    _selectScenarioType(index, total, distribution) {
         const rand = Math.random();
         let cumulative = 0;
 
-        for (const [type, weight] of Object.entries(SCENARIO_TYPE_DISTRIBUTION)) {
+        for (const [type, weight] of Object.entries(distribution)) {
             cumulative += weight;
             if (rand < cumulative) {
                 return type;

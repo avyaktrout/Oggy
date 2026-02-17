@@ -208,6 +208,13 @@ class ConversationSelfDrivenLearning {
                 }
             }
 
+            // Proactive: check for domain learning opportunities every 5 sessions
+            if (this.stats.total_attempts > 0 && this.stats.total_attempts % (this.practiceCount * 5) === 0) {
+                this._checkDomainLearningOpportunities(userId).catch(err =>
+                    logger.debug('Proactive DL check failed', { error: err.message })
+                );
+            }
+
             const duration = Date.now() - startTime;
             const sessionAttempts = this.practiceCount - sessionErrors;
             const sessionAccuracy = sessionAttempts > 0
@@ -464,6 +471,50 @@ When you have relevant context from memory, incorporate it naturally into your r
         if (rand < 0.65) return 3;
         if (rand < 0.85) return 4;
         return 5;
+    }
+
+    /**
+     * Check active projects for domain learning opportunities.
+     * Creates DOMAIN_TAG_SUGGESTION inquiries for untagged projects with DL enabled.
+     */
+    async _checkDomainLearningOpportunities(userId) {
+        try {
+            // Find projects with DL enabled but no domain tags
+            const projects = await query(
+                `SELECT p.project_id, p.name, p.metadata
+                 FROM v2_projects p
+                 WHERE p.user_id = $1 AND p.status = 'active'
+                 AND (p.metadata->'learning'->>'domain_learning')::boolean = true`,
+                [userId]
+            );
+
+            for (const proj of projects.rows) {
+                // Check if project has any enabled tags
+                const tagCount = await query(
+                    `SELECT COUNT(*) as cnt FROM dl_project_domain_tags WHERE project_id = $1`,
+                    [proj.project_id]
+                );
+
+                if (parseInt(tagCount.rows[0].cnt) === 0) {
+                    // No tags yet — suggest some
+                    try {
+                        const domainLearningService = require('./domainLearningService');
+                        const tags = await domainLearningService.suggestDomainTags(userId, proj.project_id);
+                        if (tags.length > 0) {
+                            logger.info('Proactive domain tag suggestion', {
+                                userId, projectId: proj.project_id, tags: tags.map(t => t.tag)
+                            });
+                        }
+                    } catch (err) {
+                        logger.debug('Proactive tag suggestion failed for project', {
+                            error: err.message, projectId: proj.project_id
+                        });
+                    }
+                }
+            }
+        } catch (err) {
+            logger.debug('Domain learning opportunity check failed', { error: err.message });
+        }
     }
 
     _sleep(ms) {

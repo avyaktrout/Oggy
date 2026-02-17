@@ -15,11 +15,19 @@ const logger = require('../../../shared/utils/logger');
 const providerResolver = require('../../../shared/providers/providerResolver');
 const { costGovernor } = require('../../../shared/middleware/costGovernor');
 
-// Practice type weights (must sum to 1.0)
-const PRACTICE_TYPE_WEIGHTS = {
+// Practice type weights (base: no domain learning)
+const PRACTICE_TYPE_WEIGHTS_BASE = {
     context_retention: 0.40,
     preference_adherence: 0.30,
     general_helpfulness: 0.30
+};
+
+// Practice type weights (with domain learning active)
+const PRACTICE_TYPE_WEIGHTS_DL = {
+    context_retention: 0.25,
+    preference_adherence: 0.20,
+    general_helpfulness: 0.20,
+    domain_knowledge: 0.35
 };
 
 // Score threshold: score >= 4 is considered "correct"
@@ -27,7 +35,9 @@ const CORRECT_THRESHOLD = 4;
 
 class ConversationAssessmentGenerator {
     constructor() {
-        this.practiceTypeWeights = { ...PRACTICE_TYPE_WEIGHTS };
+        this.practiceTypeWeights = { ...PRACTICE_TYPE_WEIGHTS_BASE };
+        this._dlChecked = false;
+        this._hasDL = false;
     }
 
     /**
@@ -37,6 +47,23 @@ class ConversationAssessmentGenerator {
      * @returns {object} Practice question object
      */
     async generateQuestion(userId, difficulty = 3) {
+        // Check DL status once per instance
+        if (!this._dlChecked) {
+            try {
+                const dlResult = await query(
+                    `SELECT COUNT(*) as cnt FROM dl_knowledge_cards kc
+                     JOIN dl_knowledge_packs kp ON kp.pack_id = kc.pack_id
+                     WHERE kp.user_id = $1 AND kp.status = 'applied'`,
+                    [userId]
+                );
+                this._hasDL = parseInt(dlResult.rows[0].cnt) > 0;
+                if (this._hasDL) {
+                    this.practiceTypeWeights = { ...PRACTICE_TYPE_WEIGHTS_DL };
+                }
+            } catch { /* table may not exist */ }
+            this._dlChecked = true;
+        }
+
         const practiceType = this._selectPracticeType();
 
         logger.debug('Generating conversation practice question', {
@@ -53,6 +80,8 @@ class ConversationAssessmentGenerator {
                     return await this._generatePreferenceAdherenceQuestion(userId, difficulty);
                 case 'general_helpfulness':
                     return await this._generateGeneralHelpfulnessQuestion(userId, difficulty);
+                case 'domain_knowledge':
+                    return await this._generateDomainKnowledgeQuestion(userId, difficulty);
                 default:
                     return await this._generateGeneralHelpfulnessQuestion(userId, difficulty);
             }
@@ -377,6 +406,80 @@ Return JSON:
         };
     }
 
+    // ─── Domain Knowledge Questions ───────────────────────────────────
+
+    /**
+     * Generate a question testing domain knowledge from applied knowledge packs.
+     */
+    async _generateDomainKnowledgeQuestion(userId, difficulty) {
+        // Pull cards from applied packs
+        const cardsResult = await query(
+            `SELECT kc.topic, kc.summary, t.display_name, t.tag
+             FROM dl_knowledge_cards kc
+             JOIN dl_knowledge_packs kp ON kp.pack_id = kc.pack_id
+             JOIN dl_domain_tags t ON t.tag_id = kc.tag_id
+             WHERE kp.user_id = $1 AND kp.status = 'applied'
+             ORDER BY RANDOM() LIMIT 2`,
+            [userId]
+        );
+
+        if (cardsResult.rows.length === 0) {
+            return await this._generateGeneralHelpfulnessQuestion(userId, difficulty);
+        }
+
+        const cards = cardsResult.rows;
+        await costGovernor.checkBudget(1500);
+
+        const resolved = await providerResolver.getAdapter(userId, 'oggy');
+        const generationResult = await resolved.adapter.chatCompletion({
+            model: resolved.model,
+            messages: [
+                {
+                    role: 'system',
+                    content: `You generate practice questions testing an AI assistant's domain knowledge.
+Difficulty: ${difficulty}/5 (1=direct recall, 3=application, 5=synthesis across topics).
+Return ONLY valid JSON.`
+                },
+                {
+                    role: 'user',
+                    content: `Domain: ${cards[0].display_name || cards[0].tag}
+Knowledge available:
+${cards.map(c => `- ${c.topic}: ${c.summary.substring(0, 200)}`).join('\n')}
+
+Generate a domain knowledge question at difficulty ${difficulty}/5.
+At low difficulty: test direct recall. At high difficulty: test application to novel scenarios.
+
+Return JSON:
+{
+  "prompt": "The question testing domain knowledge",
+  "expected_behavior": "What the response should include",
+  "evaluation_criteria": "How to judge domain knowledge quality"
+}`
+                }
+            ],
+            temperature: 0.7,
+            max_tokens: 500
+        });
+
+        const tokensUsed = generationResult.tokens_used || 500;
+        costGovernor.recordUsage(tokensUsed);
+        providerResolver.logRequest(userId, resolved.provider, resolved.model, 'oggy', 'conversationAssessmentGen', tokensUsed, generationResult.latency_ms, true, null);
+
+        const parsed = this._safeParseJson(generationResult.text);
+
+        return {
+            type: 'domain_knowledge',
+            prompt: parsed.prompt || `Explain ${cards[0].topic} in the context of ${cards[0].tag}`,
+            context: [],
+            expected_behavior: parsed.expected_behavior || cards[0].summary,
+            evaluation_criteria: parsed.evaluation_criteria || 'accurate_domain_knowledge',
+            difficulty,
+            domain_tag: cards[0].tag,
+            knowledge_topics: cards.map(c => c.topic),
+            metadata: {}
+        };
+    }
+
     // ─── Judge Prompt ──────────────────────────────────────────────────
 
     /**
@@ -411,6 +514,17 @@ GENERAL HELPFULNESS EVALUATION:
 - Judge the response on accuracy, clarity, completeness, and usefulness.
 - Higher scores for well-structured, thorough, and actionable responses.
 - Lower scores for vague, incorrect, or unhelpful responses.`;
+                break;
+
+            case 'domain_knowledge':
+                typeSpecificCriteria = `
+DOMAIN KNOWLEDGE EVALUATION:
+- Domain: ${question.domain_tag || 'unknown'}
+- Topics: ${(question.knowledge_topics || []).join(', ')}
+- Judge whether the assistant demonstrates accurate domain-specific knowledge.
+- Higher scores for detailed, factually correct domain knowledge.
+- Lower scores if domain knowledge is missing, vague, or inaccurate.
+- At high difficulty, the assistant should synthesize and apply knowledge, not just recall.`;
                 break;
         }
 

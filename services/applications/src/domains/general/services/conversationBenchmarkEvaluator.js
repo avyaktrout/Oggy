@@ -365,11 +365,16 @@ Score each criterion 1-5:
    - 1 = Unhelpful or incorrect
    - 5 = Exceptionally helpful and thorough
 
+${scenarioType.startsWith('domain_knowledge') ? `4. **domain_accuracy**: Does the response demonstrate accurate domain-specific knowledge?
+   - 1 = No domain knowledge shown or completely inaccurate
+   - 3 = Some domain knowledge but with gaps or inaccuracies
+   - 5 = Deep, accurate domain expertise applied correctly` : ''}
+
 Return ONLY valid JSON:
 {
   "context_awareness": <1-5>,
   "preference_alignment": <1-5>,
-  "helpfulness": <1-5>,
+  "helpfulness": <1-5>,${scenarioType.startsWith('domain_knowledge') ? '\n  "domain_accuracy": <1-5>,' : ''}
   "feedback": "Brief explanation of scores"
 }`;
 
@@ -421,9 +426,16 @@ Return ONLY valid JSON:
             helpfulness: this._clampScore(parsed.helpfulness)
         };
 
-        const avg_score = parseFloat(
-            ((scores.context_awareness + scores.preference_alignment + scores.helpfulness) / 3).toFixed(2)
-        );
+        // Include domain_accuracy if present
+        let scoreCount = 3;
+        let scoreSum = scores.context_awareness + scores.preference_alignment + scores.helpfulness;
+        if (parsed.domain_accuracy !== undefined) {
+            scores.domain_accuracy = this._clampScore(parsed.domain_accuracy);
+            scoreSum += scores.domain_accuracy;
+            scoreCount = 4;
+        }
+
+        const avg_score = parseFloat((scoreSum / scoreCount).toFixed(2));
 
         return {
             scores,
@@ -451,6 +463,8 @@ Return ONLY valid JSON:
         let totalContextAwareness = 0;
         let totalPreferenceAlignment = 0;
         let totalHelpfulness = 0;
+        let totalDomainAccuracy = 0;
+        let domainCount = 0;
         let correctCount = 0;
         const wrongScenarios = [];
 
@@ -463,6 +477,10 @@ Return ONLY valid JSON:
             totalContextAwareness += roleResult.scores?.context_awareness || 0;
             totalPreferenceAlignment += roleResult.scores?.preference_alignment || 0;
             totalHelpfulness += roleResult.scores?.helpfulness || 0;
+            if (roleResult.scores?.domain_accuracy !== undefined) {
+                totalDomainAccuracy += roleResult.scores.domain_accuracy;
+                domainCount++;
+            }
 
             if (roleResult.correct) {
                 correctCount++;
@@ -483,14 +501,19 @@ Return ONLY valid JSON:
 
         const total = scenarioResults.length;
 
+        const avg_scores = {
+            context_awareness: total > 0 ? parseFloat((totalContextAwareness / total).toFixed(2)) : 0,
+            preference_alignment: total > 0 ? parseFloat((totalPreferenceAlignment / total).toFixed(2)) : 0,
+            helpfulness: total > 0 ? parseFloat((totalHelpfulness / total).toFixed(2)) : 0
+        };
+        if (domainCount > 0) {
+            avg_scores.domain_accuracy = parseFloat((totalDomainAccuracy / domainCount).toFixed(2));
+        }
+
         return {
             accuracy: total > 0 ? parseFloat((correctCount / total).toFixed(3)) : 0,
             correct_count: correctCount,
-            avg_scores: {
-                context_awareness: total > 0 ? parseFloat((totalContextAwareness / total).toFixed(2)) : 0,
-                preference_alignment: total > 0 ? parseFloat((totalPreferenceAlignment / total).toFixed(2)) : 0,
-                helpfulness: total > 0 ? parseFloat((totalHelpfulness / total).toFixed(2)) : 0
-            },
+            avg_scores,
             wrong_scenarios: wrongScenarios
         };
     }

@@ -96,6 +96,44 @@ router.get('/projects/:id/messages', async (req, res) => {
     }
 });
 
+// Learning Settings
+router.get('/projects/:id/learning-settings', async (req, res) => {
+    try {
+        const userId = req.query.user_id;
+        const project = await generalChatService.getProject(userId, req.params.id);
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+
+        const metadata = project.metadata || {};
+        const learning = metadata.learning || { behavior_learning: true, domain_learning: false };
+        res.json({ learning });
+    } catch (err) {
+        logger.logError(err, { operation: 'v2-get-learning-settings' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.put('/projects/:id/learning-settings', async (req, res) => {
+    try {
+        const userId = req.body.user_id;
+        const { behavior_learning, domain_learning } = req.body;
+
+        const project = await generalChatService.getProject(userId, req.params.id);
+        if (!project) return res.status(404).json({ error: 'Project not found' });
+
+        const metadata = project.metadata || {};
+        metadata.learning = {
+            behavior_learning: behavior_learning !== undefined ? behavior_learning : (metadata.learning?.behavior_learning ?? true),
+            domain_learning: domain_learning !== undefined ? domain_learning : (metadata.learning?.domain_learning ?? false)
+        };
+
+        await generalChatService.updateProjectMetadata(userId, req.params.id, metadata);
+        res.json({ success: true, learning: metadata.learning });
+    } catch (err) {
+        logger.logError(err, { operation: 'v2-put-learning-settings' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Analytics
 router.get('/analytics', async (req, res) => {
     try {
@@ -153,11 +191,45 @@ router.get('/analytics', async (req, res) => {
             }
         } catch (e) { /* benchmarks may not exist */ }
 
+        // Behavior learning stats
+        let blStats = { signals_extracted: 0 };
+        try {
+            const blResult = await dbQuery(
+                `SELECT COUNT(*) as total FROM v2_preference_events WHERE user_id = $1 AND source = 'behavior_auto'`,
+                [userId]
+            );
+            blStats.signals_extracted = parseInt(blResult.rows[0].total);
+        } catch (e) { /* ignore */ }
+
+        // Domain learning stats
+        let dlStats = { enabled_tags: 0, active_packs: 0, total_cards: 0 };
+        try {
+            const tagResult = await dbQuery(
+                `SELECT COUNT(*) as cnt FROM dl_domain_tags WHERE user_id = $1 AND status = 'enabled'`,
+                [userId]
+            );
+            dlStats.enabled_tags = parseInt(tagResult.rows[0].cnt);
+            const packResult = await dbQuery(
+                `SELECT COUNT(*) as cnt FROM dl_knowledge_packs WHERE user_id = $1 AND status = 'applied'`,
+                [userId]
+            );
+            dlStats.active_packs = parseInt(packResult.rows[0].cnt);
+            const cardResult = await dbQuery(
+                `SELECT COUNT(*) as cnt FROM dl_knowledge_cards kc
+                 JOIN dl_knowledge_packs kp ON kp.pack_id = kc.pack_id
+                 WHERE kp.user_id = $1 AND kp.status = 'applied'`,
+                [userId]
+            );
+            dlStats.total_cards = parseInt(cardResult.rows[0].cnt);
+        } catch (e) { /* tables may not exist */ }
+
         res.json({
             total_conversations: parseInt(msgResult.rows[0].total),
             daily_activity: activityResult.rows,
             learning_events: learningCount,
-            training
+            training,
+            behavior_learning: blStats,
+            domain_learning: dlStats
         });
     } catch (err) {
         logger.logError(err, { operation: 'v2-analytics' });

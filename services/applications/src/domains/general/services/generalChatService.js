@@ -19,6 +19,12 @@ class GeneralChatService {
         this.openaiBreaker = circuitBreakerRegistry.getOrCreate('openai-api');
     }
 
+    _cleanJson(text) {
+        let cleaned = text.trim();
+        cleaned = cleaned.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?\s*```$/i, '');
+        return cleaned.trim();
+    }
+
     async chat(userId, message, options = {}) {
         const { project_id = null, conversation_history = [], learn_from_chat = false } = options;
         const startTime = Date.now();
@@ -26,6 +32,34 @@ class GeneralChatService {
         // Handle explicit "remember that..." requests
         if (this._isMemoryStoreRequest(message)) {
             return this._handleExplicitMemoryStore(userId, message, conversation_history, startTime);
+        }
+
+        // Check if domain learning is active for this project
+        let domainTags = [];
+        if (project_id) {
+            try {
+                const proj = await query(
+                    'SELECT metadata FROM v2_projects WHERE project_id = $1 AND user_id = $2',
+                    [project_id, userId]
+                );
+                if (proj.rows.length && (proj.rows[0].metadata?.learning?.domain_learning)) {
+                    const tagResult = await query(
+                        `SELECT t.tag FROM dl_project_domain_tags pt
+                         JOIN dl_domain_tags t ON t.tag_id = pt.tag_id
+                         WHERE pt.project_id = $1 AND t.status = 'enabled'`,
+                        [project_id]
+                    );
+                    domainTags = tagResult.rows.map(r => r.tag);
+                }
+            } catch (err) {
+                logger.debug('Domain tag lookup failed', { error: err.message });
+            }
+        }
+
+        // Build tag filter — include domain tags if DL is active
+        const tagFilter = ['general', 'conversation'];
+        if (domainTags.length > 0) {
+            tagFilter.push('domain_knowledge', ...domainTags);
         }
 
         // Retrieve relevant memory
@@ -38,9 +72,9 @@ class GeneralChatService {
                     owner_type: 'user',
                     owner_id: userId,
                     query: message,
-                    top_k: 5,
+                    top_k: domainTags.length > 0 ? 8 : 5,
                     tier_scope: [1, 2, 3],
-                    tag_filter: ['general', 'conversation'],
+                    tag_filter: tagFilter,
                     include_scores: true
                 }, {
                     timeout: 5000,
@@ -83,12 +117,19 @@ class GeneralChatService {
             appKnowledgeContext = getApplicationKnowledge();
         }
 
-        const systemPrompt = `You are Oggy, a helpful AI assistant. You remember previous conversations and learn from interactions.${projectContext}
+        // Fetch auto-learned user preferences
+        const preferenceContext = await this._getPreferenceContext(userId);
+
+        const domainContext = domainTags.length > 0
+            ? `\nActive domain knowledge: ${domainTags.join(', ')}. Use domain-specific knowledge from your learned context when relevant.`
+            : '';
+
+        const systemPrompt = `You are Oggy, a helpful AI assistant. You remember previous conversations and learn from interactions.${projectContext}${domainContext}
 
 # Learned Context
 ${memoryContext}
-${performanceContext}${appKnowledgeContext}
-Respond helpfully and naturally. If you recall relevant information from past conversations, use it.${performanceContext ? `
+${preferenceContext}${performanceContext}${appKnowledgeContext}
+Respond helpfully and naturally. If you recall relevant information from past conversations, use it.${domainTags.length > 0 ? ' You have domain knowledge loaded — use it to give detailed, accurate answers about domain-specific topics.' : ''}${performanceContext ? `
 
 IMPORTANT: The user is asking about your performance. You MUST answer using the REAL performance data provided above in "My Performance Data". Do NOT say you don't have access to data or can't evaluate yourself — you DO have this data. Reference specific numbers, levels, accuracy percentages, and trends from the data above. If no benchmarks exist yet, say so honestly and suggest starting a training session.` : ''}${appKnowledgeContext ? `
 
@@ -139,6 +180,19 @@ IMPORTANT: The user is asking about the Oggy application, its architecture, secu
                 baseText = 'Base model unavailable.';
             }
 
+            // Auto behavior learning (async, non-blocking)
+            if (project_id) {
+                this._runBehaviorLearning(userId, message, oggyText, project_id).catch(err =>
+                    logger.debug('Behavior learning failed', { error: err.message })
+                );
+            }
+
+            // Proactive suggestion (async, non-blocking)
+            let proactiveSuggestion = null;
+            if (project_id && domainTags.length === 0) {
+                proactiveSuggestion = await this._generateProactiveSuggestion(userId, message, project_id);
+            }
+
             // Learn from chat if enabled
             if (learn_from_chat && message.length > 10) {
                 try {
@@ -177,7 +231,7 @@ IMPORTANT: The user is asking about the Oggy application, its architecture, secu
                 }
             }
 
-            return {
+            const response = {
                 oggy_response: {
                     text: oggyText,
                     used_memory: memoryCards.length > 0
@@ -188,6 +242,12 @@ IMPORTANT: The user is asking about the Oggy application, its architecture, secu
                 trace_id: traceId,
                 latency_ms: Date.now() - startTime
             };
+
+            if (proactiveSuggestion) {
+                response.suggestion = proactiveSuggestion;
+            }
+
+            return response;
         } catch (err) {
             logger.logError(err, { operation: 'generalChat', userId });
             throw err;
@@ -232,6 +292,14 @@ IMPORTANT: The user is asking about the Oggy application, its architecture, secu
         );
     }
 
+    async updateProjectMetadata(userId, projectId, metadata) {
+        await query(
+            `UPDATE v2_projects SET metadata = $3, updated_at = NOW()
+             WHERE project_id = $1 AND user_id = $2`,
+            [projectId, userId, JSON.stringify(metadata)]
+        );
+    }
+
     async deleteProject(userId, projectId) {
         await query('DELETE FROM v2_project_messages WHERE project_id = $1 AND user_id = $2', [projectId, userId]);
         const result = await query('DELETE FROM v2_projects WHERE project_id = $1 AND user_id = $2 RETURNING project_id', [projectId, userId]);
@@ -246,6 +314,198 @@ IMPORTANT: The user is asking about the Oggy application, its architecture, secu
             [projectId, userId, limit]
         );
         return result.rows;
+    }
+
+    /**
+     * Run auto behavior learning if enabled for the project.
+     */
+    async _runBehaviorLearning(userId, message, response, projectId) {
+        try {
+            const proj = await query(
+                'SELECT metadata FROM v2_projects WHERE project_id = $1 AND user_id = $2',
+                [projectId, userId]
+            );
+            if (!proj.rows.length) return;
+
+            const metadata = proj.rows[0].metadata || {};
+            const blEnabled = metadata.learning?.behavior_learning ?? true; // default ON
+            if (!blEnabled) return;
+
+            // Only process substantive messages
+            if (message.length < 20) return;
+
+            await this._extractBehaviorSignals(userId, message, response, projectId);
+        } catch (err) {
+            logger.debug('Behavior learning check failed', { error: err.message });
+        }
+    }
+
+    /**
+     * Extract behavior signals from a chat exchange using LLM.
+     * Stores as preference events and optionally as memory cards.
+     */
+    async _extractBehaviorSignals(userId, message, response, projectId) {
+        const extractPrompt = `Analyze this chat exchange and extract any user behavior signals or preferences.
+
+User: ${message.substring(0, 500)}
+Assistant: ${response.substring(0, 300)}
+
+Extract ONLY clear signals. Return a JSON array (may be empty). Each item:
+- "type": one of "tone", "verbosity", "topic_interest", "workflow", "communication_style", "expertise_level"
+- "key": short identifier (e.g., "prefers_concise", "interested_in_math")
+- "value": brief description
+- "confidence": 0.0-1.0
+
+Only include signals with confidence >= 0.6. Return [] if no clear signals.
+Respond with ONLY the JSON array.`;
+
+        const resolved = await providerResolver.getAdapter(userId, 'oggy');
+        const result = await this.openaiBreaker.execute(() =>
+            resolved.adapter.chatCompletion({
+                model: resolved.model,
+                messages: [{ role: 'user', content: extractPrompt }],
+                temperature: 0.1,
+                max_tokens: 300
+            })
+        );
+        costGovernor.recordUsage(result.tokens_used || 500);
+        providerResolver.logRequest(userId, resolved.provider, resolved.model, 'oggy', 'behaviorExtract', result.tokens_used, result.latency_ms, true, null);
+
+        let signals;
+        try {
+            signals = JSON.parse(this._cleanJson(result.text));
+            if (!Array.isArray(signals)) return;
+        } catch {
+            return;
+        }
+
+        signals = signals.filter(s => s && s.key && s.confidence >= 0.6);
+        if (signals.length === 0) return;
+
+        for (const signal of signals) {
+            // Store as preference event
+            try {
+                await query(
+                    `INSERT INTO v2_preference_events (user_id, preference_type, preference_key, preference_value, confidence, source)
+                     VALUES ($1, $2, $3, $4, $5, 'behavior_auto')`,
+                    [userId, signal.type, signal.key, signal.value, signal.confidence]
+                );
+            } catch (err) {
+                logger.debug('Failed to store preference event', { error: err.message });
+            }
+
+            // High-confidence signals → memory card
+            if (signal.confidence >= 0.85) {
+                try {
+                    await axios.post(`${MEMORY_SERVICE_URL}/cards`, {
+                        owner_type: 'user',
+                        owner_id: userId,
+                        tier: 1,
+                        kind: 'behavior_signal',
+                        content: {
+                            type: 'PATTERN',
+                            text: `User behavior: ${signal.key} — ${signal.value}`,
+                            source: 'behavior_auto',
+                            confidence: signal.confidence
+                        },
+                        tags: ['general', 'conversation', 'behavior'],
+                        utility_weight: 0.6,
+                        reliability: signal.confidence
+                    }, {
+                        timeout: 5000,
+                        headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
+                    });
+                    logger.info('Behavior signal stored as memory', { key: signal.key, confidence: signal.confidence });
+                } catch (err) {
+                    logger.debug('Failed to store behavior memory card', { error: err.message });
+                }
+            }
+        }
+
+        logger.info('Behavior signals extracted', { userId, count: signals.length, projectId });
+    }
+
+    /**
+     * Fetch recent preference context for system prompt injection.
+     */
+    async _getPreferenceContext(userId) {
+        try {
+            const result = await query(
+                `SELECT preference_type, preference_key, preference_value, confidence
+                 FROM v2_preference_events
+                 WHERE user_id = $1 AND source = 'behavior_auto' AND confidence >= 0.7
+                 ORDER BY created_at DESC LIMIT 10`,
+                [userId]
+            );
+            if (result.rows.length === 0) return '';
+
+            const prefs = result.rows.map(r =>
+                `- ${r.preference_type}: ${r.preference_key} = ${r.preference_value} (confidence: ${r.confidence})`
+            ).join('\n');
+
+            return `\n# User Preferences (auto-learned)\n${prefs}\n`;
+        } catch (err) {
+            logger.debug('Preference context fetch failed', { error: err.message });
+            return '';
+        }
+    }
+
+    /**
+     * Check if a chat message suggests the user is learning a topic.
+     * If so, suggest enabling domain learning or offer a study plan.
+     */
+    async _generateProactiveSuggestion(userId, message, projectId) {
+        try {
+            // Check if the project has DL enabled
+            const proj = await query(
+                'SELECT metadata FROM v2_projects WHERE project_id = $1 AND user_id = $2',
+                [projectId, userId]
+            );
+            if (!proj.rows.length) return null;
+            const metadata = proj.rows[0].metadata || {};
+
+            // Only suggest if DL is NOT already enabled (no point suggesting what they already have)
+            if (metadata.learning?.domain_learning) return null;
+
+            // Simple heuristic: if message contains learning-related keywords
+            const lower = message.toLowerCase();
+            const learningKeywords = [
+                'how do i', 'explain', 'teach me', 'what is', 'help me understand',
+                'learn about', 'study', 'tutorial', 'concept', 'beginner',
+                'how does', 'can you explain', 'introduction to', 'basics of',
+                'getting started', 'resources for'
+            ];
+            const isLearning = learningKeywords.some(kw => lower.includes(kw));
+            if (!isLearning) return null;
+
+            // Don't suggest too often — check if we suggested recently
+            try {
+                const recent = await query(
+                    `SELECT COUNT(*) as cnt FROM dl_audit_events
+                     WHERE user_id = $1 AND project_id = $2 AND event_type = 'proactive_suggestion'
+                     AND created_at > NOW() - INTERVAL '1 day'`,
+                    [userId, projectId]
+                );
+                if (parseInt(recent.rows[0].cnt) > 0) return null;
+            } catch { /* table may not exist */ }
+
+            // Log the suggestion
+            try {
+                await query(
+                    `INSERT INTO dl_audit_events (user_id, project_id, event_type, payload)
+                     VALUES ($1, $2, 'proactive_suggestion', $3)`,
+                    [userId, projectId, JSON.stringify({ trigger_message: message.substring(0, 100) })]
+                );
+            } catch { /* ignore */ }
+
+            return {
+                type: 'enable_domain_learning',
+                message: 'It looks like you\'re exploring a specific topic. Would you like to enable Domain Learning? I can build knowledge packs and suggest study plans to help you learn more effectively.'
+            };
+        } catch (err) {
+            logger.debug('Proactive suggestion check failed', { error: err.message });
+            return null;
+        }
     }
 
     _isMemoryStoreRequest(message) {
@@ -286,7 +546,7 @@ Respond with ONLY the JSON array, no markdown.`;
 
             let facts;
             try {
-                const parsed = JSON.parse(llmResult.text);
+                const parsed = JSON.parse(this._cleanJson(llmResult.text));
                 facts = Array.isArray(parsed) ? parsed : [parsed];
             } catch {
                 return {

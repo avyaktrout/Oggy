@@ -13,6 +13,7 @@ const { injectUserIdFromHeader } = require('./shared/middleware/internalService'
 
 // Domain routes
 const generalChatRouter = require('./domains/general/routes/generalChat');
+const domainLearningRouter = require('./domains/general/routes/domainLearning');
 
 // Shared routes used by general domain
 const continuousLearningRouter = require('./shared/routes/continuousLearning');
@@ -73,6 +74,7 @@ app.get('/health', async (req, res) => {
 // Routes
 // ──────────────────────────────────────────────────
 app.use('/v0/general', generalChatRouter);
+app.use('/v0/general', domainLearningRouter);
 app.use('/v0/continuous-learning', continuousLearningRouter);
 
 // ──────────────────────────────────────────────────

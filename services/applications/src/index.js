@@ -46,6 +46,7 @@ const queryRouter = require('./domains/payments/routes/query');
 const categorizationRouter = require('./domains/payments/routes/categorization');
 const chatRouter = require('./domains/payments/routes/chat');
 const generalChatRouter = require('./domains/general/routes/generalChat');
+const domainLearningRouter = require('./domains/general/routes/domainLearning');
 const dietRouter = require('./domains/diet/routes/diet');
 
 const app = express();
@@ -323,6 +324,7 @@ app.use('/v0/observer', observerRouter);
 
 // V2: General Conversation routes
 app.use('/v0/general', generalChatRouter);
+app.use('/v0/general', domainLearningRouter);
 
 // V3: Diet Agent routes
 app.use('/v0/diet', dietRouter);

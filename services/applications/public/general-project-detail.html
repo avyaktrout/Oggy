@@ -5,6 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Oggy - Project</title>
     <link rel="stylesheet" href="/css/style.css?v=2">
+    <style>
+        .dl-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+        .dl-section h4 { font-size: 13px; font-weight: 500; margin: 0 0 8px 0; color: var(--text-muted); }
+        .pack-item { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 8px; font-size: 12px; }
+        .pack-item .pack-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+        .pack-item .pack-meta { color: var(--text-muted); }
+        .pack-actions { display: flex; gap: 6px; }
+        .pack-actions button { font-size: 11px; padding: 2px 8px; }
+        .tag-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); font-size: 12px; cursor: pointer; }
+        .tag-chip.enabled { border-color: var(--accent); background: rgba(99,102,241,0.1); }
+        .study-plan-topic { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; margin-bottom: 6px; font-size: 12px; }
+        .study-plan-topic .topic-name { font-weight: 600; margin-bottom: 2px; }
+        .study-plan-topic .topic-hours { color: var(--text-muted); font-size: 11px; }
+        .audit-item { font-size: 11px; padding: 4px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }
+        .audit-item:last-child { border-bottom: none; }
+        .suggestion-banner { background: rgba(99,102,241,0.08); border: 1px solid var(--accent); border-radius: var(--radius); padding: 10px 14px; margin-top: 10px; font-size: 12px; display: flex; justify-content: space-between; align-items: center; }
+    </style>
 </head>
 <body class="app-layout">
     <header class="topbar" id="topbar"></header>
@@ -24,6 +41,68 @@
             </div>
         </div>
 
+        <!-- Learning Modes -->
+        <div class="card" style="margin-bottom:16px" id="learning-card">
+            <div style="font-weight:600;font-size:15px;margin-bottom:12px">Learning Modes</div>
+            <div style="display:flex;gap:24px;flex-wrap:wrap">
+                <label class="toggle-label" style="gap:8px">
+                    <input type="checkbox" id="bl-toggle" checked onchange="toggleLearningMode('behavior_learning', this.checked)">
+                    <span class="toggle-switch"></span>
+                    <div>
+                        <div style="font-size:13px;font-weight:500">Behavior Learning</div>
+                        <div style="font-size:11px;color:var(--text-muted)">Learn preferences &amp; patterns from chat</div>
+                    </div>
+                </label>
+                <label class="toggle-label" style="gap:8px">
+                    <input type="checkbox" id="dl-toggle" onchange="toggleLearningMode('domain_learning', this.checked)">
+                    <span class="toggle-switch"></span>
+                    <div>
+                        <div style="font-size:13px;font-weight:500">Domain Learning</div>
+                        <div style="font-size:11px;color:var(--text-muted)">Build knowledge packs for this project</div>
+                    </div>
+                </label>
+            </div>
+            <!-- Domain Learning panel (shown when DL is enabled) -->
+            <div id="dl-panel" style="display:none;margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                    <div style="font-size:13px;font-weight:500">Domain Tags</div>
+                    <button class="btn btn-sm btn-outline" onclick="suggestDomainTags()">Suggest Tags</button>
+                </div>
+                <div id="domain-tags" style="display:flex;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--text-muted)">
+                    No domain tags yet. Click "Suggest Tags" to get started.
+                </div>
+
+                <!-- Knowledge Packs -->
+                <div class="dl-section" id="packs-section" style="display:none">
+                    <h4>Knowledge Packs</h4>
+                    <div id="knowledge-packs"></div>
+                </div>
+
+                <!-- Study Plan (generate new) -->
+                <div class="dl-section" id="study-plan-section" style="display:none">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                        <h4 style="margin:0">New Study Plan</h4>
+                        <span id="study-plan-hours" style="font-size:11px;color:var(--text-muted)"></span>
+                    </div>
+                    <div id="study-plan-content"></div>
+                </div>
+
+                <!-- Saved Study Plans -->
+                <div class="dl-section" id="saved-plans-section" style="display:none">
+                    <h4>Saved Study Plans <span id="saved-plans-count" style="font-weight:400;color:var(--text-muted)"></span></h4>
+                    <div id="saved-plans-list"></div>
+                </div>
+
+                <!-- Audit Trail -->
+                <div class="dl-section">
+                    <details>
+                        <summary style="font-size:12px;color:var(--text-muted);cursor:pointer">Audit Trail</summary>
+                        <div id="audit-trail" style="margin-top:8px;max-height:200px;overflow-y:auto"></div>
+                    </details>
+                </div>
+            </div>
+        </div>
+
         <!-- Project Chat -->
         <div class="chat-title-row">
             <div style="font-weight:600;font-size:15px">Project Chat</div>
@@ -37,15 +116,24 @@
             </div>
         </div>
 
-        <div class="chat-container" style="grid-template-columns:1fr">
+        <div class="chat-container">
             <div class="chat-column">
                 <div class="chat-header">
                     <span class="dot dot-oggy"></span>
-                    Oggy
+                    Oggy <span style="font-size:11px;color:var(--text-muted);margin-left:4px">(with memory)</span>
                     <span class="learning-indicator" id="learning-indicator" style="display:none">learning</span>
                 </div>
                 <div class="chat-messages" id="oggy-messages">
                     <div class="chat-msg chat-msg-bot">Hi! Ask me anything about this project.</div>
+                </div>
+            </div>
+            <div class="chat-column">
+                <div class="chat-header">
+                    <span class="dot dot-base"></span>
+                    Base Model <span style="font-size:11px;color:var(--text-muted);margin-left:4px">(no memory)</span>
+                </div>
+                <div class="chat-messages" id="base-messages">
+                    <div class="chat-msg chat-msg-bot">Hi! I'm the base model without memory.</div>
                 </div>
             </div>
         </div>
@@ -55,6 +143,7 @@
                    onkeydown="if(event.key===&#39;Enter&#39;)shellSendChat()">
             <button class="btn btn-primary" onclick="shellSendChat()" id="chat-send-btn">Send</button>
         </div>
+        <div id="suggestion-banner" style="display:none"></div>
     </div>
     </main>
 
