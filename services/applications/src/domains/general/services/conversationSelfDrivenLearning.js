@@ -17,6 +17,7 @@ const { query } = require('../../../shared/utils/db');
 const providerResolver = require('../../../shared/providers/providerResolver');
 const { costGovernor } = require('../../../shared/middleware/costGovernor');
 const { getInstance: getAssessmentInstance } = require('./conversationAssessmentGenerator');
+const { parallelMap } = require('../../../shared/utils/parallel');
 
 const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory:3000';
 const LEARNING_INTERVAL_MS = parseInt(process.env.CONVERSATION_LEARNING_INTERVAL_MS || '600000', 10); // 10 min default
@@ -147,15 +148,20 @@ class ConversationSelfDrivenLearning {
 
             const assessmentGen = getAssessmentInstance(userId);
 
-            for (let i = 0; i < this.practiceCount; i++) {
-                try {
-                    // Step 1: Generate a practice question
-                    const difficulty = this._selectDifficulty();
-                    const question = await assessmentGen.generateQuestion(userId, difficulty);
+            // Generate all questions in parallel first (each needs its own difficulty)
+            const attempts = Array.from({ length: this.practiceCount }, (_, i) => ({
+                index: i,
+                difficulty: this._selectDifficulty()
+            }));
 
+            const practiceResults = await parallelMap(
+                attempts,
+                async (attempt) => {
+                    // Step 1: Generate a practice question
+                    const question = await assessmentGen.generateQuestion(userId, attempt.difficulty);
                     if (!question) {
-                        logger.warn('No question generated, skipping', { sessionId, attempt: i + 1 });
-                        continue;
+                        logger.warn('No question generated, skipping', { sessionId, attempt: attempt.index + 1 });
+                        return { skipped: true };
                     }
 
                     // Step 2: Retrieve Oggy's memories relevant to the question
@@ -167,16 +173,9 @@ class ConversationSelfDrivenLearning {
                     // Step 4: Evaluate the response
                     const evaluation = await assessmentGen.evaluateAnswer(question, oggyAnswer, userId);
 
-                    // Track stats
-                    this.stats.total_attempts++;
-                    if (evaluation.correct) {
-                        sessionCorrect++;
-                        this.stats.correct++;
-                    }
-
                     logger.debug('Conversation practice attempt completed', {
                         sessionId,
-                        attempt: i + 1,
+                        attempt: attempt.index + 1,
                         questionType: question.type,
                         score: evaluation.score,
                         correct: evaluation.correct
@@ -196,16 +195,28 @@ class ConversationSelfDrivenLearning {
                         feedback: evaluation.feedback
                     });
 
-                    // Brief delay between attempts
-                    await this._sleep(300);
-                } catch (attemptError) {
-                    sessionErrors++;
-                    logger.logError(attemptError, {
-                        operation: 'conversationPracticeAttempt',
-                        sessionId,
-                        attempt: i + 1
-                    });
+                    return { correct: evaluation.correct, skipped: false };
+                },
+                3, // concurrency: all 3 exercises in parallel
+                { operationName: 'conversation-practice-session' }
+            );
+
+            // Aggregate results
+            for (const r of practiceResults.results) {
+                if (!r.success || r.value.skipped) continue;
+                this.stats.total_attempts++;
+                if (r.value.correct) {
+                    sessionCorrect++;
+                    this.stats.correct++;
                 }
+            }
+            sessionErrors = practiceResults.errors.length;
+            for (const err of practiceResults.errors) {
+                logger.logError(new Error(err.error), {
+                    operation: 'conversationPracticeAttempt',
+                    sessionId,
+                    attempt: err.index + 1
+                });
             }
 
             // Proactive: check for domain learning opportunities every 5 sessions

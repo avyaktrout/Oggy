@@ -242,6 +242,234 @@ class TrainingReporter {
         }
     }
 
+    /**
+     * General conversation benchmark analysis — scenario types + criteria scores + feedback
+     */
+    async _getGeneralAnalysis(benchmarkResult) {
+        try {
+            if (!benchmarkResult || !benchmarkResult.benchmark_id) return null;
+
+            const userId = this.config?.userId;
+            const resultRow = await query(
+                `SELECT detailed_results FROM sealed_benchmark_results
+                 WHERE benchmark_id = $1${userId ? ' AND user_id = $2' : ''} ORDER BY tested_at DESC LIMIT 1`,
+                userId ? [benchmarkResult.benchmark_id, userId] : [benchmarkResult.benchmark_id]
+            );
+            if (resultRow.rows.length === 0) return null;
+
+            const details = resultRow.rows[0].detailed_results;
+            const scenarios = details?.scenarios || [];
+            if (scenarios.length === 0) return null;
+
+            // Per scenario type performance
+            const byType = {};
+            // Per criteria averages
+            const criteriaAgg = { context_awareness: [], preference_alignment: [], helpfulness: [], domain_accuracy: [] };
+
+            const wrongExamples = [];
+
+            for (const s of scenarios) {
+                const oggy = s.oggy || {};
+                const base = s.base || {};
+                const type = s.scenario_type || 'unknown';
+
+                // Aggregate by type
+                if (!byType[type]) byType[type] = { oggy_correct: 0, base_correct: 0, total: 0, oggy_scores: [], base_scores: [] };
+                byType[type].total++;
+                if (oggy.correct) byType[type].oggy_correct++;
+                if (base.correct) byType[type].base_correct++;
+                if (oggy.avg_score) byType[type].oggy_scores.push(oggy.avg_score);
+                if (base.avg_score) byType[type].base_scores.push(base.avg_score);
+
+                // Aggregate criteria scores
+                if (oggy.scores) {
+                    for (const [key, val] of Object.entries(oggy.scores)) {
+                        if (criteriaAgg[key]) criteriaAgg[key].push(val);
+                    }
+                }
+
+                // Collect wrong scenarios with feedback
+                if (!oggy.correct && oggy.feedback) {
+                    wrongExamples.push({
+                        type,
+                        prompt: s.prompt?.substring(0, 120),
+                        oggy_score: oggy.avg_score,
+                        base_score: base.avg_score,
+                        feedback: oggy.feedback,
+                        scores: oggy.scores
+                    });
+                }
+            }
+
+            // Compute type performance
+            const typePerformance = {};
+            for (const [type, data] of Object.entries(byType)) {
+                const oggyAvg = data.oggy_scores.length > 0
+                    ? data.oggy_scores.reduce((a, b) => a + b, 0) / data.oggy_scores.length : 0;
+                const baseAvg = data.base_scores.length > 0
+                    ? data.base_scores.reduce((a, b) => a + b, 0) / data.base_scores.length : 0;
+                typePerformance[type] = {
+                    oggy_accuracy: data.total > 0 ? data.oggy_correct / data.total : 0,
+                    base_accuracy: data.total > 0 ? data.base_correct / data.total : 0,
+                    oggy_avg_score: parseFloat(oggyAvg.toFixed(2)),
+                    base_avg_score: parseFloat(baseAvg.toFixed(2)),
+                    correct: data.oggy_correct,
+                    total: data.total
+                };
+            }
+
+            // Compute criteria averages
+            const criteriaAvg = {};
+            for (const [key, values] of Object.entries(criteriaAgg)) {
+                if (values.length > 0) {
+                    criteriaAvg[key] = parseFloat((values.reduce((a, b) => a + b, 0) / values.length).toFixed(2));
+                }
+            }
+
+            // Weak types (< 70%)
+            const weakTypes = Object.entries(typePerformance)
+                .filter(([_, p]) => p.oggy_accuracy < 0.70 && p.total >= 2)
+                .map(([type]) => type);
+
+            return { typePerformance, criteriaAvg, weakTypes, wrongExamples: wrongExamples.slice(0, 5), totalScenarios: scenarios.length };
+        } catch (err) {
+            logger.warn('General analysis for report failed (non-blocking)', { error: err.message });
+            return null;
+        }
+    }
+
+    _buildGeneralSection(analysis) {
+        if (!analysis) return '';
+
+        let html = '';
+        const typeLabels = {
+            context_retention: 'Context Retention',
+            preference_adherence: 'Preference Adherence',
+            general_helpfulness: 'General Helpfulness',
+            domain_knowledge_recall: 'Domain Knowledge Recall',
+            domain_knowledge_application: 'Domain Knowledge Application'
+        };
+
+        // Scenario Type Accuracy — Oggy vs Base bars
+        const typeEntries = Object.entries(analysis.typePerformance)
+            .sort((a, b) => a[1].oggy_accuracy - b[1].oggy_accuracy);
+
+        if (typeEntries.length > 0) {
+            const typeRows = typeEntries.map(([type, perf]) => {
+                const oggyPct = (perf.oggy_accuracy * 100).toFixed(0);
+                const basePct = (perf.base_accuracy * 100).toFixed(0);
+                const oggyColor = perf.oggy_accuracy < 0.50 ? '#ef4444' :
+                                  perf.oggy_accuracy < 0.70 ? '#f59e0b' : '#22c55e';
+                const label = typeLabels[type] || type.replace(/_/g, ' ');
+                const better = perf.oggy_accuracy > perf.base_accuracy ? '+' :
+                               perf.oggy_accuracy < perf.base_accuracy ? '-' : '=';
+                return `
+                    <tr>
+                        <td style="padding:6px 8px;font-size:13px;font-weight:500;white-space:nowrap">${label}</td>
+                        <td style="padding:6px 8px;width:50%">
+                            <div style="background:#f1f5f9;border-radius:4px;height:18px;position:relative;overflow:hidden">
+                                <div style="background:${oggyColor};height:100%;width:${Math.max(oggyPct, 5)}%;border-radius:4px;min-width:20px"></div>
+                            </div>
+                        </td>
+                        <td style="padding:6px 8px;font-size:12px;white-space:nowrap">
+                            <span style="color:#4f46e5;font-weight:600">Oggy ${oggyPct}%</span>
+                            <span style="color:#94a3b8;margin:0 4px">vs</span>
+                            <span style="color:#64748b">Base ${basePct}%</span>
+                        </td>
+                        <td style="padding:6px 8px;font-size:11px;color:var(--text-muted)">(${perf.correct}/${perf.total})</td>
+                    </tr>`;
+            }).join('');
+
+            html += `
+                <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Scenario Type Performance</h3>
+                <table style="width:100%;border-collapse:collapse">${typeRows}</table>`;
+        }
+
+        // Criteria Score Breakdown (context_awareness, preference_alignment, helpfulness, domain_accuracy)
+        const criteriaLabels = {
+            context_awareness: 'Context Awareness',
+            preference_alignment: 'Preference Alignment',
+            helpfulness: 'Helpfulness',
+            domain_accuracy: 'Domain Accuracy'
+        };
+
+        const criteriaEntries = Object.entries(analysis.criteriaAvg)
+            .filter(([_, v]) => v > 0)
+            .sort((a, b) => a[1] - b[1]);
+
+        if (criteriaEntries.length > 0) {
+            const criteriaRows = criteriaEntries.map(([key, score]) => {
+                const pct = (score / 5 * 100).toFixed(0);
+                const barColor = score < 2.5 ? '#ef4444' : score < 3.5 ? '#f59e0b' : '#22c55e';
+                const label = criteriaLabels[key] || key.replace(/_/g, ' ');
+                return `
+                    <tr>
+                        <td style="padding:4px 8px;font-size:13px;font-weight:500;white-space:nowrap">${label}</td>
+                        <td style="padding:4px 8px;width:100%">
+                            <div style="background:#f1f5f9;border-radius:4px;height:18px;position:relative;overflow:hidden">
+                                <div style="background:${barColor};height:100%;width:${Math.max(pct, 5)}%;border-radius:4px;min-width:20px"></div>
+                            </div>
+                        </td>
+                        <td style="padding:4px 8px;font-size:13px;color:#64748b;white-space:nowrap">${score}/5</td>
+                    </tr>`;
+            }).join('');
+
+            html += `
+                <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Criteria Scores (Oggy Avg)</h3>
+                <table style="width:100%;border-collapse:collapse">${criteriaRows}</table>`;
+        }
+
+        // Wrong Scenarios — show judge feedback
+        if (analysis.wrongExamples.length > 0) {
+            const wrongRows = analysis.wrongExamples.map(w => {
+                const typeLabel = typeLabels[w.type] || w.type.replace(/_/g, ' ');
+                const scoreDetail = w.scores
+                    ? `ctx:${w.scores.context_awareness} pref:${w.scores.preference_alignment} help:${w.scores.helpfulness}${w.scores.domain_accuracy ? ' dom:' + w.scores.domain_accuracy : ''}`
+                    : '';
+                return `
+                    <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:10px;margin-bottom:8px;font-size:12px">
+                        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+                            <span style="font-weight:600;color:#991b1b">${typeLabel}</span>
+                            <span style="color:#64748b">${scoreDetail} (avg ${w.oggy_score}/5)</span>
+                        </div>
+                        <div style="color:#1e293b;margin-bottom:4px">"${w.prompt}..."</div>
+                        <div style="color:#64748b;font-style:italic">${w.feedback}</div>
+                    </div>`;
+            }).join('');
+
+            html += `
+                <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Areas to Improve (${analysis.wrongExamples.length} weak scenarios)</h3>
+                ${wrongRows}`;
+        }
+
+        // Recommendations
+        if (analysis.weakTypes.length > 0) {
+            const focusAreas = analysis.weakTypes.map(t => typeLabels[t] || t.replace(/_/g, ' ')).join(', ');
+            html += `
+                <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:14px;margin-top:16px">
+                    <strong style="color:#92400e;font-size:13px">Recommendation</strong>
+                    <p style="margin:6px 0 0;font-size:13px;color:#78350f">
+                        Focus training on: <strong>${focusAreas}</strong>.
+                        These scenario types are below 70% accuracy. Chat more in these areas to build stronger memories.
+                    </p>
+                </div>`;
+        }
+
+        // Strong types (>= 80%)
+        const strongTypes = typeEntries.filter(([_, p]) => p.oggy_accuracy >= 0.80);
+        if (strongTypes.length > 0) {
+            const strongList = strongTypes.reverse().map(([type, perf]) => {
+                const label = typeLabels[type] || type.replace(/_/g, ' ');
+                return `<span style="display:inline-block;background:#dcfce7;color:#166534;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600;margin:2px">${label} ${(perf.oggy_accuracy * 100).toFixed(0)}%</span>`;
+            }).join(' ');
+            html += `
+                <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Strong Areas</h3>
+                <div>${strongList}</div>`;
+        }
+
+        return html;
+    }
+
     _buildHarmonySection(analysis) {
         if (!analysis) return '';
 
@@ -361,12 +589,17 @@ class TrainingReporter {
         ` : '';
 
         // Get domain-specific analysis for the latest benchmark
-        const isHarmony = stats.domain === 'harmony' || (latestBm && latestBm.domain === 'harmony');
+        const domain = stats.domain || latestBm?.domain || '';
+        const isHarmony = domain === 'harmony';
+        const isGeneral = domain === 'general';
         let weaknessSection = '';
 
         if (isHarmony) {
             const harmonyAnalysis = await this._getHarmonyAnalysis(latestBm);
             weaknessSection = this._buildHarmonySection(harmonyAnalysis);
+        } else if (isGeneral) {
+            const generalAnalysis = await this._getGeneralAnalysis(latestBm);
+            weaknessSection = this._buildGeneralSection(generalAnalysis);
         } else {
             const analysis = await this._getWeaknessData(latestBm);
 
