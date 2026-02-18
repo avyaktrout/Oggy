@@ -19,101 +19,188 @@ class DomainLearningService {
     }
 
     /**
-     * Map platform identifier to site domain for Google site-scoped search.
+     * Validate a YouTube video URL using the oEmbed API.
+     * YouTube returns 200 for unavailable videos on the main page,
+     * but oEmbed returns 404 for non-existent/unavailable videos.
      */
-    _platformToSiteDomain(platform) {
-        const map = {
-            wikipedia: 'en.wikipedia.org',
-            youtube: 'youtube.com',
-            khanacademy: 'khanacademy.org',
-            mdn: 'developer.mozilla.org',
-            freecodecamp: 'freecodecamp.org',
-            w3schools: 'w3schools.com',
-            geeksforgeeks: 'geeksforgeeks.org',
-            coursera: 'coursera.org',
-            edx: 'edx.org'
-        };
-        return map[platform] || null;
-    }
-
-    /**
-     * Build a fallback Google search URL scoped to a specific site.
-     */
-    _buildFallbackUrl(title, platform) {
-        const siteDomain = this._platformToSiteDomain(platform);
-        const terms = title || '';
-        if (siteDomain) {
-            return `https://www.google.com/search?q=site:${siteDomain}+${encodeURIComponent(terms)}`;
-        }
-        return `https://www.google.com/search?q=${encodeURIComponent(terms)}`;
-    }
-
-    /**
-     * Validate a URL with HEAD request, falling back to GET if HEAD is blocked.
-     */
-    async _validateUrl(url) {
-        const headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html'
-        };
-        // Try HEAD first
+    async _validateYouTubeUrl(url) {
         try {
-            await axios.head(url, {
-                timeout: 5000, maxRedirects: 5,
-                validateStatus: (s) => s < 400,
-                headers
+            await axios.get('https://www.youtube.com/oembed', {
+                params: { url, format: 'json' },
+                timeout: 5000,
+                validateStatus: (s) => s < 400
             });
             return true;
-        } catch (headErr) {
-            const status = headErr.response?.status;
-            // If HEAD returned 405/403, the page may still exist — try GET
-            if (status === 405 || status === 403) {
-                try {
-                    await axios.get(url, {
-                        timeout: 5000, maxRedirects: 5,
-                        validateStatus: (s) => s < 400,
-                        headers: { ...headers, 'Range': 'bytes=0-0' },
-                        responseType: 'stream'
-                    });
-                    return true;
-                } catch { return false; }
-            }
+        } catch {
             return false;
         }
     }
 
     /**
-     * Post-process study plan: validate all resource URLs, replace broken ones with search fallbacks.
+     * Check if a URL points to a generic landing/index page rather than specific content.
+     */
+    _isGenericLandingPage(url) {
+        try {
+            const parsed = new URL(url);
+            const path = parsed.pathname.replace(/\/+$/, '').toLowerCase();
+            const segments = path.split('/').filter(Boolean);
+            if (segments.length === 0) return true;
+            const genericSegments = ['learn', 'learning', 'learning-center', 'resources', 'education',
+                'help', 'support', 'blog', 'articles', 'guides', 'home', 'overview', 'topics'];
+            if (segments.length === 1 && genericSegments.includes(segments[0])) return true;
+            return false;
+        } catch { return false; }
+    }
+
+    /**
+     * Detect soft 404 pages — sites that return HTTP 200 but show "page not found" content.
+     */
+    _isSoft404(html) {
+        const titleMatch = html.match(/<title[^>]*>([^<]{0,300})<\/title>/i);
+        if (titleMatch) {
+            const title = titleMatch[1].toLowerCase();
+            if (title.includes('not found') || title.includes('404') ||
+                title.includes("doesn't exist") || title.includes('does not exist') ||
+                title.includes('page error') || title.includes('error page')) {
+                return true;
+            }
+        }
+        const errorPatterns = [
+            "page you were trying to load doesn't exist",
+            "page you were trying to load does not exist",
+            "sorry, the page you were looking for",
+            "the page you requested could not be found",
+            "this page doesn't exist", "this page does not exist",
+            "this page isn't available",
+            "the page you are looking for doesn't exist",
+            "the page you are looking for does not exist",
+            "we couldn't find the page", "we could not find the page"
+        ];
+        for (const pattern of errorPatterns) {
+            if (html.includes(pattern)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Detect bot protection/challenge pages that block server-side validation.
+     * Sites like Khan Academy serve these to all server requests — valid and invalid
+     * pages look identical, so we can't trust any URL from these sites.
+     */
+    _isBotChallenge(html, pageLength) {
+        // Real content pages are typically > 10KB; challenge pages are small shells
+        if (pageLength > 15000) return false;
+        const titleMatch = html.match(/<title[^>]*>([^<]{0,300})<\/title>/i);
+        const title = titleMatch ? titleMatch[1].toLowerCase() : '';
+        const challengeIndicators = ['client challenge', 'checking your browser',
+            'just a moment', 'attention required', 'enable javascript and cookies',
+            'verify you are human', 'please wait', 'browser check'];
+        for (const ind of challengeIndicators) {
+            if (title.includes(ind) || html.includes(ind)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Detect JS or meta-refresh redirects to homepage/generic pages in HTML.
+     */
+    _hasJsRedirectToGeneric(html) {
+        const metaMatch = html.match(/<meta[^>]*http-equiv\s*=\s*["']refresh["'][^>]*content\s*=\s*["'][^"']*url\s*=\s*([^"'\s>]+)/i);
+        if (metaMatch && this._isGenericLandingPage(metaMatch[1])) return true;
+        const jsRedirectMatch = html.match(/(?:window|document)\.location(?:\.href)?\s*=\s*["']([^"']+)["']/i);
+        if (jsRedirectMatch && this._isGenericLandingPage(jsRedirectMatch[1])) return true;
+        return false;
+    }
+
+    /**
+     * Validate a URL and return its final resolved URL (after redirects).
+     * Returns { valid: boolean, finalUrl: string }
+     * Checks: HTTP status, redirects, bot challenges, soft 404s, JS redirects.
+     */
+    async _validateUrl(url) {
+        if (url.includes('youtube.com/watch?v=') || url.includes('youtu.be/')) {
+            const valid = await this._validateYouTubeUrl(url);
+            return { valid, finalUrl: url };
+        }
+        if (this._isGenericLandingPage(url)) return { valid: false, finalUrl: url };
+
+        const headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html'
+        };
+        try {
+            const resp = await axios.get(url, {
+                timeout: 8000, maxRedirects: 5,
+                validateStatus: () => true,
+                headers,
+                responseType: 'text'
+            });
+            const finalUrl = resp.request?.res?.responseUrl || url;
+
+            if (resp.status >= 400) return { valid: false, finalUrl };
+            if (finalUrl !== url && this._isGenericLandingPage(finalUrl)) return { valid: false, finalUrl };
+
+            const body = resp.data || '';
+            const html = body.substring(0, 15000).toLowerCase();
+
+            if (this._isBotChallenge(html, body.length)) return { valid: false, finalUrl };
+            if (this._isSoft404(html)) return { valid: false, finalUrl };
+            if (this._hasJsRedirectToGeneric(html)) return { valid: false, finalUrl };
+
+            return { valid: true, finalUrl };
+        } catch {
+            return { valid: false, finalUrl: url };
+        }
+    }
+
+    /**
+     * Post-process study plan. Enforces two invariants:
+     * 1. Every URL is unique (deduplicated by final resolved URL)
+     * 2. Every topic has at least one resource (Wikipedia fallback, or topic removed)
      */
     async _resolveStudyPlanUrls(plan) {
-        const allResources = [];
+        const seenFinalUrls = new Set();
+
         for (const topic of (plan.topics || [])) {
-            for (const r of (topic.resources || [])) {
-                if (r.url) allResources.push(r);
+            if (!topic.resources || topic.resources.length === 0) {
+                topic.resources = [];
+            } else {
+                // Validate all URLs in parallel
+                const results = await Promise.allSettled(
+                    topic.resources.map(async (r) => {
+                        if (!r.url) return { resource: r, valid: false, finalUrl: null };
+                        const { valid, finalUrl } = await this._validateUrl(r.url);
+                        return { resource: r, valid, finalUrl };
+                    })
+                );
+
+                // Keep only valid + unique resources (deduplicate by final URL)
+                topic.resources = [];
+                for (const result of results) {
+                    if (result.status !== 'fulfilled' || !result.value.valid) continue;
+                    const finalUrl = result.value.finalUrl || result.value.resource.url;
+                    if (seenFinalUrls.has(finalUrl)) continue;
+                    seenFinalUrls.add(finalUrl);
+                    topic.resources.push(result.value.resource);
+                }
+            }
+
+            // Wikipedia fallback for topics with no surviving resources
+            if (topic.resources.length === 0 && topic.name) {
+                const wikiTitle = topic.name.replace(/\s+/g, '_');
+                const wikiUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(wikiTitle)}`;
+                if (!seenFinalUrls.has(wikiUrl)) {
+                    const { valid } = await this._validateUrl(wikiUrl);
+                    if (valid) {
+                        seenFinalUrls.add(wikiUrl);
+                        topic.resources.push({ title: `${topic.name} — Wikipedia`, url: wikiUrl, type: 'article' });
+                    }
+                }
             }
         }
 
-        // Validate all URLs in parallel (max 5s each, all concurrent)
-        const validations = await Promise.allSettled(
-            allResources.map(async (r) => {
-                const valid = await this._validateUrl(r.url);
-                if (!valid) {
-                    // Detect platform from URL for better fallback
-                    let platform = 'general';
-                    for (const [key, domain] of Object.entries({
-                        wikipedia: 'wikipedia.org', youtube: 'youtube.com',
-                        khanacademy: 'khanacademy.org', mdn: 'developer.mozilla.org',
-                        freecodecamp: 'freecodecamp.org', w3schools: 'w3schools.com',
-                        geeksforgeeks: 'geeksforgeeks.org', coursera: 'coursera.org',
-                        edx: 'edx.org'
-                    })) {
-                        if (r.url.includes(domain)) { platform = key; break; }
-                    }
-                    r.url = this._buildFallbackUrl(r.title, platform);
-                    r.fallback = true;
-                }
-            })
-        );
+        // Remove topics that still have no resources — plan must not contain empty sections
+        plan.topics = (plan.topics || []).filter(t => t.resources && t.resources.length > 0);
 
         return plan;
     }
@@ -578,7 +665,7 @@ ${tag.description ? 'Context: ' + tag.description : ''}
 Create an optimized learning path that:
 1. Starts with prerequisites
 2. Builds knowledge progressively
-3. Links to real, well-known resources
+3. Links to real, publicly accessible resources
 4. Estimates time for each topic
 5. Includes practice exercises/projects
 
@@ -601,10 +688,22 @@ Return a JSON object:
   "tips": ["Learning tips specific to this domain"]
 }
 
-URL guidelines for resources:
-- Use real URLs from well-known platforms: Wikipedia, YouTube, Khan Academy, MDN, freeCodeCamp, W3Schools, GeeksforGeeks, Coursera, edX, official documentation sites
-- Only link to pages you are confident exist (e.g. main topic pages, well-known course pages)
-- Prefer broader/stable URLs over deep specific pages (e.g. a Wikipedia article, a YouTube channel, a Coursera course landing page)
+Provide 4-6 resources per topic. Use DIVERSE sources — do NOT rely heavily on any one site. Wikipedia should be at most ~30% of total resources.
+
+CRITICAL URL RULES — broken links are automatically removed, so only include links you are CERTAIN exist:
+- Recommended platforms (mix these for variety):
+  * Investopedia: https://www.investopedia.com/terms/... or https://www.investopedia.com/articles/... (great for finance/economics)
+  * Wikipedia: https://en.wikipedia.org/wiki/Article_Name (use underscores, match real titles exactly)
+  * GeeksforGeeks: https://www.geeksforgeeks.org/topic-name/ (great for CS/programming)
+  * Coursera: https://www.coursera.org/learn/course-slug (use real slugs like "machine-learning", "financial-markets")
+  * MIT OCW: https://ocw.mit.edu/courses/...
+  * MDN: https://developer.mozilla.org/en-US/docs/Web/...
+  * Python docs: https://docs.python.org/3/library/... or https://docs.python.org/3/tutorial/...
+  * freeCodeCamp: https://www.freecodecamp.org/learn/... or https://www.freecodecamp.org/news/...
+  * Official documentation sites (e.g. https://react.dev, https://nodejs.org/docs/latest/api/)
+  * YouTube CHANNEL pages: https://www.youtube.com/@3Blue1Brown, https://www.youtube.com/@KhanAcademyFinance
+- DO NOT use: Khan Academy article links (blocked by bot protection), Fidelity links, or youtube.com/watch?v= links
+- DO NOT guess or fabricate URLs. If you are not sure a specific page exists, do NOT include it.
 
 Optimize for efficient learning — build on foundations, avoid redundancy.
 Respond with ONLY the JSON object.`;
@@ -630,11 +729,101 @@ Respond with ONLY the JSON object.`;
             throw new Error('Failed to parse study plan from LLM');
         }
 
-        // Validate URLs and replace broken ones with search fallbacks
+        // Validate URLs and replace broken ones with real search results
         await this._resolveStudyPlanUrls(plan);
 
         await this._audit(userId, null, 'study_plan_generated', {
             tag_id: tagId, topics: (plan.topics || []).length, hours: plan.estimated_total_hours
+        });
+
+        return plan;
+    }
+
+    /**
+     * Refine an existing study plan based on user feedback.
+     */
+    async refineStudyPlan(userId, tagId, currentPlan, feedback) {
+        const tagResult = await query(
+            'SELECT tag, display_name, description FROM dl_domain_tags WHERE tag_id = $1 AND user_id = $2',
+            [tagId, userId]
+        );
+        if (!tagResult.rows.length) throw new Error('Tag not found');
+        const tag = tagResult.rows[0];
+
+        // Summarize current plan compactly for context
+        const planSummary = (currentPlan.topics || []).map(t =>
+            `- ${t.name} (${t.estimated_hours || '?'}h): ${t.description || ''}`
+        ).join('\n');
+
+        const prompt = `You previously created a study plan for "${tag.display_name || tag.tag}".
+
+Current plan topics:
+${planSummary}
+
+The user wants to refine this plan. Their feedback:
+"${feedback}"
+
+Revise the study plan based on the user's feedback. For example:
+- If they say they already know a topic, reduce or remove it and reallocate time
+- If they want more depth on something, expand that area
+- If they want to add a new focus area, include it
+
+Return the COMPLETE revised study plan as a JSON object (same format as before):
+{
+  "domain": "${tag.display_name || tag.tag}",
+  "estimated_total_hours": number,
+  "prerequisites": ["list of things to know first"],
+  "topics": [
+    {
+      "name": "Topic name",
+      "description": "What you'll learn",
+      "estimated_hours": number,
+      "resources": [
+        { "title": "Resource name", "url": "https://...", "type": "article|video|course|docs|practice" }
+      ],
+      "practice": "Suggested exercise or project"
+    }
+  ],
+  "tips": ["Learning tips specific to this domain"]
+}
+
+Provide 4-6 resources per topic so there is a good variety.
+
+Use DIVERSE sources — do NOT rely heavily on any one site. Wikipedia should be at most ~30% of total resources.
+
+CRITICAL URL RULES — broken links are automatically removed:
+- Use diverse platforms: Investopedia, Wikipedia, GeeksforGeeks, Coursera, MIT OCW, MDN, freeCodeCamp, official docs, YouTube channel pages
+- DO NOT use: Khan Academy article links, Fidelity links, or youtube.com/watch?v= links
+- DO NOT guess or fabricate URLs. If not sure a page exists, do NOT include it.
+
+Respond with ONLY the JSON object.`;
+
+        await costGovernor.checkBudget(2000);
+        const resolved = await providerResolver.getAdapter(userId, 'oggy');
+        const result = await this.openaiBreaker.execute(() =>
+            resolved.adapter.chatCompletion({
+                model: resolved.model,
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 0.4,
+                max_tokens: 2000,
+                timeout: 45000
+            })
+        );
+        costGovernor.recordUsage(result.tokens_used || 2000);
+        providerResolver.logRequest(userId, resolved.provider, resolved.model, 'oggy', 'studyPlanRefine', result.tokens_used, result.latency_ms, true, null);
+
+        let plan;
+        try {
+            plan = JSON.parse(this._cleanJson(result.text));
+        } catch {
+            throw new Error('Failed to parse refined study plan from LLM');
+        }
+
+        // Validate URLs and replace broken ones with real search results
+        await this._resolveStudyPlanUrls(plan);
+
+        await this._audit(userId, null, 'study_plan_refined', {
+            tag_id: tagId, feedback, topics: (plan.topics || []).length, hours: plan.estimated_total_hours
         });
 
         return plan;

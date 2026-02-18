@@ -166,6 +166,21 @@ router.post('/domain-learning/study-plan', async (req, res) => {
     }
 });
 
+// Refine/edit an existing study plan based on user feedback
+router.post('/domain-learning/study-plan/refine', async (req, res) => {
+    try {
+        const userId = req.body.user_id;
+        const { tag_id, current_plan, feedback } = req.body;
+        if (!tag_id || !current_plan || !feedback) return res.status(400).json({ error: 'tag_id, current_plan and feedback required' });
+
+        const plan = await domainLearningService.refineStudyPlan(userId, tag_id, current_plan, feedback);
+        res.json(plan);
+    } catch (err) {
+        logger.logError(err, { operation: 'refine-study-plan' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Save (accept) a study plan for a project
 router.post('/domain-learning/study-plan/save', async (req, res) => {
     try {

@@ -214,9 +214,10 @@ async function rollbackPack(tagId) {
 
 let _currentStudyPlan = null;
 let _currentStudyPlanTagId = null;
+let _savedPlansCache = {}; // planId -> plan object for edit/refine
 
 function renderStudyPlan(plan, options) {
-    const { saved = false, planId = null, showDelete = false } = options || {};
+    const { saved = false, planId = null, showDelete = false, tagId = null } = options || {};
     let html = '';
     if (plan.domain) {
         html += `<div style="font-size:13px;font-weight:600;margin-bottom:6px">${plan.domain}</div>`;
@@ -241,24 +242,93 @@ function renderStudyPlan(plan, options) {
     if (plan.tips && plan.tips.length) {
         html += `<div style="font-size:11px;color:var(--text-muted);margin-top:8px">Tips: ${plan.tips.join(' | ')}</div>`;
     }
+
+    // Edit input area (hidden by default, toggled by Edit button)
+    const editId = saved ? `saved-edit-${planId}` : 'new-plan-edit';
+    html += `<div id="${editId}" style="display:none;margin-top:10px">
+        <textarea id="${editId}-input" placeholder="e.g. I already know derivatives and integrals well, focus more on differential equations" style="width:100%;min-height:60px;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:12px;resize:vertical;background:var(--bg);color:var(--text)"></textarea>
+        <div style="display:flex;gap:8px;margin-top:6px">
+            <button class="btn btn-sm btn-primary" onclick="applyStudyPlanEdit('${editId}', ${saved ? `'${planId}'` : 'null'}, '${tagId || _currentStudyPlanTagId || ''}')">Apply</button>
+            <button class="btn btn-sm btn-outline" onclick="document.getElementById('${editId}').style.display='none'">Cancel</button>
+        </div>
+    </div>`;
+
     if (!saved) {
         html += `<div style="display:flex;gap:8px;margin-top:12px">
             <button class="btn btn-sm btn-primary" onclick="saveStudyPlan()">Accept & Save</button>
+            <button class="btn btn-sm btn-outline" onclick="toggleStudyPlanEdit('${editId}')">Edit</button>
             <button class="btn btn-sm btn-outline" onclick="generateStudyPlan('${_currentStudyPlanTagId}')">Regenerate</button>
         </div>`;
     } else if (showDelete && planId) {
-        html += `<div style="display:flex;justify-content:flex-end;margin-top:8px">
+        html += `<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
+            <button class="btn btn-sm btn-outline" onclick="toggleStudyPlanEdit('${editId}')">Edit</button>
             <button class="btn btn-sm btn-outline" style="color:var(--error);font-size:10px" onclick="deleteStudyPlan('${planId}')">Remove</button>
         </div>`;
     }
     return html;
 }
 
+function toggleStudyPlanEdit(editId) {
+    const el = document.getElementById(editId);
+    el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    if (el.style.display === 'block') {
+        el.querySelector('textarea').focus();
+    }
+}
+
+async function applyStudyPlanEdit(editId, savedPlanId, tagId) {
+    const input = document.getElementById(editId + '-input');
+    const feedback = (input.value || '').trim();
+    if (!feedback) { showToast("Please enter your feedback", "error"); return; }
+
+    // Determine which plan to refine
+    const plan = savedPlanId ? _savedPlansCache[savedPlanId] : _currentStudyPlan;
+    const resolvedTagId = tagId || _currentStudyPlanTagId;
+    if (!plan || !resolvedTagId) { showToast("No plan to refine", "error"); return; }
+
+    // Show loading state
+    const applyBtn = document.querySelector(`#${editId} .btn-primary`);
+    const origText = applyBtn.textContent;
+    applyBtn.textContent = 'Refining...';
+    applyBtn.disabled = true;
+
+    try {
+        const refined = await apiCall("POST", "/v0/general/domain-learning/study-plan/refine", {
+            tag_id: resolvedTagId,
+            current_plan: plan,
+            feedback: feedback
+        });
+
+        if (savedPlanId) {
+            // For saved plans: delete old, save new, reload
+            await apiCall("DELETE", `/v0/general/domain-learning/study-plan/${savedPlanId}`);
+            await apiCall("POST", "/v0/general/domain-learning/study-plan/save", {
+                project_id: projectId,
+                tag_id: resolvedTagId,
+                plan: refined
+            });
+            showToast("Study plan updated!", "success");
+            loadSavedStudyPlans();
+            loadAuditTrail();
+        } else {
+            // For new plan: replace current
+            _currentStudyPlan = refined;
+            document.getElementById("study-plan-hours").textContent = refined.estimated_total_hours ? `~${refined.estimated_total_hours} hours` : '';
+            document.getElementById("study-plan-content").innerHTML = renderStudyPlan(refined, { saved: false });
+        }
+    } catch (e) {
+        showToast("Failed to refine plan: " + e.message, "error");
+    } finally {
+        applyBtn.textContent = origText;
+        applyBtn.disabled = false;
+    }
+}
+
 async function generateStudyPlan(tagId) {
     const section = document.getElementById("study-plan-section");
     const content = document.getElementById("study-plan-content");
     section.style.display = "block";
-    content.innerHTML = '<span style="color:var(--text-muted);font-size:12px">Generating study plan... (validating links)</span>';
+    content.innerHTML = '<span style="color:var(--text-muted);font-size:12px">Generating study plan...</span>';
     try {
         const plan = await apiCall("POST", "/v0/general/domain-learning/study-plan", { tag_id: tagId });
         _currentStudyPlan = plan;
@@ -304,6 +374,12 @@ async function loadSavedStudyPlans() {
         section.style.display = "block";
         document.getElementById("saved-plans-count").textContent = `(${plans.length})`;
 
+        // Cache plans for edit/refine
+        _savedPlansCache = {};
+        for (const p of plans) {
+            _savedPlansCache[p.id] = p.plan;
+        }
+
         container.innerHTML = plans.map(p => {
             const date = new Date(p.saved_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
             return `<div class="saved-plan-card" style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--bg)">
@@ -315,7 +391,7 @@ async function loadSavedStudyPlans() {
                     <span id="plan-toggle-${p.id}" style="font-size:10px;color:var(--text-muted)">expand</span>
                 </div>
                 <div id="plan-body-${p.id}" style="display:none">
-                    ${renderStudyPlan(p.plan, { saved: true, planId: p.id, showDelete: true })}
+                    ${renderStudyPlan(p.plan, { saved: true, planId: p.id, showDelete: true, tagId: p.tag_id })}
                 </div>
             </div>`;
         }).join('');
