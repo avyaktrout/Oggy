@@ -231,7 +231,7 @@ class HarmonyEngine {
         // Get city-specific recent activity from multiple sources
         let recentActions = [];
         try {
-            const [snapshotsRes, dataRes, alertsRes] = await Promise.all([
+            const [snapshotsRes, dataRes, alertsRes, suggestionsRes] = await Promise.all([
                 // Score changes from daily snapshots
                 query(`
                     SELECT snapshot_date, harmony, balance, flow, care, awareness,
@@ -254,6 +254,15 @@ class HarmonyEngine {
                     FROM harmony_alerts
                     WHERE node_id = $1 AND created_at >= NOW() - INTERVAL '30 days'
                     ORDER BY created_at DESC LIMIT 3
+                `, [nodeId]),
+                // Recently accepted suggestions (node-specific or global)
+                query(`
+                    SELECT suggestion_type, title, description, payload, resolved_at, node_id
+                    FROM harmony_suggestions
+                    WHERE (node_id = $1 OR node_id IS NULL)
+                      AND status = 'accepted'
+                      AND resolved_at >= NOW() - INTERVAL '30 days'
+                    ORDER BY resolved_at DESC LIMIT 5
                 `, [nodeId]),
             ]);
 
@@ -299,6 +308,99 @@ class HarmonyEngine {
                     description: row.alert_type,
                     date: row.created_at,
                     severity: row.severity,
+                });
+            }
+
+            // Process accepted suggestions with rich payload detail
+            const typeLabels = {
+                new_indicator: 'New Indicator',
+                new_data_point: 'Data Point Added',
+                weight_adjustment: 'Weight Adjusted',
+                new_city: 'City Added',
+                model_update: 'Model Update',
+            };
+            // Pre-fetch indicators created by model_update suggestions (within 30s of resolve)
+            const modelUpdateRows = suggestionsRes.rows.filter(r => r.suggestion_type === 'model_update');
+            const modelUpdateIndicators = {};
+            for (const mu of modelUpdateRows) {
+                if (!mu.resolved_at) continue;
+                try {
+                    const indRes = await query(`
+                        SELECT name, dimension, unit, direction
+                        FROM harmony_indicators
+                        WHERE created_at BETWEEN $1::timestamptz - INTERVAL '5 seconds'
+                          AND $1::timestamptz + INTERVAL '30 seconds'
+                    `, [mu.resolved_at]);
+                    if (indRes.rows.length > 0) {
+                        modelUpdateIndicators[mu.resolved_at.toISOString()] = indRes.rows;
+                    }
+                } catch (_) {}
+            }
+
+            for (const row of suggestionsRes.rows) {
+                const p = row.payload || {};
+                let changes = [];
+                switch (row.suggestion_type) {
+                    case 'new_indicator':
+                        if (p.name) changes.push(`Added indicator: ${p.name}`);
+                        if (p.dimension) changes.push(`Dimension: ${p.dimension}`);
+                        if (p.unit) changes.push(`Unit: ${p.unit}`);
+                        if (p.direction) changes.push(p.direction === 'lower_is_better' ? 'Lower is better' : 'Higher is better');
+                        if (p.bounds) changes.push(`Range: ${p.bounds.min}–${p.bounds.max}`);
+                        if (p.weight) changes.push(`Weight: ${p.weight}`);
+                        if (p.dataset_name) changes.push(`Source: ${p.dataset_name}`);
+                        break;
+                    case 'new_data_point':
+                        if (p.indicator_key) changes.push(`Indicator: ${p.indicator_key.replace(/_/g, ' ')}`);
+                        if (p.raw_value != null) changes.push(`Value: ${p.raw_value}`);
+                        if (p.source_dataset) changes.push(`Source: ${p.source_dataset}`);
+                        break;
+                    case 'weight_adjustment': {
+                        if (p.indicator_key) changes.push(`Indicator: ${p.indicator_key.replace(/_/g, ' ')}`);
+                        const oldW = p.current_weight;
+                        const newW = p.proposed_weight != null ? p.proposed_weight : p.suggested_weight;
+                        if (oldW != null && newW != null) changes.push(`Weight: ${oldW} → ${newW}`);
+                        else if (newW != null) changes.push(`New weight: ${newW}`);
+                        if (p.rationale) changes.push(p.rationale);
+                        break;
+                    }
+                    case 'new_city':
+                        if (p.name || p.city_name) changes.push(`City: ${p.name || p.city_name}`);
+                        if (p.country) changes.push(`Country: ${p.country}`);
+                        if (p.state) changes.push(`State: ${p.state}`);
+                        if (p.population) changes.push(`Population: ${p.population.toLocaleString()}`);
+                        break;
+                    case 'model_update': {
+                        // Look up actual indicators created when this suggestion was applied
+                        const created = row.resolved_at ? modelUpdateIndicators[row.resolved_at.toISOString()] : null;
+                        if (created && created.length > 0) {
+                            changes.push('Indicators affected:');
+                            for (const ind of created) {
+                                let line = `${ind.name} (${ind.dimension})`;
+                                if (ind.unit) line += ` [${ind.unit}]`;
+                                if (ind.direction === 'lower_is_better') line += ' ↓';
+                                changes.push(line);
+                            }
+                        } else {
+                            // Fallback to payload fields if no DB indicators found
+                            if (p.name && p.dimension) changes.push(`Added indicator: ${p.name} (${p.dimension})`);
+                            else if (p.change_description) changes.push(p.change_description);
+                        }
+                        if (p.dataset_name || (p.data_sources && p.data_sources.length)) {
+                            changes.push(`Source: ${p.dataset_name || p.data_sources.join(', ')}`);
+                        }
+                        break;
+                    }
+                }
+                const detail = changes.length > 0 ? changes.join(' · ') : (row.description || null);
+                recentActions.push({
+                    type: 'suggestion_accepted',
+                    title: row.title,
+                    description: typeLabels[row.suggestion_type] || row.suggestion_type,
+                    detail,
+                    date: row.resolved_at,
+                    suggestion_type: row.suggestion_type,
+                    scope: row.node_id === null ? 'global' : 'city',
                 });
             }
 

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Oggy - Enter Food</title>
-    <link rel="stylesheet" href="/css/style.css?v=2">
+    <link rel="stylesheet" href="/css/style.css?v=3">
 </head>
 <body class="app-layout">
     <header class="topbar" id="topbar"></header>
@@ -15,11 +15,12 @@
     <div class="container">
         <h1 class="page-title">Track Food &amp; Nutrition</h1>
 
-        <!-- Receipt Scan -->
+        <!-- Receipt & Barcode Scan -->
         <div class="card" style="margin-bottom:12px;padding:10px 14px">
             <div style="display:flex;align-items:center;gap:10px">
                 <input type="file" id="receipt-file" accept="image/*,.pdf" style="display:none">
                 <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('receipt-file').click()" style="white-space:nowrap">Scan Receipt</button>
+                <button type="button" class="btn btn-outline btn-sm" onclick="openBarcodeScanner()" style="white-space:nowrap">Scan Barcode</button>
                 <span id="receipt-status" style="font-size:12px;color:var(--text-muted)"></span>
             </div>
             <div id="receipt-review" style="display:none;margin-top:10px">
@@ -49,14 +50,56 @@
                         <option value="snack">Snack</option>
                         <option value="other">Other</option>
                     </select>
-                    <input type="text" id="diet-description" placeholder="What did you eat/drink?"
-                           style="flex:1;padding:6px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px"
-                           onkeydown="if(event.key==='Enter')addDietEntry()">
+                    <div style="flex:1;position:relative">
+                        <input type="text" id="diet-description" placeholder="What did you eat/drink?" autocomplete="off"
+                               style="width:100%;padding:6px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;box-sizing:border-box"
+                               onkeydown="handleDescKeydown(event)">
+                        <div id="food-autocomplete" class="autocomplete-dropdown"></div>
+                    </div>
                     <input type="number" id="diet-quantity" placeholder="Qty" step="0.1"
                            style="width:60px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
-                    <input type="text" id="diet-unit" placeholder="Unit" value="serving"
-                           style="width:70px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+                    <select id="diet-unit" style="width:90px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+                        <option value="serving" selected>serving</option>
+                        <option value="piece">piece</option>
+                        <option value="cup">cup</option>
+                        <option value="oz">oz</option>
+                        <option value="g">g</option>
+                        <option value="ml">ml</option>
+                        <option value="slice">slice</option>
+                        <option value="bottle">bottle</option>
+                        <option value="can">can</option>
+                        <option value="tbsp">tbsp</option>
+                        <option value="tsp">tsp</option>
+                    </select>
                     <button class="btn btn-primary btn-sm" onclick="addDietEntry()">Add</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Add Recent Foods -->
+        <div id="recent-foods" class="card" style="margin-bottom:12px;padding:10px 14px;display:none">
+            <div style="font-size:13px;font-weight:600;color:var(--text-muted);margin-bottom:8px">Quick Add</div>
+            <div id="recent-foods-list" class="recent-foods-list"></div>
+        </div>
+
+        <!-- Saved Meals -->
+        <div id="saved-meals-panel" class="card" style="margin-bottom:12px;padding:10px 14px;display:none">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <span style="font-size:13px;font-weight:600;color:var(--text-muted)">Saved Meals</span>
+                <button class="btn btn-outline btn-sm" onclick="showSaveMealDialog()" style="font-size:11px">Save Current Meal</button>
+            </div>
+            <div id="saved-meals-list"></div>
+            <div id="save-meal-dialog" style="display:none;margin-top:10px;padding:10px;background:var(--bg-secondary);border-radius:var(--radius)">
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <input type="text" id="save-meal-name" placeholder="Meal name (e.g. My Usual Breakfast)" style="flex:1;min-width:150px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+                    <select id="save-meal-type" style="padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
+                        <option value="breakfast">Breakfast</option>
+                        <option value="lunch">Lunch</option>
+                        <option value="dinner">Dinner</option>
+                        <option value="snack">Snack</option>
+                    </select>
+                    <button class="btn btn-primary btn-sm" onclick="saveCurrentMeal()">Save</button>
+                    <button class="btn btn-outline btn-sm" onclick="document.getElementById('save-meal-dialog').style.display='none'">Cancel</button>
                 </div>
             </div>
         </div>
@@ -116,7 +159,11 @@
     </div>
     </main>
 
-    <script src="/js/app.js?v=2"></script>
-    <script src="/js/diet-enter.js?v=2"></script>
+    <!-- Barcode Modal -->
+    <div id="barcode-modal" style="display:none"></div>
+
+    <script src="/js/app.js?v=3"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script src="/js/diet-enter.js?v=3"></script>
 </body>
 </html>

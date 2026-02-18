@@ -88,6 +88,25 @@
                         <option value="liquid">Liquid</option>
                     </select>
                 </div>
+                <div id="diet-sug-clarification" style="display:none;background:#fef3c7;border:1px solid #f59e0b;border-radius:var(--radius);padding:10px;margin-bottom:8px">
+                    <div style="font-size:13px;font-weight:600;color:#92400e;margin-bottom:6px">&#9888; Oggy needs to know: how many/much did you have?</div>
+                    <div id="diet-sug-clarification-context" style="font-size:12px;color:#78350f;margin-bottom:8px"></div>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <input type="number" id="diet-sug-quantity" placeholder="Qty" min="0.1" step="0.1" style="width:70px;padding:4px 8px;border-radius:var(--radius);border:1px solid #f59e0b;font-size:13px;background:white">
+                        <select id="diet-sug-unit" style="padding:4px 8px;border-radius:var(--radius);border:1px solid #f59e0b;font-size:13px;background:white">
+                            <option value="">unit</option>
+                            <option value="piece">piece(s)</option>
+                            <option value="cup">cup(s)</option>
+                            <option value="oz">oz</option>
+                            <option value="g">g</option>
+                            <option value="ml">ml</option>
+                            <option value="serving">serving(s)</option>
+                            <option value="slice">slice(s)</option>
+                            <option value="bottle">bottle(s)</option>
+                            <option value="can">can(s)</option>
+                        </select>
+                    </div>
+                </div>
                 <input type="text" id="diet-sug-description" placeholder="Food description" style="width:100%;padding:6px 10px;border-radius:var(--radius);border:1px solid var(--border);font-size:13px;margin-bottom:8px">
                 <div id="diet-sug-items" style="font-size:12px;color:var(--text-muted);margin-bottom:8px"></div>
                 <div style="display:flex;gap:8px">

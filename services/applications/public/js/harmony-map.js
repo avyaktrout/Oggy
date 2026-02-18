@@ -304,6 +304,34 @@ function renderRecentActions(actions) {
                 </div>
                 <span style="color:var(--text-muted);font-size:11px;white-space:nowrap">${timeAgo(a.date)}</span>
             </div>`;
+        } else if (a.type === 'suggestion_accepted') {
+            const typeColors = { new_indicator: '#6366f1', new_data_point: '#22c55e', weight_adjustment: '#f59e0b', new_city: '#8b5cf6', model_update: '#0ea5e9' };
+            const typeIcons = { new_indicator: '&#10010;', new_data_point: '&#9679;', weight_adjustment: '&#9878;', new_city: '&#9733;', model_update: '&#9881;' };
+            const color = typeColors[a.suggestion_type] || '#6366f1';
+            const icon = typeIcons[a.suggestion_type] || '&#10003;';
+            const scopeBadge = a.scope === 'global' ? '<span style="font-size:10px;color:var(--text-muted);margin-left:4px">(global)</span>' : '';
+            let detailLine = '';
+            if (a.detail) {
+                const parts = a.detail.split(' · ');
+                if (parts.length > 2) {
+                    detailLine = '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.4">' +
+                        parts.map(p => `<div style="padding:1px 0">${esc(p)}</div>`).join('') + '</div>';
+                } else {
+                    detailLine = `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;line-height:1.3">${esc(a.detail)}</div>`;
+                }
+            }
+            return `<div style="padding:6px 10px;margin:4px 0;background:var(--surface);border:1px solid var(--border);border-left:3px solid ${color};border-radius:var(--radius);font-size:12px">
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                    <div style="display:flex;align-items:center;gap:6px">
+                        <span style="color:${color};font-size:11px">${icon}</span>
+                        <span style="font-weight:600">${esc(a.title)}</span>
+                        <span style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:0.5px">${esc(a.description)}</span>
+                        ${scopeBadge}
+                    </div>
+                    <span style="color:var(--text-muted);font-size:11px;white-space:nowrap">${timeAgo(a.date)}</span>
+                </div>
+                ${detailLine}
+            </div>`;
         }
         return '';
     };

@@ -124,7 +124,9 @@ class GeneralChatService {
             ? `\nActive domain knowledge: ${domainTags.join(', ')}. Use domain-specific knowledge from your learned context when relevant.`
             : '';
 
-        const systemPrompt = `You are Oggy, a helpful AI assistant. You remember previous conversations and learn from interactions.${projectContext}${domainContext}
+        const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        const systemPrompt = `You are Oggy, a helpful AI assistant. You remember previous conversations and learn from interactions.
+Today is ${todayStr}. When the user refers to relative dates like "yesterday" or "last week", use today's date to resolve them.${projectContext}${domainContext}
 
 # Learned Context
 ${memoryContext}
@@ -167,7 +169,7 @@ IMPORTANT: The user is asking about the Oggy application, its architecture, secu
                 const baseResult = await baseResolved.adapter.chatCompletion({
                     model: baseResolved.model,
                     messages: [
-                        { role: 'system', content: 'You are a helpful AI assistant.' },
+                        { role: 'system', content: `You are a helpful AI assistant.\nToday is ${todayStr}. When the user refers to relative dates like "yesterday" or "last week", use today's date to resolve them.` },
                         ...conversation_history.slice(-10),
                         { role: 'user', content: message }
                     ],

@@ -101,6 +101,129 @@ router.delete('/entries/:id', async (req, res) => {
     }
 });
 
+// ─── Goals ──────────────────────────────────────────
+router.get('/goals', async (req, res) => {
+    try {
+        const userId = req.query.user_id;
+        const goals = await dietService.getGoals(userId);
+        res.json({ goals });
+    } catch (err) {
+        logger.logError(err, { operation: 'v3-get-goals' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.post('/goals', async (req, res) => {
+    try {
+        const userId = req.body.user_id;
+        const { nutrient, value } = req.body;
+        if (!nutrient || value == null) return res.status(400).json({ error: 'nutrient and value required' });
+        const goal = await dietService.upsertGoal(userId, nutrient, value);
+        res.json(goal);
+    } catch (err) {
+        logger.logError(err, { operation: 'v3-upsert-goal' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── Food Search ────────────────────────────────────
+router.get('/search', async (req, res) => {
+    try {
+        const userId = req.query.user_id;
+        const q = (req.query.q || '').trim();
+        if (!q) return res.json({ results: [] });
+        const results = await dietService.searchFoods(userId, q);
+        res.json({ results });
+    } catch (err) {
+        logger.logError(err, { operation: 'v3-food-search' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── Recent Foods ───────────────────────────────────
+router.get('/recent', async (req, res) => {
+    try {
+        const userId = req.query.user_id;
+        const limit = parseInt(req.query.limit) || 10;
+        const foods = await dietService.getRecentFoods(userId, limit);
+        res.json({ foods });
+    } catch (err) {
+        logger.logError(err, { operation: 'v3-recent-foods' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── Barcode Scanning ───────────────────────────────
+router.get('/barcode/:code', async (req, res) => {
+    try {
+        const userId = req.query.user_id;
+        const result = await dietService.lookupBarcode(userId, req.params.code);
+        res.json(result);
+    } catch (err) {
+        logger.logError(err, { operation: 'v3-barcode-lookup' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── Saved Meals ────────────────────────────────────
+router.get('/meals', async (req, res) => {
+    try {
+        const userId = req.query.user_id;
+        const meals = await dietService.getSavedMeals(userId);
+        res.json({ meals });
+    } catch (err) {
+        logger.logError(err, { operation: 'v3-get-meals' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.post('/meals', async (req, res) => {
+    try {
+        const userId = req.body.user_id;
+        const meal = await dietService.saveMeal(userId, req.body);
+        res.json(meal);
+    } catch (err) {
+        logger.logError(err, { operation: 'v3-save-meal' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.post('/meals/save-current', async (req, res) => {
+    try {
+        const userId = req.body.user_id;
+        const { name, meal_type, date } = req.body;
+        if (!name || !meal_type) return res.status(400).json({ error: 'name and meal_type required' });
+        const meal = await dietService.saveCurrentMeal(userId, name, meal_type, date);
+        res.json(meal);
+    } catch (err) {
+        logger.logError(err, { operation: 'v3-save-current-meal' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.post('/meals/:id/log', async (req, res) => {
+    try {
+        const userId = req.body.user_id || req.query.user_id;
+        const date = req.body.date;
+        const result = await dietService.logSavedMeal(userId, req.params.id, date);
+        res.json(result);
+    } catch (err) {
+        logger.logError(err, { operation: 'v3-log-meal' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.delete('/meals/:id', async (req, res) => {
+    try {
+        const userId = req.query.user_id || req.body.user_id;
+        await dietService.deleteSavedMeal(userId, req.params.id);
+        res.json({ success: true });
+    } catch (err) {
+        logger.logError(err, { operation: 'v3-delete-meal' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Diet chat
 router.post('/chat', async (req, res) => {
     try {

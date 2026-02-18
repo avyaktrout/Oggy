@@ -181,35 +181,31 @@ class DietService {
         const { conversation_history = [], learn_from_chat = false } = options;
         const startTime = Date.now();
 
-        // Get today's nutrition summary (check today + yesterday to handle UTC vs local timezone)
+        // Build nutrition context for today + recent days so AI can answer about any recent date
         const now = new Date();
         const today = now.toISOString().split('T')[0];
-        const yesterday = new Date(now.getTime() - 86400000).toISOString().split('T')[0];
         let nutritionContext = '';
         try {
-            let summary = await this.getNutritionSummary(userId, today);
-            let entries = await this.getEntries(userId, today);
-            let dateLabel = today;
-
-            // If no entries for UTC today, check yesterday (user may be in an earlier timezone)
-            if ((!entries || entries.length === 0) && yesterday !== today) {
-                const ySummary = await this.getNutritionSummary(userId, yesterday);
-                const yEntries = await this.getEntries(userId, yesterday);
-                if (yEntries && yEntries.length > 0) {
-                    summary = ySummary;
-                    entries = yEntries;
-                    dateLabel = yesterday;
-                }
-            }
             const rules = await this.getRules(userId);
 
-            nutritionContext = `\n# Today's Nutrition (${dateLabel})
-Entries: ${summary.total_entries}
-Calories: ${Math.round(summary.total_calories)} kcal
-Protein: ${Math.round(summary.total_protein)}g | Carbs: ${Math.round(summary.total_carbs)}g | Fat: ${Math.round(summary.total_fat)}g (Sat: ${Math.round(summary.total_saturated_fat || 0)}g, Unsat: ${Math.round(summary.total_unsaturated_fat || 0)}g)
-Fiber: ${Math.round(summary.total_fiber)}g | Sugar: ${Math.round(summary.total_sugar)}g | Sodium: ${Math.round(summary.total_sodium)}mg | Caffeine: ${Math.round(summary.total_caffeine || 0)}mg
+            // Load last 3 days of data so the AI can answer about today, yesterday, etc.
+            const days = [];
+            for (let i = 0; i < 3; i++) {
+                const d = new Date(now.getTime() - i * 86400000).toISOString().split('T')[0];
+                const [summary, entries] = await Promise.all([
+                    this.getNutritionSummary(userId, d),
+                    this.getEntries(userId, d)
+                ]);
+                if (entries && entries.length > 0) {
+                    const label = i === 0 ? 'Today' : i === 1 ? 'Yesterday' : d;
+                    days.push(`## ${label} (${d})
+Entries: ${summary.total_entries} | Calories: ${Math.round(summary.total_calories)} kcal | Protein: ${Math.round(summary.total_protein)}g | Carbs: ${Math.round(summary.total_carbs)}g | Fat: ${Math.round(summary.total_fat)}g
+Foods: ${entries.map(e => `${e.description} (${e.meal_type || e.entry_type})`).join(', ')}`);
+                }
+            }
 
-Recent entries: ${entries.slice(-5).map(e => `${e.description} (${e.meal_type || e.entry_type})`).join(', ') || 'None yet'}
+            nutritionContext = `\n# Nutrition Data
+${days.length > 0 ? days.join('\n\n') : 'No entries in the last 3 days.'}
 
 User's diet rules: ${rules.length > 0 ? rules.map(r => `${r.rule_type}: ${r.description}`).join('; ') : 'None set'}`;
         } catch (err) {
@@ -245,12 +241,15 @@ User's diet rules: ${rules.length > 0 ? rules.map(r => `${r.rule_type}: ${r.desc
             ? memoryCards.map((c, i) => `${i + 1}. ${c.content?.text || JSON.stringify(c.content)}`).join('\n')
             : 'No previous diet patterns.';
 
+        const todayFormatted = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
         const systemPrompt = `You are Oggy, a diet and nutrition tracking assistant. You help users track their food, analyze nutrition, and provide diet advice based on their goals and history.
+Today is ${todayFormatted} (${today}).
 ${nutritionContext}
 
 # Learned Patterns
 ${memoryContext}
 
+IMPORTANT: The Nutrition Data above contains the user's ACTUAL food entries for each date. When answering questions about what the user ate, ONLY use entries from the correct date section. "Yesterday" means the day before today (${today}). Do NOT confuse entries from different dates.
 Be helpful, encourage healthy choices, and use the user's tracked data when relevant.`;
 
         await costGovernor.checkBudget(6000);
@@ -262,7 +261,7 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
         ];
 
         const baseMessages = [
-            { role: 'system', content: `You are a diet and nutrition assistant. Help users with food tracking and nutrition advice. Be concise and helpful.${nutritionContext}` },
+            { role: 'system', content: `You are a diet and nutrition assistant. Help users with food tracking and nutrition advice. Be concise and helpful.\nToday is ${todayFormatted} (${today}).\n${nutritionContext}\nIMPORTANT: The Nutrition Data above contains the user's ACTUAL food entries for each date. When answering about what the user ate, ONLY reference entries from the correct date. "Yesterday" means the day before today (${today}). Do NOT confuse entries from different dates.` },
             ...conversation_history.slice(-10),
             { role: 'user', content: message }
         ];
@@ -326,6 +325,9 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
     // Lookup chain: user-corrected → branded_foods → USDA (with LLM decomposition) → OpenFoodFacts → AI estimation
     async _analyzeNutrition(description, quantity, unit, userId) {
         try {
+            let result = null;
+            let alreadyScaled = false;
+
             // 1. Check for previous user-corrected entry with same description
             if (userId) {
                 const prev = await query(
@@ -340,28 +342,49 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
                 );
                 if (prev.rows.length > 0) {
                     logger.debug('Using user-corrected nutrition for: ' + description);
-                    return prev.rows[0];
+                    result = prev.rows[0];
                 }
             }
 
             // 2. Check branded foods database (fuzzy: match brand + any word overlap)
-            const brandedResult = await this._lookupBrandedFoods(description);
-            if (brandedResult) { brandedResult._source = 'branded_db'; return brandedResult; }
-
-            // 3. USDA FoodData Central (with LLM decomposition for complex foods)
-            const usdaResult = await this._lookupUSDA(description, quantity, unit, userId);
-            if (usdaResult) return usdaResult;
-
-            // 4. Try OpenFoodFacts API (free, no key needed, massive product database)
-            const offResult = await this._lookupOpenFoodFacts(description);
-            if (offResult) {
-                logger.debug('Using OpenFoodFacts data for: ' + description);
-                offResult._source = 'openfoodfacts';
-                return offResult;
+            if (!result) {
+                const brandedResult = await this._lookupBrandedFoods(description);
+                if (brandedResult) { brandedResult._source = 'branded_db'; result = brandedResult; }
             }
 
-            // 5. Fall back to AI estimation
-            return await this._aiNutritionEstimate(description, quantity, unit, userId);
+            // 3. USDA FoodData Central (with LLM decomposition for complex foods)
+            if (!result) {
+                const usdaResult = await this._lookupUSDA(description, quantity, unit, userId);
+                if (usdaResult) { result = usdaResult; alreadyScaled = true; }
+            }
+
+            // 4. Try OpenFoodFacts API (free, no key needed, massive product database)
+            if (!result) {
+                const offResult = await this._lookupOpenFoodFacts(description);
+                if (offResult) {
+                    logger.debug('Using OpenFoodFacts data for: ' + description);
+                    offResult._source = 'openfoodfacts';
+                    result = offResult;
+                }
+            }
+
+            // 5. Fall back to AI estimation (already includes quantity in prompt)
+            if (!result) {
+                result = await this._aiNutritionEstimate(description, quantity, unit, userId);
+                alreadyScaled = true;
+            }
+
+            // Apply quantity multiplier if the lookup returned per-single-item data
+            // USDA and AI already handle quantity internally; branded/OFF/user-corrected do not
+            if (result && !alreadyScaled && quantity && quantity > 1) {
+                const fields = ['calories', 'protein_g', 'carbs_g', 'fat_g', 'fiber_g', 'sugar_g', 'sodium_mg', 'caffeine_mg', 'saturated_fat_g', 'unsaturated_fat_g'];
+                for (const f of fields) {
+                    if (result[f] != null) result[f] = Math.round(result[f] * quantity * 100) / 100;
+                }
+                logger.debug(`Applied quantity multiplier ×${quantity} to nutrition for: ${description}`);
+            }
+
+            return result || { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0, sugar_g: 0, sodium_mg: 0, caffeine_mg: 0 };
         } catch (err) {
             logger.warn('Nutrition analysis failed', { error: err.message, description });
             return { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0, sugar_g: 0, sodium_mg: 0, caffeine_mg: 0 };
@@ -376,9 +399,13 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
     async _lookupUSDA(description, quantity, unit, userId) {
         try {
             const words = description.trim().split(/\s+/);
-            const isComplex = words.length >= 4 ||
+            // Only decompose genuinely complex multi-component foods, NOT "X at Y" patterns
+            const strippedLocation = description.replace(/\b(at|from|by)\s+\w+(\s+\w+)*/i, '').trim();
+            const isComplex = (
                 /\b(with|and|plus|also)\b/i.test(description) ||
-                description.includes(',');
+                description.includes(',') ||
+                (words.length >= 5 && !/\b(at|from)\b/i.test(description))
+            );
 
             if (isComplex) {
                 const decomposed = await this._decomposeFood(description, userId);
@@ -393,7 +420,7 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
 
                     const valid = results.filter(r => r !== null);
                     if (valid.length > 0 && valid.length >= decomposed.length * 0.5) {
-                        // Sum all components
+                        // Sum all components (this is per-single-serving of the composed food)
                         const summed = {
                             calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0,
                             saturated_fat_g: 0, unsaturated_fat_g: 0,
@@ -411,22 +438,25 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
                             summed.sodium_mg += r.sodium_mg || 0;
                             summed.caffeine_mg += r.caffeine_mg || 0;
                         }
-                        // Round totals
-                        summed.calories = Math.round(summed.calories);
-                        summed.protein_g = Math.round(summed.protein_g * 10) / 10;
-                        summed.carbs_g = Math.round(summed.carbs_g * 10) / 10;
-                        summed.fat_g = Math.round(summed.fat_g * 10) / 10;
-                        summed.saturated_fat_g = Math.round(summed.saturated_fat_g * 10) / 10;
-                        summed.unsaturated_fat_g = Math.round(summed.unsaturated_fat_g * 10) / 10;
-                        summed.fiber_g = Math.round(summed.fiber_g * 10) / 10;
-                        summed.sugar_g = Math.round(summed.sugar_g * 10) / 10;
-                        summed.sodium_mg = Math.round(summed.sodium_mg);
-                        summed.caffeine_mg = Math.round(summed.caffeine_mg);
+
+                        // Apply quantity multiplier (decomposition gives 1 serving worth)
+                        const qty = (quantity && quantity > 0) ? quantity : 1;
+                        summed.calories = Math.round(summed.calories * qty);
+                        summed.protein_g = Math.round(summed.protein_g * qty * 10) / 10;
+                        summed.carbs_g = Math.round(summed.carbs_g * qty * 10) / 10;
+                        summed.fat_g = Math.round(summed.fat_g * qty * 10) / 10;
+                        summed.saturated_fat_g = Math.round(summed.saturated_fat_g * qty * 10) / 10;
+                        summed.unsaturated_fat_g = Math.round(summed.unsaturated_fat_g * qty * 10) / 10;
+                        summed.fiber_g = Math.round(summed.fiber_g * qty * 10) / 10;
+                        summed.sugar_g = Math.round(summed.sugar_g * qty * 10) / 10;
+                        summed.sodium_mg = Math.round(summed.sodium_mg * qty);
+                        summed.caffeine_mg = Math.round(summed.caffeine_mg * qty);
 
                         logger.info('USDA decomposed lookup', {
                             description,
                             components: decomposed.length,
                             matched: valid.length,
+                            quantity: qty,
                             totalCalories: summed.calories
                         });
                         summed._source = 'usda';
@@ -552,7 +582,7 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
      */
     async _lookupBrandedFoods(description) {
         try {
-            // First try exact product match
+            // First try exact product match (description contains both brand AND product)
             const exactMatch = await query(
                 `SELECT calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, caffeine_mg
                  FROM branded_foods
@@ -565,9 +595,26 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
                 return exactMatch.rows[0];
             }
 
-            // Fuzzy match: brand name + category keyword matching
-            // Split description into words and match brand + any significant word
-            const words = description.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+            // Try product-name match (user might not include brand, e.g. "Buldak Carbonara Ramen")
+            const descWords = description.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+            if (descWords.length > 0) {
+                const minHits = Math.ceil(descWords.length / 2);
+                const wordCases = descWords.map((_, i) => `CASE WHEN LOWER(product) LIKE '%' || $${i + 1} || '%' THEN 1 ELSE 0 END`).join(' + ');
+                const productMatch = await query(
+                    `SELECT brand, product, category, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, caffeine_mg,
+                            (${wordCases}) AS word_hits
+                     FROM branded_foods
+                     WHERE (${wordCases}) >= ${minHits}
+                     ORDER BY word_hits DESC, LENGTH(product) DESC LIMIT 1`,
+                    descWords
+                );
+                if (productMatch.rows.length > 0) {
+                    logger.debug('Branded foods product-name match for: ' + description, { matched: productMatch.rows[0].product, hits: productMatch.rows[0].word_hits });
+                    return productMatch.rows[0];
+                }
+            }
+
+            // Fuzzy match: brand name + similarity scoring
             const brandMatch = await query(
                 `SELECT brand, product, category, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, caffeine_mg,
                         similarity(LOWER(brand || ' ' || product), LOWER($1)) AS sim
@@ -577,7 +624,6 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
                 [description]
             );
 
-            // If similarity extension isn't available, fall back to simpler match
             if (brandMatch.rows.length > 0) {
                 logger.debug('Branded foods brand match for: ' + description, { matched: brandMatch.rows[0].product });
                 return brandMatch.rows[0];
@@ -589,11 +635,11 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
                     `SELECT calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, caffeine_mg, brand, product, category
                      FROM branded_foods
                      WHERE LOWER($1) LIKE '%' || LOWER(brand) || '%'
+                        OR LOWER(product) ILIKE $2
                      ORDER BY LENGTH(product) DESC LIMIT 3`,
-                    [description]
+                    [description, '%' + description.replace(/%/g, '\\%').replace(/_/g, '\\_') + '%']
                 );
                 if (fallback.rows.length > 0) {
-                    // Pick best match: prefer same category (energy_drink for energy drinks)
                     const descLower = description.toLowerCase();
                     const best = fallback.rows.find(r =>
                         (descLower.includes('energy') && r.category === 'energy_drink') ||
@@ -683,10 +729,14 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
     async _aiNutritionEstimate(description, quantity, unit, userId) {
         await costGovernor.checkBudget(1000);
 
-        const prompt = `Estimate the total nutritional content for: "${description}"${quantity ? ` (${quantity} ${unit || 'serving'})` : ''}.
-IMPORTANT: If this is a restaurant meal or plate with multiple items, add up ALL components together (meats, sides, rice, sauces, etc.) for the TOTAL plate nutrition.
-For restaurant plates, portions are typically large (300-500g+ of food). A typical restaurant combo plate is 1000-1500+ calories.
-Do NOT underestimate — if unsure, estimate on the higher side based on typical restaurant serving sizes.
+        const qtyStr = quantity ? ` (${quantity} ${unit || 'serving'})` : '';
+        const prompt = `Estimate the TOTAL nutritional content for: "${description}"${qtyStr}.
+IMPORTANT RULES:
+- If a quantity is given (e.g. "2 piece"), multiply ALL values by that quantity. The response must reflect the TOTAL for all items combined.
+- If this mentions a store/restaurant/brand (e.g. Costco, McDonald's, Chipotle), use that brand's actual known portion sizes, NOT generic USDA values. A Costco hot dog is a 1/4 lb all-beef frank (~550 kcal each), NOT a generic 45g hot dog.
+- For restaurant meals with multiple items, SUM all components (meats, sides, sauces, rice).
+- Restaurant portions are large (300-500g+). A typical combo plate is 1000-1500+ cal.
+- Do NOT underestimate — if unsure, estimate on the higher side.
 Respond in JSON only (no markdown), all numeric values must be filled in:
 {"calories":___,"protein_g":___,"carbs_g":___,"fat_g":___,"saturated_fat_g":___,"unsaturated_fat_g":___,"fiber_g":___,"sugar_g":___,"sodium_mg":___,"caffeine_mg":___}`;
 
@@ -722,6 +772,223 @@ Respond in JSON only (no markdown), all numeric values must be filled in:
         }
 
         return parsed;
+    }
+
+    // ─── Goals ──────────────────────────────────────────
+    async getGoals(userId) {
+        const result = await query(
+            `SELECT rule_id, target_nutrient, target_value, target_unit, rule_type
+             FROM v3_diet_rules
+             WHERE user_id = $1 AND rule_type IN ('goal','limit')
+               AND target_nutrient IS NOT NULL AND active = true
+             ORDER BY created_at`,
+            [userId]
+        );
+        return result.rows;
+    }
+
+    async upsertGoal(userId, nutrient, value) {
+        const result = await query(
+            `INSERT INTO v3_diet_rules (rule_id, user_id, rule_type, description, target_nutrient, target_value, target_unit, active)
+             VALUES (gen_random_uuid(), $1, 'goal', $2, $3, $4, $5, true)
+             ON CONFLICT (user_id, target_nutrient, rule_type) WHERE active = true AND target_nutrient IS NOT NULL
+             DO UPDATE SET target_value = EXCLUDED.target_value, updated_at = NOW()
+             RETURNING *`,
+            [userId, nutrient + ' daily goal: ' + value, nutrient, value, nutrient.endsWith('_mg') ? 'mg' : (nutrient === 'calories' ? 'kcal' : 'g')]
+        );
+        return result.rows[0];
+    }
+
+    // ─── Food Search ────────────────────────────────────
+    async searchFoods(userId, q) {
+        const results = [];
+        const escaped = q.replace(/%/g, '\\%').replace(/_/g, '\\_');
+
+        // 1. User's recent entries
+        const recentResult = await query(
+            `SELECT sub.description, sub.entry_type, sub.quantity, sub.unit, sub.meal_type,
+                    sub.calories, sub.protein_g
+             FROM (
+                 SELECT DISTINCT ON (e.description) e.description, e.entry_type, e.quantity, e.unit, e.meal_type,
+                        i.calories, i.protein_g, e.entry_date
+                 FROM v3_diet_entries e LEFT JOIN v3_diet_items i ON i.entry_id = e.entry_id
+                 WHERE e.user_id = $1 AND e.description ILIKE $2
+                 ORDER BY e.description, e.entry_date DESC
+             ) sub ORDER BY sub.entry_date DESC LIMIT 5`,
+            [userId, '%' + escaped + '%']
+        );
+        for (const r of recentResult.rows) {
+            results.push({ source: 'recent', description: r.description, calories: Math.round(r.calories || 0), protein_g: Math.round(r.protein_g || 0), entry_type: r.entry_type, quantity: r.quantity, unit: r.unit, meal_type: r.meal_type });
+        }
+
+        // 2. Branded foods
+        const brandedResult = await query(
+            `SELECT brand, product, calories, protein_g, serving_size
+             FROM branded_foods WHERE (brand || ' ' || product) ILIKE $1 LIMIT 5`,
+            ['%' + escaped + '%']
+        );
+        for (const r of brandedResult.rows) {
+            results.push({ source: 'branded', description: r.brand + ' ' + r.product, brand: r.brand, calories: Math.round(r.calories || 0), protein_g: Math.round(r.protein_g || 0), serving_size: r.serving_size });
+        }
+
+        // 3. USDA (only for 3+ chars)
+        if (q.length >= 3) {
+            try {
+                const usdaResults = await usdaService.search(q);
+                for (const r of usdaResults) {
+                    results.push({ source: 'usda', description: r.description, calories: r.calories });
+                }
+            } catch (_) {}
+        }
+
+        return results;
+    }
+
+    // ─── Recent Foods ───────────────────────────────────
+    async getRecentFoods(userId, limit = 10) {
+        const result = await query(
+            `SELECT sub.* FROM (
+                SELECT DISTINCT ON (e.description) e.description, e.entry_type, e.quantity, e.unit, e.meal_type,
+                       i.calories, i.protein_g, e.entry_date
+                FROM v3_diet_entries e LEFT JOIN v3_diet_items i ON i.entry_id = e.entry_id
+                WHERE e.user_id = $1 AND e.entry_date >= CURRENT_DATE - INTERVAL '30 days'
+                ORDER BY e.description, e.entry_date DESC
+            ) sub ORDER BY sub.entry_date DESC LIMIT $2`,
+            [userId, limit]
+        );
+        return result.rows;
+    }
+
+    // ─── Barcode Lookup ─────────────────────────────────
+    async lookupBarcode(userId, barcode) {
+        // 1. Check local cache
+        const cached = await query(
+            `SELECT brand, product, serving_size, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, caffeine_mg
+             FROM branded_foods WHERE barcode = $1 LIMIT 1`,
+            [barcode]
+        );
+        if (cached.rows.length > 0) {
+            const r = cached.rows[0];
+            return { name: r.product, brand: r.brand, serving_size: r.serving_size, calories: r.calories, protein_g: r.protein_g, carbs_g: r.carbs_g, fat_g: r.fat_g, fiber_g: r.fiber_g, sugar_g: r.sugar_g, sodium_mg: r.sodium_mg, caffeine_mg: r.caffeine_mg, barcode, source: 'cache' };
+        }
+
+        // 2. OpenFoodFacts barcode API
+        try {
+            const resp = await axios.get(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json`, { timeout: 8000 });
+            if (resp.data?.status !== 1 || !resp.data?.product) {
+                return { error: 'Product not found', barcode };
+            }
+            const p = resp.data.product;
+            const n = p.nutriments || {};
+            const result = {
+                name: p.product_name || p.product_name_en || 'Unknown',
+                brand: p.brands || '',
+                serving_size: p.serving_size || '',
+                calories: Math.round(n['energy-kcal_serving'] || n['energy-kcal_100g'] || 0),
+                protein_g: Math.round((n.proteins_serving || n.proteins_100g || 0) * 10) / 10,
+                carbs_g: Math.round((n.carbohydrates_serving || n.carbohydrates_100g || 0) * 10) / 10,
+                fat_g: Math.round((n.fat_serving || n.fat_100g || 0) * 10) / 10,
+                fiber_g: Math.round((n.fiber_serving || n.fiber_100g || 0) * 10) / 10,
+                sugar_g: Math.round((n.sugars_serving || n.sugars_100g || 0) * 10) / 10,
+                sodium_mg: Math.round(((n.sodium_serving || n.sodium_100g || 0) * 1000)),
+                caffeine_mg: Math.round(n.caffeine_100g || 0),
+                barcode,
+                source: 'openfoodfacts'
+            };
+
+            // Cache in branded_foods
+            try {
+                await query(
+                    `INSERT INTO branded_foods (brand, product, serving_size, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, caffeine_mg, barcode, category)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'scanned')
+                     ON CONFLICT (brand, product) DO UPDATE SET barcode = EXCLUDED.barcode`,
+                    [result.brand || 'Unknown', result.name, result.serving_size, result.calories, result.protein_g, result.carbs_g, result.fat_g, result.fiber_g, result.sugar_g, result.sodium_mg, result.caffeine_mg, barcode]
+                );
+            } catch (_) {}
+
+            return result;
+        } catch (err) {
+            logger.warn('Barcode lookup failed', { barcode, error: err.message });
+            return { error: 'Barcode lookup failed', barcode };
+        }
+    }
+
+    // ─── Saved Meals ────────────────────────────────────
+    async getSavedMeals(userId) {
+        const result = await query(
+            `SELECT meal_id, name, meal_type, items, total_calories, total_protein, usage_count, last_used, created_at
+             FROM v3_saved_meals WHERE user_id = $1 ORDER BY usage_count DESC, created_at DESC`,
+            [userId]
+        );
+        return result.rows;
+    }
+
+    async saveMeal(userId, { name, meal_type, items }) {
+        let totalCal = 0, totalPro = 0;
+        for (const item of items) {
+            totalCal += Math.round(item.calories || 0);
+            totalPro += Math.round((item.protein_g || 0) * 10) / 10;
+        }
+        const result = await query(
+            `INSERT INTO v3_saved_meals (user_id, name, meal_type, items, total_calories, total_protein)
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+            [userId, name, meal_type || null, JSON.stringify(items), totalCal, totalPro]
+        );
+        return result.rows[0];
+    }
+
+    async logSavedMeal(userId, mealId, date) {
+        const meal = await query(`SELECT * FROM v3_saved_meals WHERE meal_id = $1 AND user_id = $2`, [mealId, userId]);
+        if (meal.rows.length === 0) throw new Error('Saved meal not found');
+
+        const items = meal.rows[0].items;
+        const entries = [];
+        for (const item of items) {
+            const entry = await this.addEntry(userId, {
+                entry_type: item.entry_type || 'food',
+                description: item.description,
+                quantity: item.quantity || null,
+                unit: item.unit || null,
+                meal_type: item.meal_type || meal.rows[0].meal_type || 'other',
+                entry_date: date || new Date().toISOString().split('T')[0]
+            });
+            entries.push(entry);
+        }
+
+        await query(
+            `UPDATE v3_saved_meals SET usage_count = usage_count + 1, last_used = NOW() WHERE meal_id = $1`,
+            [mealId]
+        );
+
+        return { logged: entries.length, meal_name: meal.rows[0].name };
+    }
+
+    async deleteSavedMeal(userId, mealId) {
+        await query(`DELETE FROM v3_saved_meals WHERE meal_id = $1 AND user_id = $2`, [mealId, userId]);
+    }
+
+    async saveCurrentMeal(userId, name, mealType, date) {
+        const targetDate = date || new Date().toISOString().split('T')[0];
+        const entriesResult = await query(
+            `SELECT e.description, e.entry_type, e.quantity, e.unit, e.meal_type,
+                    i.calories, i.protein_g
+             FROM v3_diet_entries e LEFT JOIN v3_diet_items i ON i.entry_id = e.entry_id
+             WHERE e.user_id = $1 AND e.entry_date = $2 AND e.meal_type = $3`,
+            [userId, targetDate, mealType]
+        );
+        if (entriesResult.rows.length === 0) throw new Error('No entries found for ' + mealType + ' on ' + targetDate);
+
+        const items = entriesResult.rows.map(r => ({
+            description: r.description,
+            entry_type: r.entry_type,
+            quantity: r.quantity,
+            unit: r.unit,
+            meal_type: r.meal_type,
+            calories: r.calories || 0,
+            protein_g: r.protein_g || 0
+        }));
+
+        return this.saveMeal(userId, { name, meal_type: mealType, items });
     }
 }
 

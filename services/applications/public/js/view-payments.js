@@ -224,16 +224,61 @@
         }
         document.getElementById('diet-modal-meal').value = meal;
 
+        // Quantity clarification — detect vague quantity and require it
+        document.getElementById('diet-modal-qty').value = '';
+        document.getElementById('diet-modal-unit').value = '';
+        const hasExplicitQty = /\b\d+(\.\d+)?\s*(piece|cup|oz|g|ml|serving|slice|bottle|can|pack|unit|tbsp|tsp)\b/i.test(desc)
+            || /^\d+(\.\d+)?\s/.test(desc.trim());
+        const clarification = document.getElementById('diet-modal-clarification');
+        const sendBtn = document.getElementById('diet-modal-send');
+        const qtyInput = document.getElementById('diet-modal-qty');
+        if (!hasExplicitQty) {
+            clarification.style.display = 'block';
+            document.getElementById('diet-modal-clarification-ctx').textContent =
+                `You mentioned "${desc}" but didn't specify a quantity.`;
+            sendBtn.disabled = true;
+            sendBtn.style.opacity = '0.5';
+            sendBtn.style.cursor = 'not-allowed';
+            if (qtyInput._enableOnQty) qtyInput.removeEventListener('input', qtyInput._enableOnQty);
+            qtyInput._enableOnQty = () => {
+                if (parseFloat(qtyInput.value) > 0) {
+                    sendBtn.disabled = false;
+                    sendBtn.style.opacity = '1';
+                    sendBtn.style.cursor = 'pointer';
+                } else {
+                    sendBtn.disabled = true;
+                    sendBtn.style.opacity = '0.5';
+                    sendBtn.style.cursor = 'not-allowed';
+                }
+            };
+            qtyInput.addEventListener('input', qtyInput._enableOnQty);
+        } else {
+            clarification.style.display = 'none';
+            sendBtn.disabled = false;
+            sendBtn.style.opacity = '1';
+            sendBtn.style.cursor = 'pointer';
+        }
+
         document.getElementById('diet-modal').style.display = 'flex';
     };
 
     window.closeDietModal = function() {
         document.getElementById('diet-modal').style.display = 'none';
+        document.getElementById('diet-modal-clarification').style.display = 'none';
+        document.getElementById('diet-modal-qty').value = '';
+        document.getElementById('diet-modal-unit').value = '';
+        const sendBtn = document.getElementById('diet-modal-send');
+        sendBtn.disabled = false;
+        sendBtn.style.opacity = '1';
+        sendBtn.style.cursor = 'pointer';
     };
 
     window.sendToDiet = async function() {
         const desc = document.getElementById('diet-modal-desc').value.trim();
         if (!desc) { showToast('Enter a food description', 'error'); return; }
+
+        const quantity = parseFloat(document.getElementById('diet-modal-qty').value) || null;
+        const unit = document.getElementById('diet-modal-unit').value || null;
 
         const btn = document.getElementById('diet-modal-send');
         btn.disabled = true;
@@ -244,7 +289,9 @@
                 entry_type: document.getElementById('diet-modal-type').value,
                 description: desc,
                 meal_type: document.getElementById('diet-modal-meal').value,
-                entry_date: document.getElementById('diet-modal-date').value
+                entry_date: document.getElementById('diet-modal-date').value,
+                quantity,
+                unit
             });
             showToast('Added to diet log!');
             closeDietModal();

@@ -5,7 +5,9 @@
     --danger: #ef4444;
     --warning: #f59e0b;
     --bg: #f8fafc;
+    --bg-secondary: #f1f5f9;
     --card: #ffffff;
+    --card-bg: #ffffff;
     --border: #e2e8f0;
     --text: #1e293b;
     --text-muted: #64748b;
@@ -1782,6 +1784,8 @@ tr:hover td { background: var(--bg); }
     border-radius: var(--radius);
     padding: 16px;
     margin-bottom: 16px;
+    position: relative;
+    z-index: 50;
 }
 .diet-entry-header { margin-bottom: 12px; }
 .diet-entry-title { font-weight: 600; font-size: 15px; }
@@ -1924,8 +1928,56 @@ tr:hover td { background: var(--bg); }
 }
 .diet-rule-desc { flex: 1; font-size: 13px; }
 
+/* Nutrition Progress Bar */
+.nutrition-progress { width: 100%; height: 4px; background: var(--border); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+.nutrition-progress-fill { height: 100%; border-radius: 2px; transition: width 0.3s ease; }
+.nutrition-goal-text { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+
+/* Food Autocomplete */
+.autocomplete-dropdown { position: absolute; top: 100%; left: 0; right: 0; background: var(--card, #ffffff); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-height: 300px; overflow-y: auto; z-index: 1000; display: none; }
+.autocomplete-section { padding: 6px 12px; font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
+.autocomplete-item { padding: 8px 12px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-size: 13px; border-bottom: 1px solid var(--border); }
+.autocomplete-item:hover, .autocomplete-item.active { background: #eff6ff; }
+.autocomplete-item:last-child { border-bottom: none; }
+.autocomplete-item-cal { font-size: 12px; color: var(--text-muted); white-space: nowrap; margin-left: 8px; }
+
+/* Quick-Add Recent Foods */
+.recent-foods-list { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0; }
+.recent-food-chip { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 20px; font-size: 12px; white-space: nowrap; cursor: default; flex-shrink: 0; }
+.recent-food-chip-desc { max-width: 120px; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.recent-food-chip-cal { color: var(--text-muted); font-size: 11px; }
+.recent-food-chip-add { width: 22px; height: 22px; border-radius: 50%; border: none; background: #22c55e; color: white; font-size: 16px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; line-height: 1; padding: 0; }
+.recent-food-chip-add:hover { background: #16a34a; }
+
+/* Barcode Modal */
+.barcode-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 1200; display: flex; align-items: center; justify-content: center; }
+.barcode-modal { background: var(--card, #ffffff); border-radius: var(--radius); padding: 20px; width: 90%; max-width: 400px; text-align: center; }
+.barcode-modal h3 { margin: 0 0 12px; font-size: 16px; }
+.barcode-result { margin-top: 12px; text-align: left; font-size: 13px; }
+.barcode-result-name { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+.barcode-result-brand { color: var(--text-muted); font-size: 12px; margin-bottom: 8px; }
+.barcode-result-nutrition { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.barcode-result-nutrition div { text-align: center; padding: 4px; background: var(--bg-secondary); border-radius: 4px; font-size: 11px; }
+.barcode-result-nutrition div strong { display: block; font-size: 14px; color: var(--primary); }
+
+/* Saved Meals */
+.saved-meal-card { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.saved-meal-card:last-child { border-bottom: none; }
+.saved-meal-info { flex: 1; }
+.saved-meal-name { font-weight: 600; font-size: 14px; }
+.saved-meal-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.saved-meal-actions { display: flex; gap: 6px; align-items: center; }
+
+/* Daily Goals Panel */
+.goals-panel { background: var(--card, #ffffff); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; padding: 16px; }
+.goals-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
+.goal-field label { display: block; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-bottom: 4px; }
+.goal-field input { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px; box-sizing: border-box; }
+
 @media (max-width: 768px) {
     .nutrition-cards { grid-template-columns: repeat(3, 1fr); }
     .diet-entry-row { flex-direction: column; }
     .diet-entry-card { flex-direction: column; align-items: flex-start; gap: 4px; }
+    .goals-grid { grid-template-columns: repeat(2, 1fr); }
+    .barcode-result-nutrition { grid-template-columns: repeat(2, 1fr); }
 }

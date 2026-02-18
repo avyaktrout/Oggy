@@ -75,14 +75,43 @@ class ChatHandler {
             };
         }
 
+        // Always load recent expense context (last 3 days) + date-specific if spending query
         let contextData = null;
+        let recentExpenseContext = '';
+        try {
+            // Always include last 3 days of expenses as background context
+            const now = options.clientDate ? new Date(options.clientDate + 'T12:00:00') : new Date(Date.now() - 5 * 60 * 60 * 1000);
+            const days = [];
+            for (let i = 0; i < 3; i++) {
+                const d = new Date(now); d.setDate(d.getDate() - i);
+                const ds = d.toISOString().slice(0, 10);
+                const label = i === 0 ? 'Today' : i === 1 ? 'Yesterday' : ds;
+                const dayExpenses = await query(
+                    `SELECT merchant, amount, category, description, transaction_date
+                     FROM expenses WHERE user_id = $1 AND status = 'active' AND transaction_date = $2
+                     ORDER BY created_at DESC LIMIT 10`,
+                    [userId, ds]
+                );
+                if (dayExpenses.rows.length > 0) {
+                    const total = dayExpenses.rows.reduce((s, e) => s + parseFloat(e.amount), 0);
+                    const items = dayExpenses.rows.map(e => `${e.merchant || 'unknown'} $${parseFloat(e.amount).toFixed(2)} (${e.category || 'uncategorized'})`).join(', ');
+                    days.push(`${label} (${ds}): ${dayExpenses.rows.length} expense(s), $${total.toFixed(2)} total — ${items}`);
+                }
+            }
+            if (days.length > 0) {
+                recentExpenseContext = `\n# Recent Expenses\n${days.join('\n')}\n`;
+            }
+        } catch (err) {
+            logger.debug('Failed to load recent expense context', { error: err.message });
+        }
+
         if (intent === 'spending_query') {
             contextData = await this._queryExpenses(userId, message, options.clientDate);
         }
 
         const [oggyResponse, baseResponse] = await Promise.all([
-            this._getOggyResponse(userId, message, conversationHistory, intent, contextData, options, performanceContext, appKnowledgeContext),
-            this._getBaseResponse(userId, message, conversationHistory, intent, contextData)
+            this._getOggyResponse(userId, message, conversationHistory, intent, contextData, options, performanceContext, appKnowledgeContext, recentExpenseContext),
+            this._getBaseResponse(userId, message, conversationHistory, intent, contextData, recentExpenseContext)
         ]);
 
         const latency_ms = Date.now() - startTime;
@@ -243,10 +272,10 @@ class ChatHandler {
         }
     }
 
-    async _getOggyResponse(userId, message, history, intent, contextData, options = {}, performanceContext = '', appKnowledgeContext = '') {
+    async _getOggyResponse(userId, message, history, intent, contextData, options = {}, performanceContext = '', appKnowledgeContext = '', recentExpenseContext = '') {
         try {
             const memoryCards = await this._retrieveMemory(userId, message);
-            const systemPrompt = this._buildSystemPrompt(intent, contextData, memoryCards, performanceContext, appKnowledgeContext);
+            const systemPrompt = this._buildSystemPrompt(intent, contextData, memoryCards, performanceContext, appKnowledgeContext, recentExpenseContext);
             const memoryCardIds = memoryCards.map(c => c.card_id).filter(Boolean);
 
             // Use behavior engine for candidate generation + scoring + audit
@@ -271,9 +300,9 @@ class ChatHandler {
         }
     }
 
-    async _getBaseResponse(userId, message, history, intent, contextData) {
+    async _getBaseResponse(userId, message, history, intent, contextData, recentExpenseContext = '') {
         try {
-            const systemPrompt = this._buildSystemPrompt(intent, contextData, []);
+            const systemPrompt = this._buildSystemPrompt(intent, contextData, [], '', '', recentExpenseContext);
             const messages = [
                 { role: 'system', content: systemPrompt },
                 ...history.slice(-10),
@@ -298,11 +327,16 @@ class ChatHandler {
         }
     }
 
-    _buildSystemPrompt(intent, contextData, memoryCards, performanceContext = '', appKnowledgeContext = '') {
+    _buildSystemPrompt(intent, contextData, memoryCards, performanceContext = '', appKnowledgeContext = '', recentExpenseContext = '') {
+        const todayStr = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        const todayISO = new Date().toISOString().split('T')[0];
         let prompt = `You are Oggy, a payments assistant with persistent memory. You can remember things across conversations.
+Today is ${todayStr} (${todayISO}).
 You help users with expenses, spending patterns, and categorization. Be concise and helpful.
+IMPORTANT: The Recent Expenses section below contains the user's ACTUAL expenses for each date. When answering about what the user spent or bought, ONLY reference expenses from the correct date. "Yesterday" means the day before today. Do NOT confuse expenses from different dates.
 IMPORTANT: If the user asks you to save, store, or remember something, tell them you can do that — say something like "Sure, just say 'remember that...' and I'll store it to my memory."
-Do NOT say you can't remember things or that you don't have memory — you DO.\n\n`;
+Do NOT say you can't remember things or that you don't have memory — you DO.
+${recentExpenseContext}\n`;
 
         if (performanceContext) {
             prompt += performanceContext;

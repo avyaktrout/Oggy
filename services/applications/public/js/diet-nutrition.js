@@ -1,10 +1,13 @@
 // Diet Agent - View Nutrition
+let _dietGoals = {};
+
 (async function() {
     const authed = await initAuth();
     if (!authed) return;
     renderTopbar();
     renderSidebar('diet', 'nutrition');
     document.getElementById('nutrition-date').value = todayStr();
+    await loadGoals();
     loadNutritionPage();
 })();
 
@@ -27,13 +30,62 @@ window.setToday = function() {
     loadNutritionPage();
 };
 
+// ─── Goals ──────────────────────────────────────────
+async function loadGoals() {
+    try {
+        const data = await apiCall('GET', '/v0/diet/goals?user_id=' + USER_ID);
+        _dietGoals = {};
+        for (const g of (data.goals || [])) {
+            _dietGoals[g.target_nutrient] = g.target_value;
+            const input = document.getElementById('goal-' + g.target_nutrient);
+            if (input) input.value = g.target_value;
+        }
+    } catch (_) {}
+}
+
+window.saveGoals = async function() {
+    const nutrients = ['calories', 'protein_g', 'carbs_g', 'fat_g'];
+    let saved = 0;
+    for (const n of nutrients) {
+        const input = document.getElementById('goal-' + n);
+        const val = parseFloat(input?.value);
+        if (!val || val <= 0) continue;
+        try {
+            await apiCall('POST', '/v0/diet/goals', { user_id: USER_ID, nutrient: n, value: val });
+            _dietGoals[n] = val;
+            saved++;
+        } catch (_) {}
+    }
+    if (saved > 0) {
+        showToast(saved + ' goal(s) saved');
+        loadNutritionPage();
+    } else {
+        showToast('Enter at least one goal value', 'error');
+    }
+};
+
+function renderProgressBar(current, goal) {
+    if (!goal || goal <= 0) return '';
+    const pct = Math.min((current / goal) * 100, 100);
+    const color = pct < 80 ? '#22c55e' : pct <= 100 ? '#f59e0b' : '#ef4444';
+    const overPct = Math.min((current / goal) * 100, 150);
+    return '<div class="nutrition-progress"><div class="nutrition-progress-fill" style="width:' + Math.min(overPct, 100) + '%;background:' + color + '"></div></div>' +
+           '<div class="nutrition-goal-text">' + Math.round(current) + ' / ' + Math.round(goal) + '</div>';
+}
+
 async function loadSummary(date) {
     try {
         const data = await apiCall('GET', '/v0/diet/nutrition?user_id=' + USER_ID + '&date=' + date);
-        document.getElementById('nc-calories').textContent = Math.round(data.total_calories || 0);
-        document.getElementById('nc-protein').textContent = Math.round(data.total_protein || 0) + 'g';
-        document.getElementById('nc-carbs').textContent = Math.round(data.total_carbs || 0) + 'g';
-        document.getElementById('nc-fat').textContent = Math.round(data.total_fat || 0) + 'g';
+        const cal = Math.round(data.total_calories || 0);
+        const pro = Math.round(data.total_protein || 0);
+        const carb = Math.round(data.total_carbs || 0);
+        const fat = Math.round(data.total_fat || 0);
+
+        document.getElementById('nc-calories').innerHTML = cal + renderProgressBar(cal, _dietGoals.calories);
+        document.getElementById('nc-protein').innerHTML = pro + 'g' + renderProgressBar(pro, _dietGoals.protein_g);
+        document.getElementById('nc-carbs').innerHTML = carb + 'g' + renderProgressBar(carb, _dietGoals.carbs_g);
+        document.getElementById('nc-fat').innerHTML = fat + 'g' + renderProgressBar(fat, _dietGoals.fat_g);
+
         const satFat = Math.round(data.total_saturated_fat || 0);
         const unsatFat = Math.round(data.total_unsaturated_fat || 0);
         const fatDetail = document.getElementById('nc-fat-detail');
@@ -104,11 +156,12 @@ async function loadRules() {
     const container = document.getElementById('diet-rules-list');
     try {
         const data = await apiCall('GET', '/v0/diet/rules?user_id=' + USER_ID);
-        if (!data.rules || data.rules.length === 0) {
+        const rules = (data.rules || []).filter(r => r.rule_type !== 'goal');
+        if (rules.length === 0) {
             container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px 0">No rules set yet.</div>';
             return;
         }
-        container.innerHTML = data.rules.map(r =>
+        container.innerHTML = rules.map(r =>
             '<div class="diet-rule-card">' +
                 '<span class="diet-rule-type-badge">' + r.rule_type + '</span>' +
                 '<span class="diet-rule-desc">' + r.description + '</span>' +

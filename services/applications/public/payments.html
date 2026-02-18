@@ -153,6 +153,31 @@
                         </select>
                     </div>
                 </div>
+                <div id="diet-modal-clarification" style="display:none;background:#fef3c7;border:1px solid #f59e0b;border-radius:var(--radius);padding:10px;margin-bottom:12px">
+                    <div style="font-size:13px;font-weight:600;color:#92400e;margin-bottom:4px">&#9888; How many/much did you have?</div>
+                    <div id="diet-modal-clarification-ctx" style="font-size:12px;color:#78350f"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Quantity</label>
+                        <input type="number" id="diet-modal-qty" placeholder="e.g. 2" min="0.1" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label>Unit</label>
+                        <select id="diet-modal-unit">
+                            <option value="">—</option>
+                            <option value="piece">piece(s)</option>
+                            <option value="cup">cup(s)</option>
+                            <option value="oz">oz</option>
+                            <option value="g">g</option>
+                            <option value="ml">ml</option>
+                            <option value="serving">serving(s)</option>
+                            <option value="slice">slice(s)</option>
+                            <option value="bottle">bottle(s)</option>
+                            <option value="can">can(s)</option>
+                        </select>
+                    </div>
+                </div>
                 <div class="form-group">
                     <label>Date</label>
                     <input type="date" id="diet-modal-date">

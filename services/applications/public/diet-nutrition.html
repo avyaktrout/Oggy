@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Oggy - View Nutrition</title>
-    <link rel="stylesheet" href="/css/style.css?v=2">
+    <link rel="stylesheet" href="/css/style.css?v=3">
 </head>
 <body class="app-layout">
     <header class="topbar" id="topbar"></header>
@@ -78,10 +78,34 @@
             <div style="color:var(--text-muted);font-size:13px;padding:12px 0">Loading...</div>
         </div>
 
+        <!-- Daily Goals -->
+        <div class="goals-panel">
+            <div style="font-size:15px;font-weight:600;margin-bottom:12px">Daily Goals</div>
+            <div class="goals-grid">
+                <div class="goal-field">
+                    <label>Calories</label>
+                    <input type="number" id="goal-calories" placeholder="e.g. 2000">
+                </div>
+                <div class="goal-field">
+                    <label>Protein (g)</label>
+                    <input type="number" id="goal-protein_g" placeholder="e.g. 150">
+                </div>
+                <div class="goal-field">
+                    <label>Carbs (g)</label>
+                    <input type="number" id="goal-carbs_g" placeholder="e.g. 250">
+                </div>
+                <div class="goal-field">
+                    <label>Fat (g)</label>
+                    <input type="number" id="goal-fat_g" placeholder="e.g. 65">
+                </div>
+            </div>
+            <button class="btn btn-sm btn-primary" onclick="saveGoals()">Save Goals</button>
+        </div>
+
         <!-- Diet Rules -->
         <div class="diet-rules-panel">
             <div class="diet-rules-header" onclick="toggleRulesPanel()">
-                <div class="diet-rules-title">Diet Rules &amp; Goals</div>
+                <div class="diet-rules-title">Diet Rules &amp; Preferences</div>
                 <span class="diet-rules-arrow" id="rules-arrow">&#9654;</span>
             </div>
             <div class="diet-rules-body" id="rules-body" style="display:none">
@@ -90,13 +114,12 @@
                 </div>
                 <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
                     <select id="rule-type" style="padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px">
-                        <option value="goal">Goal</option>
-                        <option value="limit">Limit</option>
                         <option value="preference">Preference</option>
                         <option value="allergy">Allergy</option>
                         <option value="avoid">Avoid</option>
+                        <option value="limit">Limit</option>
                     </select>
-                    <input type="text" id="rule-description" placeholder="e.g., Stay under 2000 calories"
+                    <input type="text" id="rule-description" placeholder="e.g., Allergic to peanuts"
                            style="flex:1;padding:6px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px"
                            onkeydown="if(event.key==='Enter')addDietRule()">
                     <button class="btn btn-sm btn-primary" onclick="addDietRule()">Add Rule</button>
@@ -106,7 +129,7 @@
     </div>
     </main>
 
-    <script src="/js/app.js?v=2"></script>
-    <script src="/js/diet-nutrition.js?v=2"></script>
+    <script src="/js/app.js?v=3"></script>
+    <script src="/js/diet-nutrition.js?v=3"></script>
 </body>
 </html>

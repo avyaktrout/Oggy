@@ -171,7 +171,19 @@ const server = app.listen(PORT, async () => {
                 ('Ghost', 'Whey Protein Peanut Butter Cereal Milk', '1 scoop (36g)', 130, 25, 5, 1.5, 0, 2, 180, 'protein_shake', 0),
                 ('Ghost', 'Whey Protein Chips Ahoy', '1 scoop (36g)', 130, 25, 5, 1.5, 0, 2, 180, 'protein_shake', 0),
                 ('Ghost', 'Vegan Protein Peanut Butter Cereal Milk', '1 scoop (42g)', 150, 20, 9, 4, 2, 2, 290, 'protein_shake', 0),
-                ('Fairlife', 'Core Power Elite Chocolate', '14 fl oz', 230, 42, 13, 3.5, 1, 7, 390, 'protein_shake', 0)
+                ('Fairlife', 'Core Power Elite Chocolate', '14 fl oz', 230, 42, 13, 3.5, 1, 7, 390, 'protein_shake', 0),
+                ('Samyang', 'Buldak Carbonara Hot Chicken Ramen', '1 pack (130g)', 550, 9, 80, 20, 2, 5, 1800, 'instant_noodle', 0),
+                ('Samyang', 'Buldak Hot Chicken Ramen Original', '1 pack (140g)', 530, 10, 78, 18, 2, 3, 1920, 'instant_noodle', 0),
+                ('Samyang', 'Buldak 2x Spicy Hot Chicken Ramen', '1 pack (140g)', 545, 10, 80, 19, 2, 4, 1890, 'instant_noodle', 0),
+                ('Samyang', 'Buldak Cheese Hot Chicken Ramen', '1 pack (140g)', 540, 10, 79, 19, 2, 4, 1710, 'instant_noodle', 0),
+                ('Samyang', 'Buldak Jjajang Hot Chicken Ramen', '1 pack (140g)', 550, 10, 81, 20, 2, 5, 1700, 'instant_noodle', 0),
+                ('Samyang', 'Buldak Curry Hot Chicken Ramen', '1 pack (140g)', 530, 10, 77, 19, 2, 5, 1680, 'instant_noodle', 0),
+                ('Nongshim', 'Shin Ramyun', '1 pack (120g)', 510, 10, 75, 18, 2, 3, 1790, 'instant_noodle', 0),
+                ('Nongshim', 'Shin Ramyun Black', '1 pack (130g)', 560, 11, 78, 21, 2, 4, 1880, 'instant_noodle', 0),
+                ('Maruchan', 'Instant Lunch Chicken', '1 cup (64g)', 290, 7, 37, 12, 1, 2, 1200, 'instant_noodle', 0),
+                ('Nissin', 'Cup Noodles Chicken', '1 cup (64g)', 290, 7, 36, 13, 2, 2, 1160, 'instant_noodle', 0),
+                ('Nissin', 'Top Ramen Chicken', '1 pack (85g)', 380, 8, 52, 14, 2, 1, 1440, 'instant_noodle', 0),
+                ('Indomie', 'Mi Goreng Instant Noodles', '1 pack (85g)', 390, 8, 52, 16, 1, 3, 910, 'instant_noodle', 0)
                 ON CONFLICT (brand, product) DO UPDATE SET
                     serving_size = EXCLUDED.serving_size, calories = EXCLUDED.calories,
                     protein_g = EXCLUDED.protein_g, carbs_g = EXCLUDED.carbs_g,
@@ -182,6 +194,37 @@ const server = app.listen(PORT, async () => {
             logger.info('Branded foods seed check completed');
         } catch (seedErr) {
             logger.debug('Branded foods seed skipped', { error: seedErr.message });
+        }
+
+        // Run diet features migration (saved meals, barcode column, goal index)
+        try {
+            await query(`
+                CREATE TABLE IF NOT EXISTS v3_saved_meals (
+                    meal_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    meal_type TEXT,
+                    items JSONB NOT NULL DEFAULT '[]',
+                    total_calories INTEGER DEFAULT 0,
+                    total_protein REAL DEFAULT 0,
+                    usage_count INTEGER DEFAULT 0,
+                    last_used TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            `);
+            await query(`CREATE INDEX IF NOT EXISTS idx_saved_meals_user ON v3_saved_meals(user_id)`);
+            await query(`
+                DO $$ BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'branded_foods' AND column_name = 'barcode') THEN
+                        ALTER TABLE branded_foods ADD COLUMN barcode TEXT;
+                    END IF;
+                END $$
+            `);
+            await query(`CREATE INDEX IF NOT EXISTS idx_branded_foods_barcode ON branded_foods(barcode) WHERE barcode IS NOT NULL`);
+            await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_diet_rules_goal_nutrient ON v3_diet_rules(user_id, target_nutrient, rule_type) WHERE active = true AND target_nutrient IS NOT NULL`);
+            logger.info('Diet features migration applied (saved_meals, barcode, goals)');
+        } catch (migErr) {
+            logger.debug('Diet features migration skipped', { error: migErr.message });
         }
     } catch (error) {
         logger.error('Database connection failed (diet)', { error: error.message });

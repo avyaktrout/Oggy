@@ -203,6 +203,47 @@
         document.getElementById('diet-sug-type').value = isLiquid ? 'liquid' : 'food';
 
         dietSugBox.classList.add('show');
+
+        // Vague quantity detection — show clarification card and block until answered
+        const hasExplicitQty = /\b\d+(\.\d+)?\s*(piece|cup|oz|g|ml|serving|slice|bottle|can|pack|unit|tbsp|tsp)\b/i.test(foodDesc)
+            || /^\d+(\.\d+)?\s/.test(foodDesc.trim());
+        const qtyInput = document.getElementById('diet-sug-quantity');
+        const clarification = document.getElementById('diet-sug-clarification');
+        const acceptBtn = document.getElementById('diet-sug-accept');
+        qtyInput.value = '';
+        document.getElementById('diet-sug-unit').value = '';
+        if (!hasExplicitQty) {
+            // Show clarification card with context about the food
+            clarification.style.display = 'block';
+            const ctxEl = document.getElementById('diet-sug-clarification-context');
+            ctxEl.textContent = `You mentioned "${foodDesc}" but didn't specify a quantity.`;
+            // Disable accept button until quantity is provided
+            acceptBtn.disabled = true;
+            acceptBtn.style.opacity = '0.5';
+            acceptBtn.style.cursor = 'not-allowed';
+            // Enable once quantity is filled — use stored ref for clean removal
+            if (qtyInput._enableOnQty) {
+                qtyInput.removeEventListener('input', qtyInput._enableOnQty);
+            }
+            qtyInput._enableOnQty = () => {
+                const val = parseFloat(qtyInput.value);
+                if (val > 0) {
+                    acceptBtn.disabled = false;
+                    acceptBtn.style.opacity = '1';
+                    acceptBtn.style.cursor = 'pointer';
+                } else {
+                    acceptBtn.disabled = true;
+                    acceptBtn.style.opacity = '0.5';
+                    acceptBtn.style.cursor = 'not-allowed';
+                }
+            };
+            qtyInput.addEventListener('input', qtyInput._enableOnQty);
+        } else {
+            clarification.style.display = 'none';
+            acceptBtn.disabled = false;
+            acceptBtn.style.opacity = '1';
+            acceptBtn.style.cursor = 'pointer';
+        }
     }
 
     // ── Diet suggestion accept ──
@@ -217,17 +258,28 @@
             return;
         }
 
+        const quantity = parseFloat(document.getElementById('diet-sug-quantity').value) || null;
+        const unit = document.getElementById('diet-sug-unit').value || null;
+
         try {
             await apiCall('POST', '/v0/diet/entries', {
                 user_id: USER_ID,
                 entry_type: entryType,
                 description: description,
                 meal_type: mealType,
-                entry_date: transactionDate
+                entry_date: transactionDate,
+                quantity,
+                unit
             });
             showToast('Added to diet log!');
             dietSugBox.classList.remove('show');
             receiptFoodItems = null;
+            document.getElementById('diet-sug-quantity').value = '';
+            document.getElementById('diet-sug-unit').value = '';
+            document.getElementById('diet-sug-clarification').style.display = 'none';
+            document.getElementById('diet-sug-accept').disabled = false;
+            document.getElementById('diet-sug-accept').style.opacity = '1';
+            document.getElementById('diet-sug-accept').style.cursor = 'pointer';
         } catch (err) {
             showToast('Diet entry failed: ' + err.message, 'error');
         }
@@ -237,6 +289,12 @@
     document.getElementById('diet-sug-dismiss').addEventListener('click', () => {
         dietSugBox.classList.remove('show');
         receiptFoodItems = null;
+        document.getElementById('diet-sug-quantity').value = '';
+        document.getElementById('diet-sug-unit').value = '';
+        document.getElementById('diet-sug-clarification').style.display = 'none';
+        document.getElementById('diet-sug-accept').disabled = false;
+        document.getElementById('diet-sug-accept').style.opacity = '1';
+        document.getElementById('diet-sug-accept').style.cursor = 'pointer';
     });
 
     // Accept suggestion

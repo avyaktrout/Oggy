@@ -96,8 +96,11 @@ class UsdaService {
                 .map(f => ({ food: f, score: this._scoreMatch(f, queryTerms) }))
                 .sort((a, b) => b.score - a.score);
 
-            if (scored[0].score < 2) {
-                logger.info('USDA no good match', { query: description, bestScore: scored[0].score, bestName: scored[0].food.description });
+            // Require minimum score AND that at least half of query terms match
+            const bestWordMatches = queryTerms.filter(term => (scored[0].food.description || '').toLowerCase().includes(term)).length;
+            const minWordMatches = Math.ceil(queryTerms.length / 2);
+            if (scored[0].score < 2 || bestWordMatches < minWordMatches) {
+                logger.info('USDA no good match', { query: description, bestScore: scored[0].score, bestName: scored[0].food.description, wordMatches: bestWordMatches, required: minWordMatches });
                 return null;
             }
 
@@ -296,6 +299,31 @@ class UsdaService {
             this.cache.delete(oldest);
         }
         this.cache.set(key, { data, ts: Date.now() });
+    }
+
+    /**
+     * Lightweight search for autocomplete — returns top results with name + calories only.
+     * Does NOT cache results (used for search suggestions, not nutrition analysis).
+     */
+    async search(searchQuery) {
+        if (!this.apiKey) return [];
+        try {
+            const foods = await this.breaker.execute(() => this._callApi(searchQuery));
+            if (!foods || foods.length === 0) return [];
+            return foods.slice(0, 3).map(f => {
+                const cals = (f.foodNutrients || []).find(n =>
+                    (n.nutrientId === 1008 || n.nutrient?.id === 1008)
+                );
+                return {
+                    description: f.description,
+                    calories: Math.round((cals?.value ?? cals?.amount) || 0),
+                    dataType: f.dataType
+                };
+            });
+        } catch (err) {
+            logger.debug('USDA search failed', { error: err.message });
+            return [];
+        }
     }
 
     async _dbCache(key, fdcId, foodName, nutrition) {
