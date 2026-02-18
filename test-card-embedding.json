@@ -1,9 +1,0 @@
-{
-  "owner_type": "user",
-  "owner_id": "test-user-embedding",
-  "kind": "fact",
-  "content": {"text": "Two-factor authentication: Enable 2FA in account security settings for enhanced protection"},
-  "tags": ["security", "2fa", "authentication"],
-  "tier": 1,
-  "utility_weight": 0.3
-}

@@ -43,6 +43,13 @@ logs/
 *.db
 *.sqlite
 
+# Deploy artifacts
+*.tar
+*.tar.gz
+
+# Test artifacts
+test-*.json
+
 # Misc
 .cache/
 dist/

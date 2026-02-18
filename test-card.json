@@ -1,9 +1,0 @@
-{
-  "owner_type": "user",
-  "owner_id": "test-user-comprehensive",
-  "kind": "fact",
-  "content": {"text": "Password reset: Users can reset password via email link sent to registered address"},
-  "tags": ["password", "security", "help"],
-  "tier": 1,
-  "utility_weight": 0.5
-}
