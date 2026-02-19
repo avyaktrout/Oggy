@@ -36,6 +36,7 @@ async function loadProjectDetail() {
         document.getElementById("project-desc").textContent = projectData.description || "No description";
         document.title = "Oggy - " + (projectData.name || "Project");
         await loadLearningSettings();
+        loadNotes();
     } catch (e) {
         document.getElementById("project-name").textContent = "Project not found";
         showToast("Failed to load project", "error");
@@ -133,6 +134,9 @@ async function loadProjectTags() {
                     <span style="font-size:12px;font-weight:500">${tag.display_name || tag.tag}</span>
                     <div style="display:flex;gap:6px">
                         <button class="btn btn-sm btn-outline" onclick="buildPack('${tag.tag_id}')">Build Pack</button>
+                        <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);cursor:pointer">
+                            <input type="checkbox" onchange="_freeOnlyStudyPlan=this.checked" style="width:14px;height:14px"> Free only
+                        </label>
                         <button class="btn btn-sm btn-outline" onclick="generateStudyPlan('${tag.tag_id}')">Study Plan</button>
                         ${tag.active_pack_id ? `<button class="btn btn-sm btn-outline" style="color:var(--error)" onclick="rollbackPack('${tag.tag_id}')">Rollback</button>` : ''}
                     </div>
@@ -214,6 +218,7 @@ async function rollbackPack(tagId) {
 
 let _currentStudyPlan = null;
 let _currentStudyPlanTagId = null;
+let _freeOnlyStudyPlan = false;
 let _savedPlansCache = {}; // planId -> plan object for edit/refine
 
 function renderStudyPlan(plan, options) {
@@ -296,7 +301,8 @@ async function applyStudyPlanEdit(editId, savedPlanId, tagId) {
         const refined = await apiCall("POST", "/v0/general/domain-learning/study-plan/refine", {
             tag_id: resolvedTagId,
             current_plan: plan,
-            feedback: feedback
+            feedback: feedback,
+            free_only: _freeOnlyStudyPlan
         });
 
         if (savedPlanId) {
@@ -330,7 +336,7 @@ async function generateStudyPlan(tagId) {
     section.style.display = "block";
     content.innerHTML = '<span style="color:var(--text-muted);font-size:12px">Generating study plan...</span>';
     try {
-        const plan = await apiCall("POST", "/v0/general/domain-learning/study-plan", { tag_id: tagId });
+        const plan = await apiCall("POST", "/v0/general/domain-learning/study-plan", { tag_id: tagId, free_only: _freeOnlyStudyPlan });
         _currentStudyPlan = plan;
         _currentStudyPlanTagId = tagId;
         document.getElementById("study-plan-hours").textContent = plan.estimated_total_hours ? `~${plan.estimated_total_hours} hours` : '';
@@ -439,16 +445,163 @@ async function loadAuditTrail() {
     } catch (e) { /* ignore */ }
 }
 
-// Handle proactive suggestions from chat responses
-const _originalOnChatResponse = shell.onChatResponse;
-if (shell.onChatResponse) {
-    shell.onChatResponse = function(data) {
-        if (_originalOnChatResponse) _originalOnChatResponse.call(shell, data);
-        if (data.suggestion) {
-            showSuggestionBanner(data.suggestion);
+// --- Notes ---
+
+async function loadNotes() {
+    const section = document.getElementById("notes-section");
+    const list = document.getElementById("notes-list");
+    const countEl = document.getElementById("notes-count");
+
+    // Always show notes section so user can add notes
+    section.style.display = "block";
+
+    try {
+        const data = await apiCall("GET", `/v0/general/projects/${projectId}/notes?user_id=${USER_ID}`);
+        const notes = data.notes || [];
+
+        if (notes.length === 0) {
+            countEl.textContent = "";
+            list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0">No notes yet. Click "+ Add Note" or save a chat message as a note.</div>';
+            return;
         }
-    };
+
+        countEl.textContent = `(${notes.length})`;
+
+        // Group by day
+        const grouped = {};
+        for (const note of notes) {
+            const day = new Date(note.created_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+            if (!grouped[day]) grouped[day] = [];
+            grouped[day].push(note);
+        }
+
+        let html = '';
+        for (const [day, dayNotes] of Object.entries(grouped)) {
+            html += `<div class="note-day-header">${day}</div>`;
+            for (const note of dayNotes) {
+                const time = new Date(note.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+                const sourceLabel = note.source_role === 'conversation' ? 'Conversation snapshot' : note.source_role === 'assistant' ? 'From Oggy' : note.source_role === 'user' ? 'From you' : 'Manual note';
+                const escaped = note.content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                html += `<div class="note-card">
+                    <div class="note-meta">
+                        <span class="note-source">${sourceLabel}</span>
+                        <div style="display:flex;align-items:center;gap:8px">
+                            <span>${time}</span>
+                            <button onclick="deleteNote('${note.note_id}')" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--text-muted);padding:0;line-height:1" title="Delete note">&times;</button>
+                        </div>
+                    </div>
+                    <div style="white-space:pre-wrap;line-height:1.5">${escaped}</div>
+                </div>`;
+            }
+        }
+        list.innerHTML = html;
+    } catch (err) {
+        // Keep section visible even on error so user can add notes manually
+        countEl.textContent = "";
+        list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0">No notes yet. Click "+ Add Note" or save a chat message as a note.</div>';
+    }
 }
+
+window.toggleAddNote = function() {
+    const form = document.getElementById("add-note-form");
+    form.style.display = form.style.display === 'none' ? 'block' : 'none';
+    if (form.style.display === 'block') {
+        document.getElementById("manual-note-input").focus();
+    }
+};
+
+window.saveManualNote = async function() {
+    const input = document.getElementById("manual-note-input");
+    const content = (input.value || '').trim();
+    if (!content) { showToast("Note cannot be empty", "error"); return; }
+    try {
+        await apiCall("POST", `/v0/general/projects/${projectId}/notes`, {
+            user_id: USER_ID,
+            content: content
+        });
+        input.value = '';
+        toggleAddNote();
+        showToast("Note saved!", "success");
+        loadNotes();
+    } catch (err) {
+        showToast("Failed to save note: " + err.message, "error");
+    }
+};
+
+const NOTE_MAX_CHARS = 5000;
+
+window.saveChatAsNote = function() {
+    const oggyContainer = document.getElementById('oggy-messages');
+    if (!oggyContainer) return;
+
+    // Collect all messages in order (skip the initial welcome message)
+    const msgs = oggyContainer.querySelectorAll('.chat-msg-user, .chat-msg-bot');
+    if (msgs.length <= 1) {
+        showToast("No conversation to save yet", "error");
+        return;
+    }
+
+    let lines = [];
+    msgs.forEach(msg => {
+        const clone = msg.cloneNode(true);
+        // Remove UI elements (buttons, memory labels, feedback)
+        clone.querySelectorAll('button, .chat-msg-memory, .chat-feedback').forEach(el => el.remove());
+        const text = clone.textContent.trim();
+        if (!text) return;
+        const role = msg.classList.contains('chat-msg-user') ? 'You' : 'Oggy';
+        lines.push(`${role}: ${text}`);
+    });
+
+    if (lines.length === 0) {
+        showToast("No conversation to save", "error");
+        return;
+    }
+
+    let snapshot = lines.join('\n\n');
+
+    if (snapshot.length > NOTE_MAX_CHARS) {
+        const truncated = snapshot.substring(0, NOTE_MAX_CHARS);
+        // Find last complete message boundary
+        const lastBreak = truncated.lastIndexOf('\n\n');
+        const cleanTruncated = lastBreak > 0 ? truncated.substring(0, lastBreak) : truncated;
+        const msgCount = lines.length;
+        const savedCount = cleanTruncated.split('\n\n').length;
+
+        if (!confirm(`This conversation has ${msgCount} messages and exceeds the note limit (${NOTE_MAX_CHARS} chars).\n\nSave the first ${savedCount} messages (truncated to fit)?`)) {
+            return;
+        }
+        snapshot = cleanTruncated + '\n\n[... conversation truncated]';
+    }
+
+    _saveConversationNote(snapshot);
+};
+
+async function _saveConversationNote(content) {
+    try {
+        await apiCall("POST", `/v0/general/projects/${projectId}/notes`, {
+            user_id: USER_ID,
+            content: content,
+            source_role: 'conversation'
+        });
+        showToast("Conversation saved as note!", "success");
+        loadNotes();
+    } catch (err) {
+        showToast("Failed to save note: " + err.message, "error");
+    }
+}
+
+window.deleteNote = async function(noteId) {
+    if (!confirm("Delete this note?")) return;
+    try {
+        await apiCall("DELETE", `/v0/general/notes/${noteId}?user_id=${USER_ID}`);
+        showToast("Note deleted", "success");
+        loadNotes();
+    } catch (err) {
+        showToast("Failed to delete note: " + err.message, "error");
+    }
+};
+
+// No per-message buttons — notes are saved as full conversation snapshots via "Save Chat" button
 
 function showSuggestionBanner(suggestion) {
     const banner = document.getElementById("suggestion-banner");

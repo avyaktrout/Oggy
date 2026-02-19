@@ -5,6 +5,7 @@
     renderTopbar();
     renderSidebar("general", "projects");
     loadProjects();
+    loadSuggestions();
 })();
 
 async function loadProjects() {
@@ -78,3 +79,54 @@ window.deleteProject = async function(projectId) {
         showToast("Failed: " + err.message, "error");
     }
 };
+
+// --- Suggested Projects ---
+
+async function loadSuggestions() {
+    const section = document.getElementById("suggestions-section");
+    const grid = document.getElementById("suggestions-grid");
+    const btn = document.getElementById("refresh-suggestions-btn");
+
+    section.style.display = "block";
+    grid.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px;grid-column:1/-1">Generating suggestions...</div>';
+    if (btn) btn.disabled = true;
+
+    try {
+        const data = await apiCall("GET", "/v0/general/projects/suggestions?user_id=" + USER_ID);
+        const suggestions = data.suggestions || [];
+        if (suggestions.length === 0) {
+            grid.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px;grid-column:1/-1">No suggestions available.</div>';
+            return;
+        }
+        const esc = (s) => (s || '').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+        grid.innerHTML = suggestions.map(s => `
+            <div class="card" style="cursor:pointer;transition:border-color 0.15s;border-left:3px solid var(--accent)"
+                 onclick="createFromSuggestion('${esc(s.name)}','${esc(s.description)}')"
+                 onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderLeftColor='var(--accent)';this.style.borderColor='var(--border)'">
+                <div style="font-weight:600;font-size:14px;margin-bottom:4px">${esc(s.name)}</div>
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">${esc(s.description)}</div>
+                <div style="font-size:11px;color:var(--accent);font-style:italic">${esc(s.reason)}</div>
+            </div>
+        `).join("");
+    } catch (e) {
+        grid.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px;grid-column:1/-1">Failed to load suggestions.</div>';
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+window.createFromSuggestion = async function(name, description) {
+    // Decode HTML entities back
+    const tmp = document.createElement('textarea');
+    tmp.innerHTML = name; const cleanName = tmp.value;
+    tmp.innerHTML = description; const cleanDesc = tmp.value;
+    try {
+        const project = await apiCall("POST", "/v0/general/projects", { user_id: USER_ID, name: cleanName, description: cleanDesc });
+        showToast("Project created from suggestion!");
+        window.location.href = '/general-project-detail.html?id=' + project.project_id;
+    } catch (err) {
+        showToast("Failed: " + err.message, "error");
+    }
+};
+
+window.loadSuggestions = loadSuggestions;

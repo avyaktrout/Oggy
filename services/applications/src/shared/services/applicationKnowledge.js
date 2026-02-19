@@ -39,7 +39,18 @@ Oggy operates across three domains, each with its own chat interface:
 - Food logging and nutritional analysis
 - Custom dietary rules (allergies, restrictions, goals)
 - AI-powered nutrition estimation from natural language descriptions
+- Daily nutrition goals tracking (calories, protein, carbs, fat)
+- Food autocomplete, barcode scanning, saved meals, quick-add from recent foods
 - Tables: \`v3_diet_entries\`, \`v3_diet_items\`, \`v3_diet_rules\`, \`v3_diet_chat_messages\`
+
+### V4 — Harmony Map
+- City well-being measurement using the Equilibrium Canon framework
+- Interactive world map showing city harmony scores across 6 dimensions
+- Six dimensions: Balance, Flow, Compassion, Discernment, Awareness, Expression
+- AI-generated suggestions for new indicators, data points, and model improvements
+- What-if scenarios to model policy impacts on city scores
+- Federated learning observer that aggregates improvements across users
+- Tables: \`harmony_nodes\`, \`harmony_indicators\`, \`harmony_scores\`, \`harmony_suggestions\`
 
 ## Security Model
 
@@ -247,4 +258,98 @@ function detectAppKnowledgeIntent(message) {
     return keywords.some(kw => lower.includes(kw));
 }
 
-module.exports = { getApplicationKnowledge, detectAppKnowledgeIntent };
+/**
+ * Cross-domain navigation guidance for the general chat system prompt.
+ */
+function getCrossDomainGuidance() {
+    return `
+# Cross-Domain Navigation Guide
+You are part of the Oggy platform which has 4 domains. When users mention topics related to other domains, guide them there.
+
+## If the user mentions FOOD, MEALS, CALORIES, or NUTRITION:
+Suggest they can log it as a diet entry. Navigation: Click the hamburger menu (top-left) > Diet > Chat to describe what they ate (Oggy will auto-log it with nutrition), or Diet > Entries to manually add food. They can also set daily nutrition goals under Diet > Nutrition.
+
+## If the user mentions EXPENSES, PURCHASES, SPENDING, or PAYMENTS:
+Suggest they can record it as an expense. Navigation: Click the hamburger menu > Payments > Add Expense at the top, or use Payments > Chat and describe the expense (e.g., "I spent $45 at Whole Foods").
+
+## If the user mentions CITIES, URBAN PLANNING, WELL-BEING, or CIVIC DATA:
+Suggest the Harmony Map. Navigation: Click the hamburger menu > Harmony > Map to explore city well-being scores.
+
+## If the user asks HOW TO RESEARCH A TOPIC or "how can you help me learn X":
+Guide them step-by-step through the research workflow:
+1. Go to General > Projects and create a new project for the topic
+2. In the project, enable Domain Learning in the Learning Modes section
+3. Click "Suggest Tags" — Oggy will analyze the project and suggest relevant knowledge domains
+4. Enable a tag, then click "Build Pack" to generate a knowledge pack (12-18 knowledge cards)
+5. Click "Apply" to load the knowledge into Oggy's memory for that project
+6. Optionally click "Study Plan" to get a structured learning plan with free resources and courses
+7. Now chat within the project — Oggy will have domain expertise loaded and can give detailed, accurate answers
+
+## If the user asks "what can you do" or "which applications can help":
+List all capabilities:
+- **General Chat** (you are here): Research projects, knowledge packs, study plans, memory-powered conversations
+- **Payments**: Expense tracking, spending analysis, AI categorization that learns from corrections
+- **Diet Tracker**: Food logging, nutrition analysis, dietary rules, daily goals, barcode scanning
+- **Harmony Map**: City well-being analysis, what-if scenarios, data-driven civic insights
+- **Training**: Continuous learning across all domains, benchmarks, performance analytics
+`;
+}
+
+/**
+ * Detect if user message has cross-domain intent (food, expenses, research help).
+ */
+function detectCrossDomainIntent(message) {
+    const lower = message.toLowerCase();
+    const intents = [];
+
+    // Diet-related — broad detection for any food/drink consumption mention
+    const dietWords = [
+        // Eating verbs
+        'i ate', 'i had for', 'just ate', 'eaten today', 'had some ', 'just had ',
+        'ate a ', 'ate some ', 'eating ', 'what i ate', 'i had a ', 'i had an ',
+        // Drinking verbs
+        'i drank', 'just drank', 'drank a ', 'drank some', 'i\'m drinking', 'drinking a ',
+        'i sipped', 'i chugged',
+        // Meals
+        'breakfast', 'lunch', 'dinner', 'snack', 'meal', 'brunch',
+        'for breakfast', 'for lunch', 'for dinner', 'for a snack',
+        // Quantity/container phrases
+        'bowl of ', 'plate of ', 'piece of ', 'glass of ', 'cup of ', 'serving of ',
+        'bottle of ', 'can of ', 'bag of ', 'box of ', 'slice of ', 'scoop of ',
+        // Drink types
+        'energy drink', 'protein shake', 'smoothie', 'coffee', 'latte', 'cappuccino',
+        'juice', 'soda', 'beer', 'wine', 'cocktail', 'milkshake', 'tea ',
+        // Nutrition
+        'calories', 'nutrition', 'protein', 'carbs', 'macros',
+        // Food context
+        'food i', 'what i ate', 'what i had', 'i ordered food', 'just had food',
+        'i cooked', 'i made food', 'recipe i',
+    ];
+    if (dietWords.some(kw => lower.includes(kw))) {
+        intents.push({ domain: 'diet', type: 'entry_suggestion' });
+    }
+
+    // Payment-related
+    const payWords = ['i spent', 'i bought', 'i purchased', 'i paid', 'cost me', 'my expense',
+        'just bought', 'subscription', 'paid for', 'it cost', 'charged me', 'i ordered',
+        'just paid', 'bought a ', 'bought some ', 'spent on', 'how much i spent',
+        'my spending', 'purchase', 'receipt'];
+    if (payWords.some(kw => lower.includes(kw))) {
+        intents.push({ domain: 'payments', type: 'entry_suggestion' });
+    }
+
+    // Research/help guidance
+    const guidanceWords = ['how can you help', 'what can you do', 'how do i research', 'how do i learn',
+        'how do i use', 'which application', 'which app can', 'what features', 'what are your capabilities',
+        'how can oggy help', 'want to learn about', 'interested in learning', 'help me learn',
+        'help me research', 'help me study', 'teach me about', 'i want to learn', 'can you help me with',
+        'how can you help me', 'how should i learn', 'how should i study', 'what can oggy do',
+        'what applications', 'which features', 'how to use oggy', 'help me understand'];
+    if (guidanceWords.some(kw => lower.includes(kw))) {
+        intents.push({ domain: 'general', type: 'feature_guidance' });
+    }
+
+    return intents;
+}
+
+module.exports = { getApplicationKnowledge, detectAppKnowledgeIntent, getCrossDomainGuidance, detectCrossDomainIntent };

@@ -124,6 +124,16 @@ class HarmonySuggestionService {
         const payload = suggestion.payload;
         let affectedNodeId = suggestion.node_id;
 
+        // Capture scores BEFORE applying the change (for impact tracking)
+        const scoresBefore = {};
+        try {
+            const nodesRes = await query("SELECT node_id, name FROM harmony_nodes WHERE scope = 'city'");
+            for (const n of nodesRes.rows) {
+                const sr = await query('SELECT harmony, balance, flow, care, awareness, expression, intent_coherence, compassion, discernment FROM harmony_scores WHERE node_id = $1 ORDER BY time_window_start DESC LIMIT 1', [n.node_id]);
+                if (sr.rows[0]) scoresBefore[n.node_id] = { ...sr.rows[0], name: n.name };
+            }
+        } catch (_) {}
+
         let recomputeAll = false;
 
         switch (suggestion.suggestion_type) {
@@ -186,6 +196,40 @@ class HarmonySuggestionService {
             } catch (err) {
                 logger.warn('Score recompute after suggestion failed', { suggestionId, nodeId: affectedNodeId, error: err.message });
             }
+        }
+
+        // Capture scores AFTER recompute and store impact in suggestion payload
+        try {
+            const nodesRes = await query("SELECT node_id, name FROM harmony_nodes WHERE scope = 'city'");
+            const impact = {};
+            for (const n of nodesRes.rows) {
+                const sr = await query('SELECT harmony, balance, flow, care, awareness, expression, intent_coherence, compassion, discernment FROM harmony_scores WHERE node_id = $1 ORDER BY time_window_start DESC LIMIT 1', [n.node_id]);
+                if (!sr.rows[0] || !scoresBefore[n.node_id]) continue;
+                const before = scoresBefore[n.node_id];
+                const after = sr.rows[0];
+                const dims = ['harmony', 'balance', 'flow', 'care', 'awareness', 'expression', 'intent_coherence', 'compassion', 'discernment'];
+                const deltas = {};
+                let hasDelta = false;
+                for (const dim of dims) {
+                    const bv = parseFloat(before[dim]) || 0;
+                    const av = parseFloat(after[dim]) || 0;
+                    const delta = av - bv;
+                    if (Math.abs(delta) >= 0.0001) {
+                        deltas[dim] = { before: bv, after: av, delta };
+                        hasDelta = true;
+                    }
+                }
+                if (hasDelta) {
+                    impact[n.node_id] = { name: n.name, deltas };
+                }
+            }
+            if (Object.keys(impact).length > 0) {
+                const updatedPayload = { ...payload, _impact: impact };
+                await query('UPDATE harmony_suggestions SET payload = $1 WHERE suggestion_id = $2',
+                    [JSON.stringify(updatedPayload), suggestionId]);
+            }
+        } catch (err) {
+            logger.debug('Post-apply impact capture failed', { error: err.message });
         }
 
         // Audit
@@ -449,8 +493,26 @@ class HarmonySuggestionService {
             }
         }
 
-        // Fallback: just log that it was accepted (informational only)
-        logger.info('Model update accepted (informational)', { description: payload.change_description || 'N/A' });
+        // Fallback: store enriched context about what the data means
+        const ctx = ((payload.change_description || '') + ' ' + (payload.rationale || '')).toLowerCase();
+        const dimMap = {
+            balance: ['safety', 'crime', 'housing', 'income', 'inequality', 'homeless', 'poverty'],
+            flow: ['commute', 'transit', 'employment', 'labor', 'job', 'economic', 'transport'],
+            compassion: ['health', 'food', 'insecurity', 'eviction', 'mental', 'uninsured', 'socioeconomic', 'medical'],
+            discernment: ['education', 'school', 'college', 'graduation', 'library', 'voter', 'literacy'],
+            awareness: ['civic', 'community', 'transparency', 'engagement', 'wellbeing', 'environment'],
+            expression: ['arts', 'culture', 'creative', 'protest', 'freedom', 'media'],
+        };
+        const affectedDims = [];
+        for (const [dim, keywords] of Object.entries(dimMap)) {
+            if (keywords.some(kw => ctx.includes(kw))) affectedDims.push(dim);
+        }
+        payload._context = {
+            dimensions: affectedDims.length > 0 ? affectedDims : ['general'],
+            effect: 'contextual_data',
+            description: payload.change_description || payload.rationale || 'Data integration'
+        };
+        logger.info('Model update accepted (contextual)', { description: payload.change_description || 'N/A', dimensions: affectedDims });
     }
 
     async _applyNewCity(payload, userId) {

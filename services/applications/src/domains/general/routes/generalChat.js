@@ -36,6 +36,18 @@ router.get('/projects', async (req, res) => {
     }
 });
 
+// Project suggestions (must be before :id route)
+router.get('/projects/suggestions', async (req, res) => {
+    try {
+        const userId = req.query.user_id;
+        const suggestions = await generalChatService.getProjectSuggestions(userId);
+        res.json({ suggestions });
+    } catch (err) {
+        logger.logError(err, { operation: 'v2-project-suggestions' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
 router.post('/projects', async (req, res) => {
     try {
         const userId = req.body.user_id;
@@ -92,6 +104,43 @@ router.get('/projects/:id/messages', async (req, res) => {
         res.json({ messages });
     } catch (err) {
         logger.logError(err, { operation: 'v2-project-messages' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Notes
+router.post('/projects/:id/notes', async (req, res) => {
+    try {
+        const userId = req.body.user_id;
+        const { content, source_message_id, source_role } = req.body;
+        if (!content) return res.status(400).json({ error: 'content is required' });
+        const note = await generalChatService.createNote(userId, req.params.id, content, source_message_id || null, source_role || null);
+        res.json(note);
+    } catch (err) {
+        logger.logError(err, { operation: 'v2-create-note' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.get('/projects/:id/notes', async (req, res) => {
+    try {
+        const userId = req.query.user_id;
+        const notes = await generalChatService.getNotes(userId, req.params.id);
+        res.json({ notes });
+    } catch (err) {
+        logger.logError(err, { operation: 'v2-get-notes' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.delete('/notes/:noteId', async (req, res) => {
+    try {
+        const userId = req.query.user_id || req.body.user_id;
+        const deleted = await generalChatService.deleteNote(userId, req.params.noteId);
+        if (!deleted) return res.status(404).json({ error: 'Note not found' });
+        res.json({ success: true });
+    } catch (err) {
+        logger.logError(err, { operation: 'v2-delete-note' });
         res.status(500).json({ error: err.message });
     }
 });

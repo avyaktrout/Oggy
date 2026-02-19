@@ -9,9 +9,11 @@ const logger = require('../../../shared/utils/logger');
 const { costGovernor } = require('../../../shared/middleware/costGovernor');
 const circuitBreakerRegistry = require('../../../shared/utils/circuitBreakerRegistry');
 const providerResolver = require('../../../shared/providers/providerResolver');
-const { getApplicationKnowledge, detectAppKnowledgeIntent } = require('../../../shared/services/applicationKnowledge');
+const { getApplicationKnowledge, detectAppKnowledgeIntent, getCrossDomainGuidance, detectCrossDomainIntent } = require('../../../shared/services/applicationKnowledge');
 
 const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory-service:3000';
+const DIET_SERVICE_URL = process.env.DIET_SERVICE_URL || 'http://diet-service:3012';
+const PAYMENTS_SERVICE_URL = process.env.PAYMENTS_SERVICE_URL || 'http://payments-service:3010';
 
 class GeneralChatService {
     constructor() {
@@ -117,6 +119,25 @@ class GeneralChatService {
             appKnowledgeContext = getApplicationKnowledge();
         }
 
+        // Check for cross-domain intent (food, expenses, research help)
+        let crossDomainContext = '';
+        const crossDomainIntents = detectCrossDomainIntent(message);
+        // Check conversation history for pending entry creation offers (user might be confirming)
+        const recentHistory = conversation_history.slice(-4);
+        const hasPendingEntryOffer = recentHistory.some(m =>
+            m.role === 'assistant' && m.content &&
+            (m.content.includes('create a diet entry') || m.content.includes('create an entry') ||
+             m.content.includes('log this') || m.content.includes('log that') ||
+             m.content.includes('diet entry') || m.content.includes('payment entry') ||
+             m.content.includes('expense entry') || m.content.includes('Diet Tracker'))
+        );
+        if (hasPendingEntryOffer && crossDomainIntents.length === 0) {
+            crossDomainIntents.push({ domain: 'diet', type: 'entry_creation_followup' });
+        }
+        if (crossDomainIntents.length > 0 || detectAppKnowledgeIntent(message)) {
+            crossDomainContext = getCrossDomainGuidance();
+        }
+
         // Fetch auto-learned user preferences
         const preferenceContext = await this._getPreferenceContext(userId);
 
@@ -130,12 +151,57 @@ Today is ${todayStr}. When the user refers to relative dates like "yesterday" or
 
 # Learned Context
 ${memoryContext}
-${preferenceContext}${performanceContext}${appKnowledgeContext}
+${preferenceContext}${performanceContext}${appKnowledgeContext}${crossDomainContext ? `\n${crossDomainContext}` : ''}
 Respond helpfully and naturally. If you recall relevant information from past conversations, use it.${domainTags.length > 0 ? ' You have domain knowledge loaded — use it to give detailed, accurate answers about domain-specific topics.' : ''}${performanceContext ? `
 
 IMPORTANT: The user is asking about your performance. You MUST answer using the REAL performance data provided above in "My Performance Data". Do NOT say you don't have access to data or can't evaluate yourself — you DO have this data. Reference specific numbers, levels, accuracy percentages, and trends from the data above. If no benchmarks exist yet, say so honestly and suggest starting a training session.` : ''}${appKnowledgeContext ? `
 
-IMPORTANT: The user is asking about the Oggy application, its architecture, security, or features. You MUST answer using the detailed application knowledge provided above in "About Oggy". You have comprehensive knowledge of how you work, your security model, database schema, features, and architecture. Answer confidently and accurately using the information above. Do NOT say you don't know how you work or that you can't answer questions about yourself — you CAN and you MUST use the knowledge above.` : ''}`;
+IMPORTANT: The user is asking about the Oggy application, its architecture, security, or features. You MUST answer using the detailed application knowledge provided above in "About Oggy". You have comprehensive knowledge of how you work, your security model, database schema, features, and architecture. Answer confidently and accurately using the information above. Do NOT say you don't know how you work or that you can't answer questions about yourself — you CAN and you MUST use the knowledge above.` : ''}${crossDomainIntents.length > 0 ? `
+
+CRITICAL — CROSS-DOMAIN ENTRY CREATION (YOU MUST FOLLOW THIS):
+You can CREATE Diet and Payment entries for the user directly from this chat.
+
+${crossDomainIntents.some(i => i.type === 'feature_guidance') ? `The user wants to learn or research something, or is asking what you can do. DO NOT give a generic answer. Instead:
+1. Briefly acknowledge their interest (1 sentence)
+2. Guide them step-by-step: Go to General > Projects, create a project for this topic, enable Domain Learning, click Suggest Tags, build a knowledge pack, apply it, then generate a Study Plan
+3. Explain this loads domain expertise into your memory so you can give expert-level answers
+4. Include navigation: Click the hamburger menu (☰ top-left) > General > Projects
+` : ''}${crossDomainIntents.some(i => i.domain === 'diet') ? `The user mentioned food, drinks, or meals — OR you previously offered to create an entry and they may be confirming.
+
+YOU MUST CREATE BOTH DIET AND PAYMENT ENTRIES WHEN APPLICABLE. Do NOT create only one type and forget the other.
+
+FLOW:
+1. If the user describes consuming something, OFFER to create a DIET entry for it.
+2. If the same message mentions buying/purchasing from a store/merchant, ALSO offer to create ONE payment entry.
+3. When the user CONFIRMS (yes, sure, please, go ahead, do it) or you already have sufficient details, CREATE the entries by appending action blocks at the END of your message.
+4. If you need more info (e.g., cost for payment), ASK for it — but still create the diet entry if you have enough info for that.
+
+IMPORTANT RULES:
+- ALWAYS create diet entries when food/drink consumption is described, even if a purchase is also mentioned.
+- Create SEPARATE diet entries for DIFFERENT DATES. Example: "I drank two today and two yesterday" = one diet entry for today + one diet entry for yesterday with entry_date.
+- Create only ONE payment entry per purchase transaction. "I bought 4 drinks from 7-Eleven" = ONE expense for the total, not 4 separate expenses.
+- Never duplicate entries. Each unique item/transaction gets exactly one action block.
+- Use quantity field for multiple items: "drank 2 energy drinks today" = quantity 2.
+- For yesterday/past dates, use entry_date in YYYY-MM-DD format.
+
+ACTION BLOCK FORMAT — append at the very end of your response, AFTER all natural text:
+[ENTRY_ACTION:{"type":"diet","description":"Ghost Energy Drink","entry_type":"liquid","meal_type":"snack","quantity":2}]
+[ENTRY_ACTION:{"type":"diet","description":"Ghost Energy Drink","entry_type":"liquid","meal_type":"snack","quantity":2,"entry_date":"2026-02-17"}]
+[ENTRY_ACTION:{"type":"expense","amount":12.00,"description":"4x Ghost Energy Drink","merchant":"7-Eleven"}]
+
+FIELD REFERENCE:
+- type: "diet" or "expense" (REQUIRED)
+- description: what was consumed or purchased (REQUIRED)
+- entry_type: "food" for solid food, "liquid" for drinks (diet only)
+- meal_type: "breakfast", "lunch", "dinner", or "snack" (diet only, infer from time)
+- quantity: number of items (diet only, default 1)
+- entry_date: "YYYY-MM-DD" (diet only, omit for today)
+- amount: cost as a number (expense only, REQUIRED for expense)
+- merchant: store/restaurant name (expense only, if known)
+` : ''}${crossDomainIntents.some(i => i.domain === 'payments') && !crossDomainIntents.some(i => i.domain === 'diet') ? `The user mentioned spending, purchases, or expenses. Offer to create a payment entry.
+Create only ONE entry per transaction. When confirmed, append:
+[ENTRY_ACTION:{"type":"expense","amount":X.XX,"description":"...","merchant":"..."}]
+` : ''}` : ''}`;
 
         // Call LLM via provider adapter
         await costGovernor.checkBudget(3000);
@@ -233,9 +299,23 @@ IMPORTANT: The user is asking about the Oggy application, its architecture, secu
                 }
             }
 
+            // Process cross-domain entry creation actions from LLM response
+            let responseOggyText = oggyText;
+            if (crossDomainIntents.length > 0) {
+                try {
+                    const actionResult = await this._processEntryActions(userId, oggyText);
+                    responseOggyText = actionResult.cleanedText;
+                    if (actionResult.confirmations.length > 0) {
+                        responseOggyText += '\n\n' + actionResult.confirmations.join('\n');
+                    }
+                } catch (err) {
+                    logger.debug('Entry action processing failed', { error: err.message });
+                }
+            }
+
             const response = {
                 oggy_response: {
-                    text: oggyText,
+                    text: responseOggyText,
                     used_memory: memoryCards.length > 0
                 },
                 base_response: {
@@ -453,6 +533,97 @@ Respond with ONLY the JSON array.`;
     }
 
     /**
+     * Parse LLM response for entry creation action blocks and execute them.
+     */
+    async _processEntryActions(userId, text) {
+        const actionRegex = /\[ENTRY_ACTION:\s*(\{[^}]+\})\s*\]/g;
+        const actions = [];
+        let match;
+        while ((match = actionRegex.exec(text)) !== null) {
+            try {
+                actions.push(JSON.parse(match[1]));
+            } catch (e) {
+                logger.debug('Failed to parse entry action JSON', { raw: match[1] });
+            }
+        }
+
+        // Deduplicate: same type + same description (normalized) = duplicate
+        const seen = new Set();
+        const uniqueActions = actions.filter(a => {
+            const key = `${a.type}:${(a.description || '').toLowerCase().trim()}:${a.entry_date || 'today'}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+
+        const cleanedText = text.replace(/\s*\[ENTRY_ACTION:\s*\{[^}]+\}\s*\]/g, '').trim();
+        const confirmations = [];
+
+        for (const action of uniqueActions) {
+            try {
+                if (action.type === 'diet') {
+                    await this._createDietEntry(userId, action);
+                    const dateLabel = action.entry_date ? ` (${action.entry_date})` : '';
+                    const qtyLabel = action.quantity && action.quantity > 1 ? `${action.quantity}x ` : '';
+                    confirmations.push(`Diet entry created: ${qtyLabel}${action.description}${dateLabel}`);
+                } else if (action.type === 'expense') {
+                    await this._createExpenseEntry(userId, action);
+                    confirmations.push(`Expense logged: $${action.amount} — ${action.description}${action.merchant ? ` at ${action.merchant}` : ''}`);
+                }
+            } catch (err) {
+                logger.warn('Failed to create cross-domain entry', { type: action.type, error: err.message });
+                if (action.type === 'diet') {
+                    confirmations.push(`Could not create diet entry automatically — you can add it in Diet > Entries`);
+                } else {
+                    confirmations.push(`Could not create expense entry automatically — you can add it in Payments`);
+                }
+            }
+        }
+
+        return { cleanedText, confirmations };
+    }
+
+    async _createDietEntry(userId, data) {
+        const today = new Date().toISOString().split('T')[0];
+        const qty = data.quantity && data.quantity > 1 ? data.quantity : 1;
+        const desc = qty > 1 ? `${qty}x ${data.description}` : data.description;
+        const response = await axios.post(`${DIET_SERVICE_URL}/v0/diet/entries`, {
+            user_id: userId,
+            entry_type: data.entry_type || 'food',
+            description: desc,
+            quantity: qty,
+            unit: data.unit || 'serving',
+            meal_type: data.meal_type || null,
+            entry_date: data.entry_date || today
+        }, {
+            headers: { 'X-User-Id': userId, 'Content-Type': 'application/json' },
+            timeout: 15000
+        });
+        logger.info('Cross-domain diet entry created from general chat', { userId, description: data.description });
+        return response.data;
+    }
+
+    async _createExpenseEntry(userId, data) {
+        const today = new Date().toISOString().split('T')[0];
+        const response = await axios.post(`${PAYMENTS_SERVICE_URL}/v0/expenses`, {
+            user_id: userId,
+            amount: data.amount,
+            currency: data.currency || 'USD',
+            description: data.description,
+            merchant: data.merchant || null,
+            transaction_date: data.transaction_date || today,
+            category: null,
+            tags: [],
+            notes: 'Created from General Chat'
+        }, {
+            headers: { 'X-User-Id': userId, 'Content-Type': 'application/json' },
+            timeout: 15000
+        });
+        logger.info('Cross-domain expense entry created from general chat', { userId, amount: data.amount });
+        return response.data;
+    }
+
+    /**
      * Check if a chat message suggests the user is learning a topic.
      * If so, suggest enabling domain learning or offer a study plan.
      */
@@ -617,6 +788,114 @@ Respond with ONLY the JSON array, no markdown.`;
     /**
      * Detect if user is asking about Oggy's own performance.
      */
+    // --- Project Suggestions ---
+
+    async getProjectSuggestions(userId) {
+        // Fetch user's memory cards for interests
+        let memoryContext = 'No previous interests detected.';
+        try {
+            const retrieval = await this.memoryBreaker.execute(() =>
+                axios.post(`${MEMORY_SERVICE_URL}/retrieve`, {
+                    agent: 'oggy',
+                    owner_type: 'user',
+                    owner_id: userId,
+                    query: 'user interests topics hobbies research areas goals',
+                    top_k: 10,
+                    tier_scope: [1, 2, 3],
+                    tag_filter: ['general', 'conversation', 'user_explicit', 'behavior'],
+                    include_scores: true
+                }, {
+                    timeout: 5000,
+                    headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
+                })
+            );
+            const cards = retrieval.data?.selected || [];
+            if (cards.length > 0) {
+                memoryContext = cards.map(c => c.content?.text || JSON.stringify(c.content)).join('\n');
+            }
+        } catch (err) {
+            logger.debug('Memory retrieval for project suggestions failed', { error: err.message });
+        }
+
+        // Fetch existing projects to avoid duplicates
+        let existingProjects = [];
+        try {
+            const projResult = await query('SELECT name FROM v2_projects WHERE user_id = $1', [userId]);
+            existingProjects = projResult.rows.map(r => r.name);
+        } catch (err) {
+            logger.debug('Existing projects fetch failed', { error: err.message });
+        }
+
+        const prompt = `Based on the user's known interests and conversation history, suggest 4 research project ideas they might find valuable.
+
+User's known interests and context:
+${memoryContext}
+
+Existing projects (do NOT suggest duplicates): ${existingProjects.join(', ') || 'none'}
+
+Return a JSON array of exactly 4 suggestions. Each item:
+{
+  "name": "Short project name (max 50 chars)",
+  "description": "1-2 sentence description of what this project explores",
+  "reason": "Brief explanation of why this is suggested for THIS user"
+}
+
+If no user interests are available, suggest 4 diverse, universally interesting research topics (science, technology, history, self-improvement, finance, health).
+Mix topics — do not cluster around one area.
+Respond with ONLY the JSON array.`;
+
+        await costGovernor.checkBudget(1500);
+
+        const resolved = await providerResolver.getAdapter(userId, 'oggy');
+        const result = await this.openaiBreaker.execute(() =>
+            resolved.adapter.chatCompletion({
+                model: resolved.model,
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 0.8,
+                max_tokens: 600
+            })
+        );
+        costGovernor.recordUsage(result.tokens_used || 500);
+        providerResolver.logRequest(userId, resolved.provider, resolved.model, 'oggy', 'projectSuggestions', result.tokens_used, result.latency_ms, true, null);
+
+        try {
+            const cleaned = this._cleanJson(result.text);
+            const suggestions = JSON.parse(cleaned);
+            return Array.isArray(suggestions) ? suggestions.slice(0, 4) : [];
+        } catch {
+            return [];
+        }
+    }
+
+    // --- Notes CRUD ---
+
+    async createNote(userId, projectId, content, sourceMessageId = null, sourceRole = null) {
+        const result = await query(
+            `INSERT INTO v2_project_notes (project_id, user_id, content, source_message_id, source_role)
+             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+            [projectId, userId, content, sourceMessageId, sourceRole]
+        );
+        return result.rows[0];
+    }
+
+    async getNotes(userId, projectId) {
+        const result = await query(
+            `SELECT * FROM v2_project_notes
+             WHERE project_id = $1 AND user_id = $2
+             ORDER BY created_at DESC`,
+            [projectId, userId]
+        );
+        return result.rows;
+    }
+
+    async deleteNote(userId, noteId) {
+        const result = await query(
+            'DELETE FROM v2_project_notes WHERE note_id = $1 AND user_id = $2 RETURNING note_id',
+            [noteId, userId]
+        );
+        return result.rowCount > 0;
+    }
+
     _detectPerformanceIntent(message) {
         const lower = message.toLowerCase();
         const keywords = [

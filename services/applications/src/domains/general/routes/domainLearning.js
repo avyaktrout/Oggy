@@ -155,10 +155,10 @@ router.post('/domain-learning/rollback', async (req, res) => {
 router.post('/domain-learning/study-plan', async (req, res) => {
     try {
         const userId = req.body.user_id;
-        const { tag_id } = req.body;
+        const { tag_id, free_only } = req.body;
         if (!tag_id) return res.status(400).json({ error: 'tag_id required' });
 
-        const plan = await domainLearningService.generateStudyPlan(userId, tag_id);
+        const plan = await domainLearningService.generateStudyPlan(userId, tag_id, { freeOnly: !!free_only });
         res.json(plan);
     } catch (err) {
         logger.logError(err, { operation: 'study-plan' });
@@ -170,10 +170,10 @@ router.post('/domain-learning/study-plan', async (req, res) => {
 router.post('/domain-learning/study-plan/refine', async (req, res) => {
     try {
         const userId = req.body.user_id;
-        const { tag_id, current_plan, feedback } = req.body;
+        const { tag_id, current_plan, feedback, free_only } = req.body;
         if (!tag_id || !current_plan || !feedback) return res.status(400).json({ error: 'tag_id, current_plan and feedback required' });
 
-        const plan = await domainLearningService.refineStudyPlan(userId, tag_id, current_plan, feedback);
+        const plan = await domainLearningService.refineStudyPlan(userId, tag_id, current_plan, feedback, { freeOnly: !!free_only });
         res.json(plan);
     } catch (err) {
         logger.logError(err, { operation: 'refine-study-plan' });

@@ -1,0 +1,10 @@
+NAMES                   STATUS                    PORTS
+oggy-learning-service   Up 19 seconds             8000/tcp
+oggy-payments-service   Up 18 seconds (healthy)   3001/tcp, 3010-3012/tcp
+oggy-gateway            Up 18 seconds (healthy)   0.0.0.0:3001->3001/tcp, [::]:3001->3001/tcp, 3010-3012/tcp
+oggy-diet-service       Up 18 seconds (healthy)   3001/tcp, 3010-3012/tcp
+oggy-general-service    Up 18 seconds (healthy)   3001/tcp, 3010-3012/tcp
+oggy-memory-service     Up 19 seconds             3000/tcp
+oggy-harmony-service    Up 19 seconds (healthy)   3001/tcp, 3010-3012/tcp
+oggy-postgres           Up 6 days (healthy)       5432/tcp
+oggy-redis              Up 6 days (healthy)       6379/tcp

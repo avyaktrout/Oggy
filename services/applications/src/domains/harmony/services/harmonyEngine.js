@@ -373,25 +373,99 @@ class HarmonyEngine {
                     case 'model_update': {
                         // Look up actual indicators created when this suggestion was applied
                         const created = row.resolved_at ? modelUpdateIndicators[row.resolved_at.toISOString()] : null;
+                        let hasRealImpact = false;
+
                         if (created && created.length > 0) {
-                            changes.push('Indicators affected:');
+                            hasRealImpact = true;
+                            changes.push('New indicators added:');
                             for (const ind of created) {
                                 let line = `${ind.name} (${ind.dimension})`;
                                 if (ind.unit) line += ` [${ind.unit}]`;
                                 if (ind.direction === 'lower_is_better') line += ' ↓';
                                 changes.push(line);
                             }
-                        } else {
-                            // Fallback to payload fields if no DB indicators found
-                            if (p.name && p.dimension) changes.push(`Added indicator: ${p.name} (${p.dimension})`);
-                            else if (p.change_description) changes.push(p.change_description);
+                        } else if (p.name && p.dimension) {
+                            hasRealImpact = true;
+                            changes.push(`Added indicator: ${p.name} (${p.dimension})`);
                         }
+
+                        // Show score impact if stored
+                        if (p._impact && typeof p._impact === 'object') {
+                            const impactEntries = Object.values(p._impact);
+                            if (impactEntries.length > 0) {
+                                hasRealImpact = true;
+                                changes.push('Score impact:');
+                                for (const entry of impactEntries.slice(0, 3)) {
+                                    const dims = Object.entries(entry.deltas || {})
+                                        .filter(([, v]) => Math.abs(v.delta) >= 0.001)
+                                        .sort((a, b) => Math.abs(b[1].delta) - Math.abs(a[1].delta))
+                                        .slice(0, 3);
+                                    for (const [dim, v] of dims) {
+                                        const pct = (v.delta * 100).toFixed(2);
+                                        const sign = v.delta > 0 ? '+' : '';
+                                        const label = dim.charAt(0).toUpperCase() + dim.slice(1).replace(/_/g, ' ');
+                                        changes.push(`${entry.name}: ${label} ${(v.before*100).toFixed(1)}% → ${(v.after*100).toFixed(1)}% (${sign}${pct}%)`);
+                                    }
+                                }
+                            }
+                        }
+
+                        // If no indicators or score deltas, show what data was integrated and its purpose
+                        if (!hasRealImpact) {
+                            if (p.change_description) changes.push(p.change_description);
+
+                            // Determine which dimension this data relates to
+                            const ctx = ((p.change_description || '') + ' ' + (p.rationale || '') + ' ' + (p.title || '')).toLowerCase();
+                            const dimMap = {
+                                balance: ['safety', 'crime', 'housing', 'income', 'inequality', 'homeless', 'poverty', 'affordable'],
+                                flow: ['commute', 'transit', 'employment', 'labor', 'job', 'economic', 'transport', 'infrastructure'],
+                                compassion: ['health', 'food', 'insecurity', 'eviction', 'mental', 'uninsured', 'socioeconomic', 'medical', 'wellness'],
+                                discernment: ['education', 'school', 'college', 'graduation', 'library', 'voter', 'literacy', 'academic'],
+                                awareness: ['civic', 'community', 'transparency', 'engagement', 'wellbeing', 'quality of life', 'environment', 'sustainability'],
+                                expression: ['arts', 'culture', 'creative', 'protest', 'freedom', 'media', 'heritage'],
+                            };
+                            const affectedDims = [];
+                            for (const [dim, keywords] of Object.entries(dimMap)) {
+                                if (keywords.some(kw => ctx.includes(kw))) {
+                                    affectedDims.push(dim.charAt(0).toUpperCase() + dim.slice(1));
+                                }
+                            }
+
+                            if (affectedDims.length > 0) {
+                                changes.push(`Dimensions affected: ${affectedDims.join(', ')}`);
+                                changes.push(`Effect: Contextual data integrated — influences ${affectedDims.join(' & ')} scoring and future suggestions`);
+                            } else {
+                                changes.push('Effect: Contextual data integrated — enriches model knowledge for future scoring');
+                            }
+                        }
+
                         if (p.dataset_name || (p.data_sources && p.data_sources.length)) {
                             changes.push(`Source: ${p.dataset_name || p.data_sources.join(', ')}`);
                         }
                         break;
                     }
                 }
+
+                // Show score impact for ALL suggestion types (not just model_update)
+                if (row.suggestion_type !== 'model_update' && p._impact && typeof p._impact === 'object') {
+                    const impactEntries = Object.values(p._impact);
+                    if (impactEntries.length > 0) {
+                        changes.push('Score impact:');
+                        for (const entry of impactEntries.slice(0, 3)) {
+                            const dims = Object.entries(entry.deltas || {})
+                                .filter(([, v]) => Math.abs(v.delta) >= 0.001)
+                                .sort((a, b) => Math.abs(b[1].delta) - Math.abs(a[1].delta))
+                                .slice(0, 3);
+                            for (const [dim, v] of dims) {
+                                const pct = (v.delta * 100).toFixed(2);
+                                const sign = v.delta > 0 ? '+' : '';
+                                const label = dim.charAt(0).toUpperCase() + dim.slice(1).replace(/_/g, ' ');
+                                changes.push(`${entry.name}: ${label} ${(v.before*100).toFixed(1)}% → ${(v.after*100).toFixed(1)}% (${sign}${pct}%)`);
+                            }
+                        }
+                    }
+                }
+
                 const detail = changes.length > 0 ? changes.join(' · ') : (row.description || null);
                 recentActions.push({
                     type: 'suggestion_accepted',

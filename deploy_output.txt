@@ -1,0 +1,204 @@
+ Image oggy-memory-service Building 
+ Image oggy-learning-service Building 
+ Image oggy-app:latest Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 1.41kB done
+#1 DONE 0.0s
+
+#2 [gateway internal] load build definition from Dockerfile
+#2 transferring dockerfile:
+#2 transferring dockerfile: 702B done
+#2 DONE 0.0s
+
+#3 [memory-service internal] load build definition from Dockerfile
+#3 transferring dockerfile: 260B done
+#3 DONE 0.0s
+
+#4 [learning-service internal] load build definition from Dockerfile
+#4 transferring dockerfile: 330B done
+#4 DONE 0.0s
+
+#5 [memory-service internal] load metadata for docker.io/library/node:20-alpine
+#5 DONE 0.3s
+
+#6 [learning-service internal] load metadata for docker.io/library/python:3.11-slim
+#6 DONE 0.3s
+
+#7 [gateway internal] load .dockerignore
+#7 transferring context: 2B done
+#7 DONE 0.0s
+
+#8 [memory-service internal] load .dockerignore
+#8 transferring context: 2B done
+#8 DONE 0.0s
+
+#9 [learning-service internal] load .dockerignore
+#9 transferring context: 2B done
+#9 DONE 0.0s
+
+#10 [learning-service internal] load build context
+#10 DONE 0.0s
+
+#11 [memory-service 1/5] FROM docker.io/library/node:20-alpine@sha256:09e2b3d9726018aecf269bd35325f46bf75046a643a66d28360ec71132750ec8
+#11 resolve docker.io/library/node:20-alpine@sha256:09e2b3d9726018aecf269bd35325f46bf75046a643a66d28360ec71132750ec8 0.0s done
+#11 DONE 0.1s
+
+#12 [learning-service 1/5] FROM docker.io/library/python:3.11-slim@sha256:0b23cfb7425d065008b778022a17b1551c82f8b4866ee5a7a200084b7e2eafbf
+#12 resolve docker.io/library/python:3.11-slim@sha256:0b23cfb7425d065008b778022a17b1551c82f8b4866ee5a7a200084b7e2eafbf 0.1s done
+#12 DONE 0.1s
+
+#10 [learning-service internal] load build context
+#10 transferring context: 2.17kB 0.0s done
+#10 DONE 0.0s
+
+#13 [memory-service internal] load build context
+#13 transferring context: 805B 0.0s done
+#13 DONE 0.1s
+
+#14 [gateway internal] load build context
+#14 transferring context: 259.51kB 0.1s done
+#14 DONE 0.1s
+
+#15 [memory-service 2/5] WORKDIR /app
+#15 CACHED
+
+#16 [memory-service 4/5] RUN npm install
+#16 CACHED
+
+#17 [memory-service 3/5] COPY package*.json ./
+#17 CACHED
+
+#18 [memory-service 5/5] COPY . .
+#18 CACHED
+
+#19 [learning-service 2/5] WORKDIR /app
+#19 CACHED
+
+#20 [learning-service 4/5] RUN pip install --no-cache-dir -r requirements.txt
+#20 CACHED
+
+#21 [learning-service 3/5] COPY requirements.txt .
+#21 CACHED
+
+#22 [learning-service 5/5] COPY . .
+#22 CACHED
+
+#23 [learning-service] exporting to image
+#23 exporting layers done
+#23 exporting manifest sha256:d20a09535082692991d7a50ce03e86d60767b37ef4bd79c9581279c260d525bc
+#23 ...
+
+#24 [gateway 3/5] COPY package*.json ./
+#24 CACHED
+
+#15 [gateway 2/5] WORKDIR /app
+#15 CACHED
+
+#25 [gateway 4/5] RUN npm install
+#25 CACHED
+
+#23 [learning-service] exporting to image
+#23 exporting manifest sha256:d20a09535082692991d7a50ce03e86d60767b37ef4bd79c9581279c260d525bc done
+#23 exporting config sha256:3889ddce62800826e75f210f110f6eaccac3d6297b906dc8041fe35654342ae2 done
+#23 exporting attestation manifest sha256:80c4a6ffb9533c3ffbc44bf47370689fd5c354985db68d7cf76edbfb56757be2 0.1s done
+#23 exporting manifest list sha256:7dde1aa708c869d0cdeba0843f66b9c714e74bc55562b672ff7101880e1ad6eb
+#23 ...
+
+#26 [gateway 5/5] COPY . .
+#26 DONE 0.2s
+
+#23 [learning-service] exporting to image
+#23 exporting manifest list sha256:7dde1aa708c869d0cdeba0843f66b9c714e74bc55562b672ff7101880e1ad6eb 0.0s done
+#23 naming to docker.io/library/oggy-learning-service:latest 0.0s done
+#23 unpacking to docker.io/library/oggy-learning-service:latest 0.0s done
+#23 DONE 0.3s
+
+#27 [memory-service] exporting to image
+#27 exporting layers done
+#27 exporting manifest sha256:5f0ed3dcc73b628b0c7449b6ea5ddc67448e54ab214972324c379d76986319e4 done
+#27 exporting config sha256:0597a676c37a36041f1e2f911d9ff403448e667e316ba37e3d29cf7daeb4aa69 done
+#27 exporting attestation manifest sha256:7ee0c4d6e43877280acf200cdb7b8ee4fd1c2a1df9a380f6a214bfc281291b15 0.1s done
+#27 exporting manifest list sha256:9184a7c355f81a7e17f30319b15df4c702a1cd857d9ba58848984e5a26595189 0.0s done
+#27 naming to docker.io/library/oggy-memory-service:latest done
+#27 unpacking to docker.io/library/oggy-memory-service:latest 0.0s done
+#27 DONE 0.3s
+
+#28 [gateway] exporting to image
+#28 ...
+
+#29 [learning-service] resolving provenance for metadata file
+#29 DONE 0.0s
+
+#30 [memory-service] resolving provenance for metadata file
+#30 DONE 0.0s
+
+#28 [gateway] exporting to image
+#28 exporting layers 2.1s done
+#28 exporting manifest sha256:688f987df9aeb654bc5c56ea475bac9db5e7ea05897cedeade34175e72e17bfd 0.0s done
+#28 exporting config sha256:4b1b52f5ff08eea37c8f0e666d8021201db24a3cceb9549225e8b791655cd698 0.0s done
+#28 exporting attestation manifest sha256:43f2078dc896e26a1fcfbace7a53ee968000cd0f2847aca31e9fe8621915f4b4 0.0s done
+#28 exporting manifest list sha256:d34bed43e02246897838287260a69647d7cc8d8d2735fcd81b7db7b5c12f0431
+#28 exporting manifest list sha256:d34bed43e02246897838287260a69647d7cc8d8d2735fcd81b7db7b5c12f0431 0.0s done
+#28 naming to docker.io/library/oggy-app:latest done
+#28 unpacking to docker.io/library/oggy-app:latest 0.1s done
+#28 DONE 2.3s
+
+#31 [gateway] resolving provenance for metadata file
+#31 DONE 0.0s
+ Image oggy-memory-service Built 
+ Image oggy-app:latest Built 
+ Image oggy-learning-service Built 
+ Container oggy-postgres Running 
+ Container oggy-redis Running 
+ Container oggy-harmony-service Recreate 
+ Container oggy-memory-service Recreate 
+ Container oggy-harmony-service Recreated 
+ Container oggy-memory-service Recreated 
+ Container oggy-general-service Recreate 
+ Container oggy-gateway Recreate 
+ Container oggy-learning-service Recreate 
+ Container oggy-payments-service Recreate 
+ Container oggy-diet-service Recreate 
+ Container oggy-general-service Recreated 
+ Container oggy-diet-service Recreated 
+ Container oggy-payments-service Recreated 
+ Container oggy-learning-service Recreated 
+ Container oggy-gateway Recreated 
+ Container oggy-postgres Waiting 
+ Container oggy-redis Waiting 
+ Container oggy-postgres Waiting 
+ Container oggy-redis Waiting 
+ Container oggy-postgres Healthy 
+ Container oggy-postgres Healthy 
+ Container oggy-redis Healthy 
+ Container oggy-memory-service Starting 
+ Container oggy-redis Healthy 
+ Container oggy-harmony-service Starting 
+ Container oggy-memory-service Started 
+ Container oggy-postgres Waiting 
+ Container oggy-redis Waiting 
+ Container oggy-learning-service Starting 
+ Container oggy-postgres Waiting 
+ Container oggy-redis Waiting 
+ Container oggy-redis Waiting 
+ Container oggy-postgres Waiting 
+ Container oggy-postgres Waiting 
+ Container oggy-redis Waiting 
+ Container oggy-harmony-service Started 
+ Container oggy-learning-service Started 
+ Container oggy-redis Healthy 
+ Container oggy-postgres Healthy 
+ Container oggy-redis Healthy 
+ Container oggy-postgres Healthy 
+ Container oggy-general-service Starting 
+ Container oggy-redis Healthy 
+ Container oggy-payments-service Starting 
+ Container oggy-postgres Healthy 
+ Container oggy-gateway Starting 
+ Container oggy-redis Healthy 
+ Container oggy-postgres Healthy 
+ Container oggy-diet-service Starting 
+ Container oggy-payments-service Started 
+ Container oggy-general-service Started 
+ Container oggy-diet-service Started 
+ Container oggy-gateway Started 

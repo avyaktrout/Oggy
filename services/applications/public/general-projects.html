@@ -30,6 +30,15 @@
             <button class="btn btn-primary btn-sm" onclick="createProject()">Create Project</button>
         </div>
 
+        <!-- Suggested Projects -->
+        <div id="suggestions-section" class="card" style="margin-bottom:24px;display:none">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <div class="card-title" style="margin:0">Suggested Projects</div>
+                <button class="btn btn-outline btn-sm" onclick="loadSuggestions()" id="refresh-suggestions-btn">Refresh</button>
+            </div>
+            <div id="suggestions-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px"></div>
+        </div>
+
         <div id="projects-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">
             <div style="color:var(--text-muted);font-size:14px;padding:24px">Loading projects...</div>
         </div>

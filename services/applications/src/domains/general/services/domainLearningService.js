@@ -651,7 +651,8 @@ Respond with ONLY the JSON object.`;
     /**
      * Generate a study plan for a domain tag.
      */
-    async generateStudyPlan(userId, tagId) {
+    async generateStudyPlan(userId, tagId, options = {}) {
+        const { freeOnly = false } = options;
         const tagResult = await query(
             'SELECT tag, display_name, description FROM dl_domain_tags WHERE tag_id = $1 AND user_id = $2',
             [tagId, userId]
@@ -705,7 +706,14 @@ CRITICAL URL RULES — broken links are automatically removed, so only include l
 - DO NOT use: Khan Academy article links (blocked by bot protection), Fidelity links, or youtube.com/watch?v= links
 - DO NOT guess or fabricate URLs. If you are not sure a specific page exists, do NOT include it.
 
-Optimize for efficient learning — build on foundations, avoid redundancy.
+${freeOnly ? `
+IMPORTANT — FREE RESOURCES ONLY:
+Only include resources that are 100% free to access. DO NOT include:
+- Coursera courses that require payment (audit-only free courses are OK)
+- Udemy paid courses
+- Any paywall-gated content or paid textbooks
+ONLY include free resources: Wikipedia, freeCodeCamp, MIT OCW, YouTube, MDN, GeeksforGeeks, official docs, Khan Academy, arXiv, GitHub repos, free blog posts.
+` : ''}Optimize for efficient learning — build on foundations, avoid redundancy.
 Respond with ONLY the JSON object.`;
 
         await costGovernor.checkBudget(2000);
@@ -742,7 +750,8 @@ Respond with ONLY the JSON object.`;
     /**
      * Refine an existing study plan based on user feedback.
      */
-    async refineStudyPlan(userId, tagId, currentPlan, feedback) {
+    async refineStudyPlan(userId, tagId, currentPlan, feedback, options = {}) {
+        const { freeOnly = false } = options;
         const tagResult = await query(
             'SELECT tag, display_name, description FROM dl_domain_tags WHERE tag_id = $1 AND user_id = $2',
             [tagId, userId]
@@ -795,7 +804,11 @@ CRITICAL URL RULES — broken links are automatically removed:
 - Use diverse platforms: Investopedia, Wikipedia, GeeksforGeeks, Coursera, MIT OCW, MDN, freeCodeCamp, official docs, YouTube channel pages
 - DO NOT use: Khan Academy article links, Fidelity links, or youtube.com/watch?v= links
 - DO NOT guess or fabricate URLs. If not sure a page exists, do NOT include it.
-
+${freeOnly ? `
+IMPORTANT — FREE RESOURCES ONLY:
+Only include resources that are 100% free to access. No paid courses, subscriptions, or paywalled content.
+ONLY use: Wikipedia, freeCodeCamp, MIT OCW, YouTube, MDN, GeeksforGeeks, official docs, Khan Academy, arXiv, GitHub repos, free blog posts.
+` : ''}
 Respond with ONLY the JSON object.`;
 
         await costGovernor.checkBudget(2000);
