@@ -16,6 +16,27 @@ router.post('/request-magic-link', async (req, res) => {
 
     try {
         const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+
+        // Quick login: if this email was verified via magic link within the past 6 hours,
+        // skip sending a new email and create a session directly
+        const quickResult = await authService.quickLogin(email, ip);
+        if (quickResult.auto_login) {
+            // Set session cookie
+            const cookieOpts = [
+                `oggy_session=${quickResult.session_token}`,
+                'Path=/',
+                'HttpOnly',
+                'SameSite=Lax',
+                `Max-Age=${7 * 24 * 60 * 60}`
+            ];
+            if (req.protocol === 'https' || process.env.NODE_ENV === 'production') {
+                cookieOpts.push('Secure');
+            }
+            res.setHeader('Set-Cookie', cookieOpts.join('; '));
+            return res.json({ auto_login: true, message: 'Signed in automatically.' });
+        }
+
+        // Normal flow: generate and send magic link
         const result = await authService.createMagicLink(email, ip);
 
         if (result.error === 'email_not_allowed') {

@@ -447,59 +447,117 @@ async function loadAuditTrail() {
 
 // --- Notes ---
 
+let _allNotes = [];
+let _notesFilter = 'all'; // 'all' or a date key like '2026-02-20'
+
 async function loadNotes() {
     const section = document.getElementById("notes-section");
     const list = document.getElementById("notes-list");
     const countEl = document.getElementById("notes-count");
+    const filterEl = document.getElementById("notes-day-filter");
 
-    // Always show notes section so user can add notes
     section.style.display = "block";
 
     try {
         const data = await apiCall("GET", `/v0/general/projects/${projectId}/notes?user_id=${USER_ID}`);
-        const notes = data.notes || [];
+        _allNotes = data.notes || [];
 
-        if (notes.length === 0) {
+        if (_allNotes.length === 0) {
             countEl.textContent = "";
+            filterEl.style.display = "none";
             list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0">No notes yet. Click "+ Add Note" or save a chat message as a note.</div>';
             return;
         }
 
-        countEl.textContent = `(${notes.length})`;
-
-        // Group by day
-        const grouped = {};
-        for (const note of notes) {
-            const day = new Date(note.created_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-            if (!grouped[day]) grouped[day] = [];
-            grouped[day].push(note);
-        }
-
-        let html = '';
-        for (const [day, dayNotes] of Object.entries(grouped)) {
-            html += `<div class="note-day-header">${day}</div>`;
-            for (const note of dayNotes) {
-                const time = new Date(note.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-                const sourceLabel = note.source_role === 'conversation' ? 'Conversation snapshot' : note.source_role === 'assistant' ? 'From Oggy' : note.source_role === 'user' ? 'From you' : 'Manual note';
-                const escaped = note.content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                html += `<div class="note-card">
-                    <div class="note-meta">
-                        <span class="note-source">${sourceLabel}</span>
-                        <div style="display:flex;align-items:center;gap:8px">
-                            <span>${time}</span>
-                            <button onclick="deleteNote('${note.note_id}')" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--text-muted);padding:0;line-height:1" title="Delete note">&times;</button>
-                        </div>
-                    </div>
-                    <div style="white-space:pre-wrap;line-height:1.5">${escaped}</div>
-                </div>`;
-            }
-        }
-        list.innerHTML = html;
+        countEl.textContent = `(${_allNotes.length})`;
+        _buildDayFilter();
+        _renderFilteredNotes();
     } catch (err) {
-        // Keep section visible even on error so user can add notes manually
         countEl.textContent = "";
+        filterEl.style.display = "none";
         list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0">No notes yet. Click "+ Add Note" or save a chat message as a note.</div>';
     }
+}
+
+function _buildDayFilter() {
+    const filterEl = document.getElementById("notes-day-filter");
+    // Collect unique days
+    const dayKeys = [];
+    const dayLabels = {};
+    for (const note of _allNotes) {
+        const d = new Date(note.created_at);
+        const key = d.toISOString().split('T')[0]; // YYYY-MM-DD
+        if (!dayLabels[key]) {
+            dayKeys.push(key);
+            dayLabels[key] = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        }
+    }
+
+    if (dayKeys.length <= 1) {
+        filterEl.style.display = "none";
+        _notesFilter = 'all';
+        return;
+    }
+
+    filterEl.style.display = "flex";
+    let html = `<button class="btn btn-sm ${_notesFilter === 'all' ? 'btn-primary' : 'btn-outline'}" onclick="filterNotesByDay('all')" style="font-size:11px;padding:3px 10px">All</button>`;
+    for (const key of dayKeys) {
+        const active = _notesFilter === key;
+        html += `<button class="btn btn-sm ${active ? 'btn-primary' : 'btn-outline'}" onclick="filterNotesByDay('${key}')" style="font-size:11px;padding:3px 10px">${dayLabels[key]}</button>`;
+    }
+    filterEl.innerHTML = html;
+}
+
+window.filterNotesByDay = function(dayKey) {
+    _notesFilter = dayKey;
+    _buildDayFilter();
+    _renderFilteredNotes();
+};
+
+function _renderFilteredNotes() {
+    const list = document.getElementById("notes-list");
+    let notes = _allNotes;
+
+    if (_notesFilter !== 'all') {
+        notes = _allNotes.filter(n => {
+            const key = new Date(n.created_at).toISOString().split('T')[0];
+            return key === _notesFilter;
+        });
+    }
+
+    if (notes.length === 0) {
+        list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0">No notes for this day.</div>';
+        return;
+    }
+
+    // Group by day
+    const grouped = {};
+    for (const note of notes) {
+        const day = new Date(note.created_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+        if (!grouped[day]) grouped[day] = [];
+        grouped[day].push(note);
+    }
+
+    let html = '';
+    for (const [day, dayNotes] of Object.entries(grouped)) {
+        html += `<div class="note-day-header">${day}</div>`;
+        for (const note of dayNotes) {
+            const time = new Date(note.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+            const sourceLabel = note.source_role === 'conversation' ? 'Conversation snapshot' : note.source_role === 'assistant' ? 'From Oggy' : note.source_role === 'user' ? 'From you' : 'Manual note';
+            const escaped = note.content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            html += `<div class="note-card">
+                <div class="note-meta">
+                    <span class="note-source">${sourceLabel}</span>
+                    <div style="display:flex;align-items:center;gap:8px">
+                        <span>${time}</span>
+                        <button onclick="deleteNote('${note.note_id}')" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--text-muted);padding:0;line-height:1" title="Delete note">&times;</button>
+                    </div>
+                </div>
+                <div style="white-space:pre-wrap;line-height:1.5">${escaped}</div>
+            </div>`;
+        }
+    }
+    list.innerHTML = html;
 }
 
 window.toggleAddNote = function() {

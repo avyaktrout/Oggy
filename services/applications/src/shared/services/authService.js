@@ -114,6 +114,40 @@ class AuthService {
     }
 
     /**
+     * Check if this email had a magic link verified within the past 6 hours.
+     * Used for quick re-login without generating a new magic link.
+     */
+    async hasRecentVerification(email) {
+        const result = await query(
+            `SELECT email FROM auth_magic_links
+             WHERE LOWER(email) = LOWER($1)
+               AND used_at IS NOT NULL
+               AND used_at > now() - INTERVAL '6 hours'
+             ORDER BY used_at DESC LIMIT 1`,
+            [email]
+        );
+        return result.rows.length > 0;
+    }
+
+    /**
+     * Quick login: create a session for an email that was recently verified.
+     * Skips magic link generation — email ownership was proven within 6 hours.
+     */
+    async quickLogin(email, ip) {
+        const allowed = await this.isEmailAllowed(email);
+        if (!allowed) return { error: 'email_not_allowed' };
+
+        const hasRecent = await this.hasRecentVerification(email);
+        if (!hasRecent) return { error: 'no_recent_verification' };
+
+        const userId = email.split('@')[0].toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        await this.initializeTenant(userId);
+        const session = await this.createSession(userId, email, ip);
+        logger.info('Quick login (recent verification)', { email, userId, ip });
+        return { ...session, email, auto_login: true };
+    }
+
+    /**
      * Check if a magic link token is still valid (without consuming it).
      * Used by GET /verify to show the sign-in page vs expired page.
      */
@@ -289,7 +323,8 @@ class AuthService {
     async cleanup() {
         try {
             const tokens = await query(
-                'DELETE FROM auth_magic_links WHERE expires_at < now() OR used_at IS NOT NULL RETURNING token_id'
+                `DELETE FROM auth_magic_links WHERE expires_at < now()
+                 OR (used_at IS NOT NULL AND used_at < now() - INTERVAL '6 hours') RETURNING token_id`
             );
             const sessions = await query(
                 'DELETE FROM auth_sessions WHERE expires_at < now() RETURNING session_id'

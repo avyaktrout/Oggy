@@ -85,6 +85,14 @@
                 const data = await res.json();
 
                 if (res.ok) {
+                    // Quick login: session already created, redirect immediately
+                    if (data.auto_login) {
+                        status.textContent = 'Signed in! Redirecting...';
+                        status.className = 'login-status success';
+                        window.location.href = '/';
+                        return;
+                    }
+
                     status.textContent = data.message || 'Check your email for a login link.';
                     status.className = 'login-status success';
 
