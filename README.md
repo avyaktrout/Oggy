@@ -129,7 +129,9 @@ The chat interface has two panels:
 - Oggy has access to your last 3 days of expenses in context, so questions about "yesterday" or "today" resolve correctly
 - Ask Oggy to remember things: "Remember that Amazon purchases under $20 are usually personal care"
 - Toggle **Learn from chat** to let Oggy extract spending patterns from the conversation
-- **Self-driven inquiries**: Oggy proactively asks clarification questions about ambiguous expenses (configurable daily limit: 0–15)
+- **Self-driven inquiries**: Oggy proactively asks clarification questions about ambiguous expenses (configurable daily limit: 0–20)
+- **AI-powered suggestions**: Oggy generates contextual questions and actionable advice using LLM, based on your real spending data, goals, and best practices from personal finance (50/30/20 budgeting, subscription auditing, impulse spending triggers, etc.)
+- **Save tips**: When Oggy offers advice, save it for later reference — saved tips appear in a collapsible panel at the bottom of the page
 
 **Training Panel** (right side):
 - Start a training session with configurable duration (5 min to 24 hours, or indefinite)
@@ -143,7 +145,7 @@ The chat interface has two panels:
 
 ### Payments Analytics
 
-Dashboard with:
+Dashboard with real benchmark data:
 - **Current level** (S1–S10 scale with 5 levels each)
 - **Win rate** — How often Oggy beats the Base Model
 - **Accuracy comparison** — Oggy vs Base average accuracy
@@ -165,6 +167,8 @@ The General Assistant is a conversational AI with project-scoped memory and two 
 - Oggy remembers facts, preferences, and patterns from past conversations
 - Ask it to remember things explicitly or let it learn automatically
 - Project-scoped: conversations belong to specific projects for organized context
+- **AI-powered suggestions**: Oggy generates contextual questions and advice based on your projects and learning science best practices (spaced repetition, project decomposition, deep work scheduling, etc.)
+- **Save tips**: Save useful advice to a collapsible Saved Tips panel at the bottom of the page
 
 **Training Panel**:
 - Train Oggy on conversation quality with dual-mode benchmarks testing:
@@ -204,10 +208,14 @@ A manual knowledge injection system that makes Oggy an expert in specific topics
 
 ### General Analytics
 
-- Total conversations and daily activity (14-day chart)
-- Memory cards count and behavior learning signals
-- Domain learning stats: enabled tags, active packs, total knowledge cards
-- Latest benchmark level, accuracy, and date
+Dashboard with real benchmark data:
+- **Current level** and **win rate** vs Base Model
+- **Accuracy comparison** — Oggy vs Base average accuracy
+- **Category accuracy chart** — Per-category performance (context retention, preference adherence, helpfulness, domain knowledge)
+- **Top confusion pairs** — Which assessment areas Oggy confuses most
+- **Accuracy trend** — Line chart over time
+- **Range selectors** — Last 5, 15, 30 benchmarks or all time
+- Total conversations, memory cards, and domain learning stats
 
 ---
 
@@ -292,6 +300,8 @@ Multiple ways to log what you eat:
 - Oggy has your last 3 days of food entries in context — no date confusion
 - Get meal suggestions based on your goals and dietary rules
 - Toggle **Learn from chat** for pattern extraction
+- **AI-powered suggestions**: Oggy generates contextual questions and advice based on your nutrition data and best practices (macro balance, hydration, fiber optimization, sugar reduction, meal timing, etc.)
+- **Save tips**: Save useful nutrition advice to a collapsible Saved Tips panel at the bottom of the page
 
 **Training Panel**:
 - Train on nutrition knowledge and personalized advice quality
@@ -299,10 +309,14 @@ Multiple ways to log what you eat:
 
 ### Diet Analytics
 
-- 14-day nutrition trend charts
-- Weekly averages for all nutrients
-- Goal attainment tracking
-- Meal type distribution
+Dashboard with real benchmark data:
+- **Current level** and **win rate** vs Base Model
+- **Accuracy comparison** — Oggy vs Base average accuracy
+- **Category accuracy chart** — Per-category nutrition performance
+- **Top confusion pairs** — Which assessment areas Oggy confuses most
+- **Accuracy trend** — Line chart over time
+- **Range selectors** — Last 5, 15, 30 benchmarks or all time
+- 14-day nutrition trend charts, weekly averages, goal attainment
 
 ---
 
@@ -383,11 +397,14 @@ Users can opt-in to share accepted suggestions anonymously:
 
 ### Harmony Analytics
 
-- Top improved cities in the last 30 days
-- Indicators with the largest variance across cities
-- Score distribution histograms
-- Dimension comparison radar charts
-- Recent actions timeline
+Dashboard with real benchmark data:
+- **Current level** and **win rate** vs Base Model
+- **Accuracy comparison** — Oggy vs Base average accuracy
+- **Category accuracy chart** — Per-category harmony performance
+- **Top confusion pairs** — Which assessment areas Oggy confuses most
+- **Accuracy trend** — Line chart over time
+- **Range selectors** — Last 5, 15, 30 benchmarks or all time
+- Top improved cities, indicator variance, score distribution, recent actions
 
 ### Harmony Chat & Training
 
@@ -611,11 +628,25 @@ All application services share a single Docker image (`oggy-app`) with different
 |--------|------|-------------|
 | POST | `/v0/receipt/analyze` | Extract items from receipt image/PDF via vision LLM |
 
+### Inquiries & Suggestions
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v0/inquiries/pending` | Get pending inquiries (triggers lazy AI generation) |
+| POST | `/v0/inquiries/:id/answer` | Answer an inquiry or save an advice tip |
+| POST | `/v0/inquiries/:id/dismiss` | Dismiss an inquiry |
+| GET | `/v0/inquiries/saved-tips` | Get saved advice tips (filtered by domain) |
+| DELETE | `/v0/inquiries/saved-tips/:id` | Remove a saved tip |
+| GET | `/v0/inquiries/preferences` | Get inquiry preferences |
+| PUT | `/v0/inquiries/preferences` | Update inquiry preferences |
+| GET | `/v0/inquiries/suggestion-settings` | Get suggestion gate settings |
+| PUT | `/v0/inquiries/suggestion-settings` | Update suggestion settings |
+
 ### Shared
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/v0/service-health/circuit-breakers` | Circuit breaker status |
 | GET | `/v0/benchmark-analytics` | Training analytics dashboard data |
+| GET | `/v0/benchmark-analytics/weakness-data` | Category accuracy and confusion data |
 | POST | `/v0/preferences/feedback` | Submit response feedback (thumbs up/down) |
 | GET | `/v0/settings` | Get BYO-Model configuration |
 | PUT | `/v0/settings` | Update model/API key settings |
@@ -750,7 +781,8 @@ services/
         middleware/           # Auth, CSRF, cost governor, internal service auth
         routes/               # Training, evaluation, settings, observer, audit
         services/             # Chat handler, receipt analyzer, USDA service,
-                              # training reporter, behavior engine, observer
+                              # training reporter, behavior engine, observer,
+                              # inquiry generator (AI suggestions), suggestion gate
         providers/            # LLM provider adapters (OpenAI, Anthropic, Google, xAI)
         utils/                # Database, Redis, logger, circuit breakers, migrations
     public/                   # Frontend (HTML, CSS, vanilla JS)
