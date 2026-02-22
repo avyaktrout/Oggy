@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Oggy - Diet Analytics</title>
-    <link rel="stylesheet" href="/css/style.css?v=2">
+    <link rel="stylesheet" href="/css/style.css?v=3">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body class="app-layout">
@@ -50,10 +50,36 @@
                 </div>
             </div>
         </div>
+
+        <!-- Training Performance -->
+        <div id="diet-training-section" style="margin-top:24px">
+            <h2 style="font-size:18px;font-weight:600;margin-bottom:12px">Training Performance</h2>
+            <div class="analytics-cards" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
+                <div class="analytics-card card-highlight">
+                    <div class="analytics-card-label">Current Level</div>
+                    <div class="analytics-card-value" id="diet-level">-</div>
+                </div>
+                <div class="analytics-card card-highlight">
+                    <div class="analytics-card-label">Win Rate</div>
+                    <div class="analytics-card-value" id="diet-winrate">-</div>
+                </div>
+                <div class="analytics-card">
+                    <div class="analytics-card-label">Avg Oggy Accuracy</div>
+                    <div class="analytics-card-value" id="diet-oggy-acc">-</div>
+                </div>
+            </div>
+            <div class="analytics-panel">
+                <h3 class="analytics-panel-title">Oggy vs Base Accuracy Over Time</h3>
+                <div class="chart-container chart-lg">
+                    <canvas id="diet-accuracy-chart"></canvas>
+                </div>
+            </div>
+        </div>
     </div>
     </main>
 
-    <script src="/js/app.js?v=2"></script>
-    <script src="/js/diet-analytics.js?v=2"></script>
+    <script src="/js/app.js?v=3"></script>
+    <script src="/js/inquiries.js?v=3"></script>
+    <script src="/js/diet-analytics.js?v=3"></script>
 </body>
 </html>

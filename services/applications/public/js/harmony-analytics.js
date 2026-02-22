@@ -219,8 +219,51 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     await loadCities();
     await loadSnapshots();
+    loadHarmonyBenchmarks();
 
     document.getElementById('city-select').addEventListener('change', loadSnapshots);
     document.getElementById('metric-select').addEventListener('change', loadSnapshots);
     document.getElementById('days-select').addEventListener('change', loadSnapshots);
 });
+
+async function loadHarmonyBenchmarks() {
+    const section = document.getElementById('harmony-training-section');
+    if (!section) return;
+    try {
+        const data = await apiCall('GET', '/v0/benchmark-analytics?domain=harmony&limit=15');
+        if (!data.total_benchmarks) {
+            section.innerHTML = '<h2 style="font-size:18px;font-weight:600;margin-bottom:12px">Training Performance</h2>' +
+                '<div class="chart-container" style="text-align:center;color:var(--text-muted);padding:20px">No training data yet. Start training from the Chat page.</div>';
+            return;
+        }
+        document.getElementById('harmony-level').textContent = data.current_state.level || '-';
+        document.getElementById('harmony-winrate').textContent = (parseFloat(data.summary.win_rate) * 100).toFixed(0) + '%';
+        document.getElementById('harmony-oggy-acc').textContent = (parseFloat(data.summary.avg_oggy_accuracy) * 100).toFixed(1) + '%';
+
+        const ts = data.time_series;
+        const ctx = document.getElementById('harmony-accuracy-chart');
+        if (ctx && ts.length > 0) {
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ts.map(r => '#' + r.index),
+                    datasets: [
+                        { label: 'Oggy', data: ts.map(r => +(r.oggy_accuracy * 100).toFixed(1)), borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.08)', fill: true, tension: 0.35, pointRadius: 3, borderWidth: 2.5 },
+                        { label: 'Base', data: ts.map(r => +(r.base_accuracy * 100).toFixed(1)), borderColor: '#cbd5e1', backgroundColor: 'rgba(203,213,225,0.08)', fill: true, tension: 0.35, pointRadius: 3, borderWidth: 2.5, borderDash: [6, 4] }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: { legend: { position: 'top' } },
+                    scales: {
+                        y: { min: 0, max: 100, ticks: { callback: v => v + '%' }, grid: { color: '#f1f5f9' } },
+                        x: { grid: { display: false } }
+                    }
+                }
+            });
+        }
+    } catch (err) {
+        console.error('Failed to load harmony benchmarks', err);
+    }
+}

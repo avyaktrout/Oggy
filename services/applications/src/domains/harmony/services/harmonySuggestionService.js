@@ -246,6 +246,14 @@ class HarmonySuggestionService {
         return { success: true };
     }
 
+    async clearAllPending(userId) {
+        const result = await query(`
+            UPDATE harmony_suggestions SET status = 'rejected', resolved_at = NOW(), resolved_by = $2
+            WHERE user_id = $1 AND status = 'pending'
+        `, [userId, userId]);
+        return { success: true, cleared: result.rowCount };
+    }
+
     // ──────────────────────────────────────────────────
     // Apply helpers
     // ──────────────────────────────────────────────────

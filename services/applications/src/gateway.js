@@ -112,6 +112,7 @@ app.use(cors({
     credentials: true
 }));
 app.use(express.json({ limit: '50mb' }));
+app.disable('etag'); // Prevent stale 304 responses for API calls
 
 // Request ID
 app.use((req, res, next) => {

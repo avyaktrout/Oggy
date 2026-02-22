@@ -26,7 +26,7 @@ async function loadDietAnalytics() {
             calorieData.push(cal);
             if (cal > 0) {
                 daysWithData++;
-                totalEntries += (data.total_entries || 0);
+                totalEntries += parseInt(data.total_entries) || 0;
                 totalProtein += (data.total_protein || 0);
                 totalCarbs += (data.total_carbs || 0);
                 totalFat += (data.total_fat || 0);
@@ -87,5 +87,50 @@ async function loadDietAnalytics() {
         });
     } else if (ctx2) {
         ctx2.parentElement.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);font-size:14px">Not enough data yet</div>';
+    }
+
+    // Load training performance
+    loadDietBenchmarks();
+}
+
+async function loadDietBenchmarks() {
+    const section = document.getElementById('diet-training-section');
+    if (!section) return;
+    try {
+        const data = await apiCall('GET', '/v0/benchmark-analytics?domain=diet&limit=15');
+        if (!data.total_benchmarks) {
+            section.innerHTML = '<h2 style="font-size:18px;font-weight:600;margin-bottom:12px">Training Performance</h2>' +
+                '<div class="analytics-panel"><p style="text-align:center;color:var(--text-muted);padding:20px">No training data yet. Start diet training from the Chat page.</p></div>';
+            return;
+        }
+        document.getElementById('diet-level').textContent = data.current_state.level || '-';
+        document.getElementById('diet-winrate').textContent = (parseFloat(data.summary.win_rate) * 100).toFixed(0) + '%';
+        document.getElementById('diet-oggy-acc').textContent = (parseFloat(data.summary.avg_oggy_accuracy) * 100).toFixed(1) + '%';
+
+        const ts = data.time_series;
+        const ctx = document.getElementById('diet-accuracy-chart');
+        if (ctx && ts.length > 0) {
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ts.map(r => '#' + r.index),
+                    datasets: [
+                        { label: 'Oggy', data: ts.map(r => +(r.oggy_accuracy * 100).toFixed(1)), borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.08)', fill: true, tension: 0.35, pointRadius: 3, borderWidth: 2.5 },
+                        { label: 'Base', data: ts.map(r => +(r.base_accuracy * 100).toFixed(1)), borderColor: '#cbd5e1', backgroundColor: 'rgba(203,213,225,0.08)', fill: true, tension: 0.35, pointRadius: 3, borderWidth: 2.5, borderDash: [6, 4] }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: { legend: { position: 'top' } },
+                    scales: {
+                        y: { min: 0, max: 100, ticks: { callback: v => v + '%' }, grid: { color: '#f1f5f9' } },
+                        x: { grid: { display: false } }
+                    }
+                }
+            });
+        }
+    } catch (err) {
+        console.error('Failed to load diet benchmarks', err);
     }
 }

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Oggy - Harmony Analytics</title>
-    <link rel="stylesheet" href="/css/style.css?v=2">
+    <link rel="stylesheet" href="/css/style.css?v=3">
     <style>
         .analytics-controls { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
         .analytics-controls select, .analytics-controls button {
@@ -114,10 +114,33 @@
         </div>
 
         <p style="font-size:12px;color:var(--text-muted)">Snapshots are taken daily at 6:00 PM. Use "Snapshot Now" to capture the current state immediately.</p>
+
+        <!-- Training Performance -->
+        <div id="harmony-training-section" style="margin-top:24px">
+            <h2 style="font-size:18px;font-weight:600;margin-bottom:12px">Training Performance</h2>
+            <div class="stats-row">
+                <div class="stat-card">
+                    <div class="stat-label">Current Level</div>
+                    <div class="stat-value" id="harmony-level">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Win Rate</div>
+                    <div class="stat-value" id="harmony-winrate">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Avg Oggy Accuracy</div>
+                    <div class="stat-value" id="harmony-oggy-acc">-</div>
+                </div>
+            </div>
+            <div class="chart-container">
+                <canvas id="harmony-accuracy-chart" style="max-height:300px"></canvas>
+            </div>
+        </div>
     </div>
     </main>
 
-    <script src="/js/app.js?v=2"></script>
+    <script src="/js/app.js?v=3"></script>
+    <script src="/js/inquiries.js?v=3"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="/js/harmony-analytics.js?v=3"></script>
 </body>

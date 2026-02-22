@@ -10,6 +10,24 @@
         const inquiry = inquiries[0]; // Show first pending inquiry
         const options = inquiry.context?.options || [];
         const isConfirmation = inquiry.question_type === 'high_confidence_confirmation';
+        const isAdvice = inquiry.question_type === 'ai_advice';
+
+        if (isAdvice) {
+            // Advice tip rendering — "Oggy suggests:" with Save/Dismiss
+            container.innerHTML = `
+                <div class="container" style="padding-bottom:0">
+                    <div class="inquiry-banner inquiry-banner--advice show">
+                        <div class="inquiry-question">Oggy suggests:</div>
+                        <div class="inquiry-advice-text">${inquiry.question_text}</div>
+                        <div class="inquiry-options" id="inquiry-options">
+                            <button class="inquiry-option-btn inquiry-save-tip" onclick="saveAdviceTip('${inquiry.inquiry_id}')">Save this tip</button>
+                            <button class="inquiry-option-btn inquiry-confirm-no" onclick="dismissInquiry('${inquiry.inquiry_id}')">Dismiss</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            return;
+        }
 
         let optionsHtml;
         if (isConfirmation) {
@@ -68,6 +86,20 @@
         }
     };
 
+    window.saveAdviceTip = async function(inquiryId) {
+        try {
+            await apiCall('POST', `/v0/inquiries/${inquiryId}/answer`, {
+                user_id: USER_ID,
+                answer: 'saved'
+            });
+            showToast('Tip saved! Oggy will remember this.');
+            checkInquiries();
+            loadSavedTips();
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
+    };
+
     window.answerInquiryCustom = function(inquiryId) {
         const input = document.getElementById('inquiry-custom-answer');
         const answer = input?.value?.trim();
@@ -84,4 +116,76 @@
             showToast(err.message, 'error');
         }
     };
+
+    // ── Saved Tips ──
+
+    window.toggleSavedTips = function() {
+        const body = document.getElementById('saved-tips-body');
+        const arrow = document.getElementById('saved-tips-arrow');
+        if (!body) return;
+        const showing = body.style.display === 'none';
+        body.style.display = showing ? 'block' : 'none';
+        if (arrow) arrow.innerHTML = showing ? '&#9660;' : '&#9654;';
+        if (showing) loadSavedTips();
+    };
+
+    window.loadSavedTips = async function() {
+        const list = document.getElementById('saved-tips-list');
+        const countEl = document.getElementById('saved-tips-count');
+        if (!list) return;
+
+        const domain = window.INQUIRY_DOMAIN || '';
+        try {
+            const data = await apiCall('GET', `/v0/inquiries/saved-tips?user_id=${USER_ID}&domain=${domain}`);
+            const tips = data.tips || [];
+
+            if (countEl) {
+                countEl.textContent = tips.length > 0 ? `(${tips.length})` : '';
+            }
+
+            if (tips.length === 0) {
+                list.innerHTML = '<div class="saved-tips-empty">No saved tips yet. Save tips from Oggy\'s suggestions above.</div>';
+                return;
+            }
+
+            list.innerHTML = tips.map(tip => {
+                const date = tip.answered_at ? new Date(tip.answered_at).toLocaleDateString() : '';
+                const topic = tip.topic ? tip.topic.replace(/-/g, ' ') : '';
+                return `
+                    <div class="saved-tip-item">
+                        <div class="saved-tip-text">${tip.question_text}</div>
+                        <div class="saved-tip-meta">
+                            ${topic ? `<span class="saved-tip-topic">${topic}</span>` : ''}
+                            <span class="saved-tip-date">${date}</span>
+                            <span class="saved-tip-remove" onclick="removeSavedTip('${tip.inquiry_id}')">Remove</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        } catch (err) {
+            list.innerHTML = '<div class="saved-tips-empty">Failed to load saved tips.</div>';
+        }
+    };
+
+    window.removeSavedTip = async function(inquiryId) {
+        try {
+            await apiCall('DELETE', `/v0/inquiries/saved-tips/${inquiryId}?user_id=${USER_ID}`);
+            showToast('Tip removed.');
+            loadSavedTips();
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
+    };
+
+    // Load saved tips count on page load
+    setTimeout(async () => {
+        const countEl = document.getElementById('saved-tips-count');
+        if (!countEl) return;
+        try {
+            const domain = window.INQUIRY_DOMAIN || '';
+            const data = await apiCall('GET', `/v0/inquiries/saved-tips?user_id=${USER_ID}&domain=${domain}`);
+            const count = (data.tips || []).length;
+            countEl.textContent = count > 0 ? `(${count})` : '';
+        } catch (e) { /* ignore */ }
+    }, 2000);
 })();

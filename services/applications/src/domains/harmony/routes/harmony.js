@@ -689,6 +689,17 @@ router.post('/suggestions/:id/accept', async (req, res) => {
     }
 });
 
+router.post('/suggestions/clear-all', async (req, res) => {
+    try {
+        const userId = req.userId || req.body.user_id;
+        const result = await harmonySuggestionService.clearAllPending(userId);
+        res.json(result);
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-clear-all-suggestions' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
 router.post('/suggestions/:id/reject', async (req, res) => {
     try {
         const userId = req.userId || req.body.user_id;

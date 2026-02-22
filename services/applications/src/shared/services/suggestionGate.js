@@ -70,6 +70,26 @@ class SuggestionGate {
     }
 
     /**
+     * Reset the interval gate so next poll can generate immediately.
+     * Called when user answers or dismisses a suggestion.
+     */
+    async resetInterval(userId) {
+        await query(
+            `UPDATE oggy_inquiry_preferences SET last_suggestion_at = NULL WHERE user_id = $1`,
+            [userId]
+        );
+
+        if (this.redis) {
+            try {
+                await this.redis.del(`suggest:${userId}:last`);
+                await this.redis.del(`suggest:${userId}:settings`);
+            } catch (err) {
+                logger.warn('Redis suggestion interval reset failed', { error: err.message });
+            }
+        }
+    }
+
+    /**
      * Record that a suggestion was suppressed (for analytics).
      */
     async recordSuppression(userId, reason) {
@@ -99,7 +119,7 @@ class SuggestionGate {
 
         if (result.rows.length === 0) {
             return {
-                receive_suggestions: false,
+                receive_suggestions: true,
                 suggestion_interval_seconds: 900,
                 last_suggestion_at: null
             };

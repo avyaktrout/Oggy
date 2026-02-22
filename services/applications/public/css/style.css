@@ -931,6 +931,99 @@ tr:hover td { background: var(--bg); }
     text-decoration: underline;
 }
 
+/* AI advice banner (blue, distinct from question yellow) */
+.inquiry-banner--advice {
+    background: #eff6ff;
+    border-color: #93c5fd;
+}
+.inquiry-advice-text {
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 12px;
+    color: var(--text);
+}
+.inquiry-save-tip {
+    background: #dbeafe;
+    border-color: #3b82f6;
+    color: #1d4ed8;
+}
+.inquiry-save-tip:hover {
+    background: #3b82f6;
+    color: white;
+    border-color: #2563eb;
+}
+
+/* Saved tips panel */
+.saved-tips-panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    margin-top: 16px;
+}
+.saved-tips-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+}
+.saved-tips-title {
+    font-weight: 600;
+    font-size: 15px;
+}
+.saved-tips-count {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-left: 6px;
+}
+.saved-tips-body {
+    margin-top: 12px;
+}
+.saved-tips-empty {
+    font-size: 13px;
+    color: var(--text-muted);
+    padding: 8px 0;
+}
+.saved-tip-item {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 8px;
+    background: var(--bg);
+}
+.saved-tip-text {
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 6px;
+}
+.saved-tip-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.saved-tip-topic {
+    background: #dbeafe;
+    color: #1d4ed8;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+}
+.saved-tip-date {
+    color: var(--text-muted);
+}
+.saved-tip-remove {
+    cursor: pointer;
+    color: var(--text-muted);
+    text-decoration: underline;
+    margin-left: auto;
+}
+.saved-tip-remove:hover {
+    color: #ef4444;
+}
+
 /* Inquiry settings panel */
 .inquiry-settings-panel {
     background: var(--card);

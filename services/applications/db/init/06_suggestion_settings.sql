@@ -3,7 +3,7 @@
 
 -- Add suggestion columns to inquiry preferences
 ALTER TABLE oggy_inquiry_preferences
-    ADD COLUMN IF NOT EXISTS receive_suggestions BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS receive_suggestions BOOLEAN NOT NULL DEFAULT TRUE,
     ADD COLUMN IF NOT EXISTS suggestion_interval_seconds INTEGER NOT NULL DEFAULT 900,
     ADD COLUMN IF NOT EXISTS last_suggestion_at TIMESTAMPTZ;
 
@@ -11,11 +11,13 @@ ALTER TABLE oggy_inquiry_preferences
 ALTER TABLE oggy_inquiries
     ADD COLUMN IF NOT EXISTS response_type TEXT NOT NULL DEFAULT 'clarification';
 
--- Allow new question types
+-- Allow new question types (including AI-generated)
 ALTER TABLE oggy_inquiries DROP CONSTRAINT IF EXISTS valid_question_type;
 ALTER TABLE oggy_inquiries ADD CONSTRAINT valid_question_type CHECK (question_type IN (
     'ambiguous_merchant', 'category_confusion', 'spending_pattern', 'preference',
-    'uncategorized_expense', 'cost_cutting', 'high_confidence_confirmation'
+    'uncategorized_expense', 'cost_cutting', 'high_confidence_confirmation',
+    'spending_insight', 'diet_health_tip', 'diet_goal', 'learning_goal',
+    'ai_question', 'ai_advice'
 ));
 
 -- Suggestion telemetry

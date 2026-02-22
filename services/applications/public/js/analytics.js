@@ -34,8 +34,8 @@
         try {
             const limit = currentRange || 200;
             const [data, weaknessData] = await Promise.all([
-                apiCall('GET', `/v0/benchmark-analytics?limit=${limit}`),
-                apiCall('GET', `/v0/benchmark-analytics/weakness-data?limit=${limit}`)
+                apiCall('GET', `/v0/benchmark-analytics?limit=${limit}&domain=payments`),
+                apiCall('GET', `/v0/benchmark-analytics/weakness-data?limit=${limit}&domain=payments`)
             ]);
 
             if (!data.total_benchmarks) {
@@ -528,7 +528,66 @@
         }
     };
 
+    // ── Expense Analytics ──
+    window.loadExpenseAnalytics = async function() {
+        try {
+            const [queryData, catData] = await Promise.all([
+                apiCall('POST', '/v0/query', { user_id: USER_ID, limit: 1 }),
+                apiCall('GET', '/v0/query/categories?user_id=' + USER_ID)
+            ]);
+
+            const totalSpent = parseFloat(queryData.total_amount) || 0;
+            const txnCount = parseInt(queryData.total_count) || 0;
+            const avgTxn = txnCount > 0 ? (totalSpent / txnCount) : 0;
+            const categories = (catData.categories || []).filter(c => c.category && c.category !== 'uncategorized');
+            const topCat = categories.length > 0 ? categories[0].category.replace(/_/g, ' ') : '-';
+
+            document.getElementById('expense-total').textContent = '$' + totalSpent.toFixed(2);
+            document.getElementById('expense-count').textContent = txnCount;
+            document.getElementById('expense-avg').textContent = '$' + avgTxn.toFixed(2);
+            document.getElementById('expense-top-cat').textContent = topCat;
+
+            // Category spending chart
+            const el = document.getElementById('chart-category-spend');
+            if (el && categories.length > 0) {
+                const ctx = el.getContext('2d');
+                if (charts.categorySpend) charts.categorySpend.destroy();
+                const labels = categories.slice(0, 8).map(c => c.category.replace(/_/g, ' '));
+                const amounts = categories.slice(0, 8).map(c => parseFloat(c.total_amount));
+                charts.categorySpend = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels,
+                        datasets: [{
+                            label: 'Total Spent',
+                            data: amounts,
+                            backgroundColor: 'rgba(99,102,241,0.7)',
+                            borderRadius: 4,
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        indexAxis: 'y',
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: { callbacks: { label: ctx => ' $' + ctx.parsed.x.toFixed(2) } }
+                        },
+                        scales: {
+                            x: { ticks: { callback: v => '$' + v, font: { size: 12 } }, grid: { color: '#f1f5f9' } },
+                            y: { ticks: { font: { size: 13, weight: '500' } }, grid: { display: false } }
+                        }
+                    }
+                });
+            }
+        } catch (err) {
+            console.error('Failed to load expense analytics', err);
+        }
+    };
+
     // Load immediately, auto-refresh every 30s
     loadAnalytics();
+    loadExpenseAnalytics();
     setInterval(loadAnalytics, 30000);
 })();

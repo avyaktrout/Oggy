@@ -251,7 +251,7 @@ router.get('/analytics', async (req, res) => {
         } catch (e) { /* ignore */ }
 
         // Domain learning stats
-        let dlStats = { enabled_tags: 0, active_packs: 0, total_cards: 0 };
+        let dlStats = { enabled_tags: 0, active_packs: 0, total_cards: 0, tags: [], study_plans_saved: 0, total_packs_generated: 0 };
         try {
             const tagResult = await dbQuery(
                 `SELECT COUNT(*) as cnt FROM dl_domain_tags WHERE user_id = $1 AND status = 'enabled'`,
@@ -270,6 +270,34 @@ router.get('/analytics', async (req, res) => {
                 [userId]
             );
             dlStats.total_cards = parseInt(cardResult.rows[0].cnt);
+
+            // Tag details with pack/card counts
+            const tagListResult = await dbQuery(
+                `SELECT t.tag, t.display_name, t.status,
+                        COUNT(DISTINCT kp.pack_id) FILTER (WHERE kp.status = 'applied') as pack_count,
+                        COALESCE(SUM(kp.card_count) FILTER (WHERE kp.status = 'applied'), 0) as card_count
+                 FROM dl_domain_tags t
+                 LEFT JOIN dl_knowledge_packs kp ON kp.tag_id = t.tag_id AND kp.user_id = t.user_id
+                 WHERE t.user_id = $1 AND t.status = 'enabled'
+                 GROUP BY t.tag_id, t.tag, t.display_name, t.status
+                 ORDER BY t.created_at DESC`,
+                [userId]
+            );
+            dlStats.tags = tagListResult.rows;
+
+            // Study plans saved
+            const spResult = await dbQuery(
+                `SELECT COUNT(*) as cnt FROM dl_audit_events WHERE user_id = $1 AND action = 'study_plan_saved'`,
+                [userId]
+            );
+            dlStats.study_plans_saved = parseInt(spResult.rows[0].cnt);
+
+            // Total packs generated
+            const allPacksResult = await dbQuery(
+                `SELECT COUNT(*) as cnt FROM dl_knowledge_packs WHERE user_id = $1`,
+                [userId]
+            );
+            dlStats.total_packs_generated = parseInt(allPacksResult.rows[0].cnt);
         } catch (e) { /* tables may not exist */ }
 
         res.json({

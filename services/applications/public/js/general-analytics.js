@@ -84,10 +84,75 @@ async function loadGeneralAnalytics() {
             }
         } catch (e) { /* ignore */ }
 
+        // Domain learning stats
+        const dl = data.domain_learning || {};
+        document.getElementById('stat-subjects').textContent = dl.enabled_tags || 0;
+        document.getElementById('stat-packs').textContent = dl.active_packs || 0;
+        document.getElementById('stat-cards').textContent = dl.total_cards || 0;
+        document.getElementById('stat-plans').textContent = dl.study_plans_saved || 0;
+
+        // Subject tags
+        const tagContainer = document.getElementById('domain-tags-list');
+        if (dl.tags && dl.tags.length > 0) {
+            tagContainer.innerHTML = dl.tags.map(t => `
+                <div style="background:var(--bg-secondary,#f8fafc);border-radius:8px;padding:10px 14px;border:1px solid var(--border-color,#e2e8f0)">
+                    <div style="font-weight:600;font-size:14px;margin-bottom:4px">${t.display_name || t.tag}</div>
+                    <div style="font-size:12px;color:var(--text-muted)">${parseInt(t.pack_count) || 0} packs, ${parseInt(t.card_count) || 0} cards</div>
+                </div>
+            `).join('');
+        } else {
+            tagContainer.innerHTML = '<p style="color:var(--text-muted);font-size:13px">No subjects tracked yet</p>';
+        }
+
+        // Load benchmarks
+        loadGeneralBenchmarks();
+
     } catch (err) {
         console.error('Failed to load analytics', err);
         document.getElementById('stat-conversations').textContent = '-';
         document.getElementById('stat-learning').textContent = '-';
         document.getElementById('stat-projects').textContent = '-';
+    }
+}
+
+async function loadGeneralBenchmarks() {
+    const section = document.getElementById('general-training-section');
+    if (!section) return;
+    try {
+        const data = await apiCall('GET', '/v0/benchmark-analytics?domain=general&limit=15');
+        if (!data.total_benchmarks) {
+            section.innerHTML = '<h2 style="font-size:18px;font-weight:600;margin-bottom:12px">Training Performance</h2>' +
+                '<div class="analytics-panel"><p style="text-align:center;color:var(--text-muted);padding:20px">No training data yet. Start training from the Chat page.</p></div>';
+            return;
+        }
+        document.getElementById('general-level').textContent = data.current_state.level || '-';
+        document.getElementById('general-winrate').textContent = (parseFloat(data.summary.win_rate) * 100).toFixed(0) + '%';
+        document.getElementById('general-oggy-acc').textContent = (parseFloat(data.summary.avg_oggy_accuracy) * 100).toFixed(1) + '%';
+
+        const ts = data.time_series;
+        const ctx = document.getElementById('general-accuracy-chart');
+        if (ctx && ts.length > 0) {
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ts.map(r => '#' + r.index),
+                    datasets: [
+                        { label: 'Oggy', data: ts.map(r => +(r.oggy_accuracy * 100).toFixed(1)), borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.08)', fill: true, tension: 0.35, pointRadius: 3, borderWidth: 2.5 },
+                        { label: 'Base', data: ts.map(r => +(r.base_accuracy * 100).toFixed(1)), borderColor: '#cbd5e1', backgroundColor: 'rgba(203,213,225,0.08)', fill: true, tension: 0.35, pointRadius: 3, borderWidth: 2.5, borderDash: [6, 4] }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: { legend: { position: 'top' } },
+                    scales: {
+                        y: { min: 0, max: 100, ticks: { callback: v => v + '%' }, grid: { color: '#f1f5f9' } },
+                        x: { grid: { display: false } }
+                    }
+                }
+            });
+        }
+    } catch (err) {
+        console.error('Failed to load general benchmarks', err);
     }
 }

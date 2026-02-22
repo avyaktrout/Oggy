@@ -41,6 +41,7 @@ router.get('/', async (req, res) => {
     try {
         const limit = parseInt(req.query.limit) || 200;
         const userId = req.query.user_id || 'oggy';
+        const domain = req.query.domain || null;
 
         // Get the LATEST N benchmark results for this user, then order chronologically
         const results = await query(`
@@ -53,11 +54,15 @@ router.get('/', async (req, res) => {
                 JOIN sealed_benchmarks b ON r.benchmark_id = b.benchmark_id
                 WHERE r.user_id = $2
                   AND r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
+                  AND ($3::text IS NULL
+                       OR b.domain = $3
+                       OR b.metadata->>'domain' = $3
+                       OR ($3 = 'payments' AND (b.domain IS NULL OR b.domain = '') AND (b.metadata->>'domain') IS NULL))
                 ORDER BY r.tested_at DESC
                 LIMIT $1
             ) recent
             ORDER BY tested_at ASC
-        `, [limit, userId]);
+        `, [limit, userId, domain]);
 
         if (results.rows.length === 0) {
             return res.json({
@@ -295,26 +300,46 @@ function _aggregateConfusionAcrossBenchmarks(rows) {
 
     for (const row of rows) {
         const detailed = row.detailed_results;
-        const scenarios = detailed?.oggy || [];
+        if (!detailed || typeof detailed !== 'object') continue;
 
-        for (const s of scenarios) {
-            const cat = s.correct_category;
-            if (!cat) continue;
+        // Format 1 (legacy): { oggy: [{ correct_category, predicted_category, correct }] }
+        if (Array.isArray(detailed.oggy)) {
+            for (const s of detailed.oggy) {
+                const cat = s.correct_category;
+                if (!cat) continue;
+                if (!categoryStats[cat]) categoryStats[cat] = { correct: 0, total: 0 };
+                categoryStats[cat].total++;
+                if (s.correct) {
+                    categoryStats[cat].correct++;
+                } else if (s.predicted_category && s.predicted_category !== cat) {
+                    confusionCounts[`${cat}->${s.predicted_category}`] = (confusionCounts[`${cat}->${s.predicted_category}`] || 0) + 1;
+                }
+            }
+        }
 
-            if (!categoryStats[cat]) categoryStats[cat] = { correct: 0, total: 0 };
-            categoryStats[cat].total++;
-            if (s.correct) {
-                categoryStats[cat].correct++;
-            } else if (s.predicted_category && s.predicted_category !== cat) {
-                const pair = `${cat}->${s.predicted_category}`;
-                confusionCounts[pair] = (confusionCounts[pair] || 0) + 1;
+        // Format 2 (current): { scenarios: [{ oggy: { correct, scores }, scenario_type }] }
+        if (Array.isArray(detailed.scenarios)) {
+            for (const s of detailed.scenarios) {
+                const cat = s.scenario_type || 'unknown';
+                if (!categoryStats[cat]) categoryStats[cat] = { correct: 0, total: 0 };
+                categoryStats[cat].total++;
+
+                const oggyCorrect = s.oggy?.correct === true;
+                const baseCorrect = s.base?.correct === true;
+                if (oggyCorrect) {
+                    categoryStats[cat].correct++;
+                } else if (baseCorrect) {
+                    // Oggy wrong, base right — a "confusion" where Oggy underperformed
+                    const pair = `${cat}->base_wins`;
+                    confusionCounts[pair] = (confusionCounts[pair] || 0) + 1;
+                }
             }
         }
     }
 
     const categoryAccuracy = Object.entries(categoryStats)
         .map(([category, s]) => ({
-            category,
+            category: category.replace(/_/g, ' '),
             accuracy: s.total > 0 ? (s.correct / s.total * 100).toFixed(1) : '0.0',
             correct: s.correct,
             total: s.total
@@ -375,16 +400,22 @@ router.get('/weakness-data', async (req, res) => {
     try {
         const limit = parseInt(req.query.limit) || 15;
         const userId = req.query.user_id || 'oggy';
+        const domain = req.query.domain || null;
 
         const results = await query(`
             SELECT r.detailed_results, r.oggy_accuracy, r.base_accuracy,
                    r.advantage_delta, r.tested_at
             FROM sealed_benchmark_results r
+            JOIN sealed_benchmarks b ON r.benchmark_id = b.benchmark_id
             WHERE r.user_id = $2
               AND r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
+              AND ($3::text IS NULL
+                   OR b.domain = $3
+                   OR b.metadata->>'domain' = $3
+                   OR ($3 = 'payments' AND (b.domain IS NULL OR b.domain = '') AND (b.metadata->>'domain') IS NULL))
             ORDER BY r.tested_at DESC
             LIMIT $1
-        `, [limit, userId]);
+        `, [limit, userId, domain]);
 
         if (results.rows.length === 0) {
             return res.json({

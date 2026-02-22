@@ -123,13 +123,17 @@ async function refreshSuggestions() {
         const list = document.getElementById('suggestions-list');
         const countEl = document.getElementById('sug-pending-count');
 
+        const clearBtn = document.getElementById('clear-all-sug-btn');
+
         if (!Array.isArray(suggestions) || suggestions.length === 0) {
             list.innerHTML = '<p style="color:var(--text-muted);font-size:13px">No pending suggestions yet.</p>';
             countEl.textContent = '(0)';
+            if (clearBtn) clearBtn.style.display = 'none';
             return;
         }
 
         countEl.textContent = `(${suggestions.length})`;
+        if (clearBtn) clearBtn.style.display = '';
         list.innerHTML = suggestions.map(renderSuggestionCard).join('');
     } catch (err) {
         console.error('Failed to refresh suggestions', err);
@@ -232,6 +236,17 @@ async function rejectSuggestion(id) {
     } catch (err) {
         console.error('Failed to reject suggestion', err);
         alert('Failed to reject suggestion: ' + (err.message || err));
+    }
+}
+
+async function clearAllSuggestions() {
+    if (!confirm('Reject all pending suggestions?')) return;
+    try {
+        const result = await apiCall('POST', '/v0/harmony/suggestions/clear-all', {});
+        await refreshSuggestions();
+    } catch (err) {
+        console.error('Failed to clear suggestions', err);
+        alert('Failed to clear suggestions: ' + (err.message || err));
     }
 }
 

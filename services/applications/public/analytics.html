@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Oggy - Benchmark Analytics</title>
-    <link rel="stylesheet" href="/css/style.css?v=2">
+    <link rel="stylesheet" href="/css/style.css?v=3">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body class="app-layout">
@@ -31,6 +31,36 @@
                 <button class="btn btn-outline btn-sm" onclick="loadAnalytics()" style="height:36px">Refresh</button>
             </div>
         </div>
+
+        <!-- Expense Overview -->
+        <h2 style="font-size:18px;font-weight:600;margin:0 0 12px">Expense Overview</h2>
+        <div class="analytics-cards" style="margin-bottom:16px">
+            <div class="analytics-card">
+                <div class="analytics-card-label">Total Spent</div>
+                <div class="analytics-card-value card-value-sm" id="expense-total">-</div>
+            </div>
+            <div class="analytics-card">
+                <div class="analytics-card-label">Transactions</div>
+                <div class="analytics-card-value" id="expense-count">-</div>
+            </div>
+            <div class="analytics-card">
+                <div class="analytics-card-label">Avg Transaction</div>
+                <div class="analytics-card-value card-value-sm" id="expense-avg">-</div>
+            </div>
+            <div class="analytics-card">
+                <div class="analytics-card-label">Top Category</div>
+                <div class="analytics-card-value card-value-sm" id="expense-top-cat">-</div>
+            </div>
+        </div>
+        <div class="analytics-panel" style="margin-bottom:24px">
+            <h3 class="analytics-panel-title">Spending by Category</h3>
+            <div class="chart-container chart-md">
+                <canvas id="chart-category-spend"></canvas>
+            </div>
+        </div>
+
+        <!-- Training Performance -->
+        <h2 style="font-size:18px;font-weight:600;margin:0 0 12px">Training Performance</h2>
 
         <!-- Summary Cards -->
         <div class="analytics-cards" id="summary-cards">
@@ -135,8 +165,8 @@
     </div>
     </main>
 
-    <script src="/js/app.js?v=2"></script>
-    <script src="/js/inquiries.js?v=2"></script>
-    <script src="/js/analytics.js?v=2"></script>
+    <script src="/js/app.js?v=3"></script>
+    <script src="/js/inquiries.js?v=3"></script>
+    <script src="/js/analytics.js?v=3"></script>
 </body>
 </html>

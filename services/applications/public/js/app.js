@@ -173,6 +173,7 @@ function renderTopbar() {
 }
 
 function renderSidebar(appName, activePage) {
+    window.INQUIRY_DOMAIN = appName; // Used by inquiry polling to scope suggestions
     const sidebar = document.getElementById('sidebar');
     if (!sidebar) return;
     let html = '';
@@ -228,7 +229,8 @@ function startInquiryPolling() {
 
 async function checkInquiries() {
     try {
-        const data = await apiCall('GET', `/v0/inquiries/pending?user_id=${USER_ID}`);
+        const domain = window.INQUIRY_DOMAIN || '';
+        const data = await apiCall('GET', `/v0/inquiries/pending?user_id=${USER_ID}&domain=${domain}`);
         const count = data.count || 0;
         const badge = document.getElementById('inquiry-nav-badge');
         const countEl = document.getElementById('inquiry-count');
