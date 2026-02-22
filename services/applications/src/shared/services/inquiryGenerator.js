@@ -67,7 +67,7 @@ class InquiryGenerator {
                 'INSERT INTO oggy_inquiry_preferences (user_id) VALUES ($1) ON CONFLICT DO NOTHING',
                 [userId]
             );
-            return { user_id: userId, max_questions_per_day: 10, enabled: true };
+            return { user_id: userId, max_questions_per_day: 20, enabled: true };
         }
         return result.rows[0];
     }
