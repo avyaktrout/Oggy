@@ -953,6 +953,43 @@ tr:hover td { background: var(--bg); }
     border-color: #2563eb;
 }
 
+/* AI question banner (green tint) */
+.inquiry-banner--question {
+    background: #f0fdf4;
+    border-color: #86efac;
+}
+.inquiry-selectable {
+    transition: all 0.15s;
+}
+.inquiry-option-selected {
+    background: var(--primary) !important;
+    color: white !important;
+    border-color: var(--primary) !important;
+}
+.inquiry-textarea {
+    display: block;
+    width: 100%;
+    min-height: 60px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-family: inherit;
+    resize: vertical;
+    margin-top: 4px;
+    margin-bottom: 8px;
+    box-sizing: border-box;
+}
+.inquiry-textarea:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+.inquiry-submit-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
 /* Saved tips panel */
 .saved-tips-panel {
     background: var(--card);

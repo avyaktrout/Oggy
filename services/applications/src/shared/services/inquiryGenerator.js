@@ -736,11 +736,12 @@ or
                 cardTags = ['payments', 'categorization', 'user_preference', answer, merchant.toLowerCase()];
                 utilityWeight = 0.9;
             } else if (qType === 'ai_question') {
-                // AI-generated question — save user's answer as a goal/preference
+                // AI-generated question — save user's answer + detail as a goal/preference
+                const detailSuffix = additionalContext ? ` — Detail: ${additionalContext}` : '';
                 cardKind = 'user_preference';
                 cardContent = {
                     type: 'USER_GOAL',
-                    text: `USER RESPONDED to "${inquiry.question_text}": ${answer}`,
+                    text: `USER RESPONDED to "${inquiry.question_text}": ${answer}${detailSuffix}`,
                     question_type: qType,
                     topic: topic,
                     answer: answer,
@@ -749,7 +750,7 @@ or
                     confidence: 1.0
                 };
                 cardTags = [domain, 'user_preference', topic];
-                utilityWeight = 0.9;
+                utilityWeight = 0.95;
             } else if (qType === 'ai_advice') {
                 // AI advice — user chose to save the tip
                 if (answer === 'saved') {

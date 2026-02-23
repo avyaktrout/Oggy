@@ -11,6 +11,7 @@
         const options = inquiry.context?.options || [];
         const isConfirmation = inquiry.question_type === 'high_confidence_confirmation';
         const isAdvice = inquiry.question_type === 'ai_advice';
+        const isAIQuestion = inquiry.question_type === 'ai_question';
 
         if (isAdvice) {
             // Advice tip rendering — "Oggy suggests:" with Save/Dismiss
@@ -22,6 +23,31 @@
                         <div class="inquiry-options" id="inquiry-options">
                             <button class="inquiry-option-btn inquiry-save-tip" onclick="saveAdviceTip('${inquiry.inquiry_id}')">Save this tip</button>
                             <button class="inquiry-option-btn inquiry-confirm-no" onclick="dismissInquiry('${inquiry.inquiry_id}')">Dismiss</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            return;
+        }
+
+        if (isAIQuestion) {
+            // AI question — selectable options + textarea for detailed response
+            const optionBtns = options.map(opt =>
+                `<button class="inquiry-option-btn inquiry-selectable" onclick="selectInquiryOption(this, '${opt}')">${opt.replace(/_/g, ' ')}</button>`
+            ).join('');
+
+            container.innerHTML = `
+                <div class="container" style="padding-bottom:0">
+                    <div class="inquiry-banner inquiry-banner--question show">
+                        <div class="inquiry-question">Oggy wants to know: ${inquiry.question_text}</div>
+                        <div class="inquiry-options" id="inquiry-options">
+                            ${optionBtns}
+                        </div>
+                        <textarea id="inquiry-detail-answer" class="inquiry-textarea"
+                            placeholder="Tell Oggy more details... (optional but helpful)"></textarea>
+                        <div class="inquiry-submit-row">
+                            <button class="btn btn-primary btn-sm" onclick="submitAIQuestionAnswer('${inquiry.inquiry_id}')">Submit</button>
+                            <span class="inquiry-dismiss" onclick="dismissInquiry('${inquiry.inquiry_id}')">Dismiss</span>
                         </div>
                     </div>
                 </div>
@@ -71,6 +97,50 @@
     window.showConfirmationCorrection = function(inquiryId) {
         const el = document.getElementById('inquiry-correction-' + inquiryId);
         if (el) el.style.display = el.style.display === 'none' ? 'flex' : 'none';
+    };
+
+    // Track selected option for AI questions
+    let _selectedOption = null;
+
+    window.selectInquiryOption = function(btn, option) {
+        // Toggle selection — deselect if already selected, else select new
+        const allBtns = document.querySelectorAll('.inquiry-selectable');
+        if (_selectedOption === option) {
+            _selectedOption = null;
+            btn.classList.remove('inquiry-option-selected');
+        } else {
+            allBtns.forEach(b => b.classList.remove('inquiry-option-selected'));
+            _selectedOption = option;
+            btn.classList.add('inquiry-option-selected');
+        }
+    };
+
+    window.submitAIQuestionAnswer = async function(inquiryId) {
+        const textarea = document.getElementById('inquiry-detail-answer');
+        const detailText = textarea?.value?.trim() || '';
+        const selected = _selectedOption || '';
+
+        if (!selected && !detailText) {
+            showToast('Please select an option or type a response.', 'error');
+            return;
+        }
+
+        // Build answer: selected option (if any), detail goes as additional_context
+        const answer = selected || detailText;
+        const additional_context = selected && detailText ? detailText : (selected ? null : null);
+
+        try {
+            await apiCall('POST', `/v0/inquiries/${inquiryId}/answer`, {
+                user_id: USER_ID,
+                answer: answer,
+                additional_context: additional_context || detailText || null
+            });
+            _selectedOption = null;
+            showToast('Thanks! Oggy learned from your answer.');
+            checkInquiries();
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
     };
 
     window.answerInquiry = async function(inquiryId, answer) {
