@@ -252,15 +252,14 @@ class ChatHandler {
     async _retrieveMemory(userId, queryText) {
         try {
             const response = await this.memoryBreaker.execute(() =>
-                axios.get(`${MEMORY_SERVICE_URL}/retrieve`, {
-                    params: {
-                        agent: 'oggy',
-                        owner_type: 'user',
-                        owner_id: userId,
-                        query: queryText,
-                        top_k: 5,
-                        tag_filter: JSON.stringify(['payments', 'categorization'])
-                    },
+                axios.post(`${MEMORY_SERVICE_URL}/retrieve`, {
+                    agent: 'oggy',
+                    owner_type: 'user',
+                    owner_id: userId,
+                    query: queryText,
+                    top_k: 5,
+                    tag_filter: ['payments', 'categorization']
+                }, {
                     timeout: 5000,
                     headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
                 })

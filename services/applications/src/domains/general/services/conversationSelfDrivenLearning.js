@@ -264,17 +264,18 @@ class ConversationSelfDrivenLearning {
 
     /**
      * Retrieve Oggy's memories relevant to the practice question.
-     * GET http://memory:3000/retrieve?user_id=...&query=...&tags=general,conversation&top_k=5
+     * POST http://memory:3000/retrieve
      */
     async _retrieveMemories(userId, questionPrompt) {
         try {
-            const response = await axios.get(`${MEMORY_SERVICE_URL}/retrieve`, {
-                params: {
-                    user_id: userId,
-                    query: questionPrompt,
-                    tags: 'general,conversation',
-                    top_k: 5
-                },
+            const response = await axios.post(`${MEMORY_SERVICE_URL}/retrieve`, {
+                agent: 'oggy',
+                owner_type: 'user',
+                owner_id: userId,
+                query: questionPrompt,
+                top_k: 5,
+                tag_filter: ['general', 'conversation']
+            }, {
                 timeout: 5000,
                 headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
             });

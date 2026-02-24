@@ -202,13 +202,14 @@ class ConversationBenchmarkEvaluator {
      */
     async _retrieveMemories(userId, promptText) {
         try {
-            const response = await axios.get(`${MEMORY_SERVICE_URL}/retrieve`, {
-                params: {
-                    user_id: userId,
-                    query: promptText,
-                    tags: 'general,conversation',
-                    top_k: 5
-                },
+            const response = await axios.post(`${MEMORY_SERVICE_URL}/retrieve`, {
+                agent: 'oggy',
+                owner_type: 'user',
+                owner_id: userId,
+                query: promptText,
+                top_k: 5,
+                tag_filter: ['general', 'conversation']
+            }, {
                 timeout: 5000,
                 headers: { 'x-api-key': process.env.INTERNAL_API_KEY || '' }
             });

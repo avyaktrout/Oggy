@@ -880,18 +880,49 @@ Respond in JSON only (no markdown), all numeric values must be filled in:
             }
             const p = resp.data.product;
             const n = p.nutriments || {};
+
+            // Determine scaling: prefer per-serving values scaled to full product
+            // OpenFoodFacts often sets serving_size = "100 ml" even for 500ml cans
+            const servingQty = parseFloat(p.serving_quantity) || 0;
+            const productQty = parseFloat(p.product_quantity) || parseFloat(p.quantity) || 0;
+            // If serving < product, scale _serving values up to full product
+            // If serving == product or no product_quantity, use _serving as-is
+            // Fall back to _100g scaled by product_quantity/100 if no _serving
+            let scale = 1;
+            let useServing = !!(n['energy-kcal_serving'] || n.proteins_serving || n.carbohydrates_serving);
+            if (useServing && servingQty > 0 && productQty > 0 && productQty > servingQty * 1.5) {
+                // serving is smaller than full product (e.g. 100ml serving for 500ml can)
+                scale = productQty / servingQty;
+            } else if (!useServing && productQty > 0) {
+                // No _serving data, scale _100g to full product
+                scale = productQty / 100;
+            }
+
+            const kcalRaw = useServing ? (n['energy-kcal_serving'] || 0) : (n['energy-kcal_100g'] || 0);
+            const proteinRaw = useServing ? (n.proteins_serving || 0) : (n.proteins_100g || 0);
+            const carbsRaw = useServing ? (n.carbohydrates_serving || 0) : (n.carbohydrates_100g || 0);
+            const fatRaw = useServing ? (n.fat_serving || 0) : (n.fat_100g || 0);
+            const fiberRaw = useServing ? (n.fiber_serving || 0) : (n.fiber_100g || 0);
+            const sugarRaw = useServing ? (n.sugars_serving || 0) : (n.sugars_100g || 0);
+            const sodiumRaw = useServing ? (n.sodium_serving || 0) : (n.sodium_100g || 0);
+            const caffRaw = useServing ? (n.caffeine_serving || 0) : (n.caffeine_100g || 0);
+
+            const servingLabel = (productQty > 0 && scale > 1.5)
+                ? `${productQty}${p.product_quantity_unit || 'ml'}`
+                : (p.serving_size || '');
+
             const result = {
                 name: p.product_name || p.product_name_en || 'Unknown',
                 brand: p.brands || '',
-                serving_size: p.serving_size || '',
-                calories: Math.round(n['energy-kcal_serving'] || n['energy-kcal_100g'] || 0),
-                protein_g: Math.round((n.proteins_serving || n.proteins_100g || 0) * 10) / 10,
-                carbs_g: Math.round((n.carbohydrates_serving || n.carbohydrates_100g || 0) * 10) / 10,
-                fat_g: Math.round((n.fat_serving || n.fat_100g || 0) * 10) / 10,
-                fiber_g: Math.round((n.fiber_serving || n.fiber_100g || 0) * 10) / 10,
-                sugar_g: Math.round((n.sugars_serving || n.sugars_100g || 0) * 10) / 10,
-                sodium_mg: Math.round(((n.sodium_serving || n.sodium_100g || 0) * 1000)),
-                caffeine_mg: Math.round(n.caffeine_100g || 0),
+                serving_size: servingLabel,
+                calories: Math.round(kcalRaw * scale),
+                protein_g: Math.round(proteinRaw * scale * 10) / 10,
+                carbs_g: Math.round(carbsRaw * scale * 10) / 10,
+                fat_g: Math.round(fatRaw * scale * 10) / 10,
+                fiber_g: Math.round(fiberRaw * scale * 10) / 10,
+                sugar_g: Math.round(sugarRaw * scale * 10) / 10,
+                sodium_mg: Math.round(sodiumRaw * scale * 1000),
+                caffeine_mg: Math.round(caffRaw * scale),
                 barcode,
                 source: 'openfoodfacts'
             };
