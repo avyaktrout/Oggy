@@ -516,7 +516,8 @@
                         <div class="observer-pack-actions">
                             ${isApplied ? `<button class="btn btn-sm btn-danger" onclick="rollbackPack('${pack.pack_id}')">Rollback</button>
                                           <span style="color:var(--success);font-size:12px">Applied</span>` :
-                              isRolledBack ? `<span style="color:var(--text-muted);font-size:12px">Rolled back</span>` :
+                              isRolledBack ? `<button class="btn btn-sm btn-success" onclick="applyPack('${pack.pack_id}')">Apply</button>
+                                             <span style="color:var(--text-muted);font-size:12px">Rolled back</span>` :
                               `<button class="btn btn-sm btn-success" onclick="applyPack('${pack.pack_id}')">Apply</button>`}
                         </div>
                     </div>

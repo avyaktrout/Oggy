@@ -302,7 +302,7 @@ class ObserverService {
     async importPack(packId, userId) {
         const pack = await this.getPack(packId);
         if (!pack) throw new Error('Pack not found');
-        if (pack.status !== 'available') throw new Error(`Pack status is ${pack.status}, not available`);
+        if (pack.status !== 'available' && pack.status !== 'rolled_back') throw new Error(`Pack status is ${pack.status}, not available`);
 
         const rules = pack.rules || [];
         const cardIds = [];
