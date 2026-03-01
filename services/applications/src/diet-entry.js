@@ -16,6 +16,7 @@ const dietRouter = require('./domains/diet/routes/diet');
 
 // Shared routes used by diet domain
 const continuousLearningRouter = require('./shared/routes/continuousLearning');
+const dietObserverRouter = require('./domains/diet/routes/dietObserver');
 
 const app = express();
 const PORT = process.env.PORT || 3012;
@@ -74,6 +75,7 @@ app.get('/health', async (req, res) => {
 // ──────────────────────────────────────────────────
 app.use('/v0/diet', dietRouter);
 app.use('/v0/continuous-learning', continuousLearningRouter);
+app.use('/v0/diet/observer', dietObserverRouter);
 
 // ──────────────────────────────────────────────────
 // Error + 404 handlers
@@ -229,6 +231,15 @@ const server = app.listen(PORT, async () => {
     } catch (error) {
         logger.error('Database connection failed (diet)', { error: error.message });
         process.exit(1);
+    }
+
+    // Start diet observer schedule
+    try {
+        const dietObserverService = require('./domains/diet/services/dietObserverService');
+        dietObserverService.startSchedule(6);
+        logger.info('Diet observer schedule started (every 6h)');
+    } catch (err) {
+        logger.warn('Diet observer schedule init failed', { error: err.message });
     }
 
     logger.info('Diet service ready');

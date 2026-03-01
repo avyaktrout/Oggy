@@ -228,11 +228,11 @@ router.delete('/meals/:id', async (req, res) => {
 router.post('/chat', async (req, res) => {
     try {
         const userId = req.body.user_id;
-        const { message, conversation_history, learn_from_chat } = req.body;
+        const { message, conversation_history, learn_from_chat, client_date } = req.body;
         if (!message) return res.status(400).json({ error: 'message is required' });
 
         const result = await dietService.chat(userId, message, {
-            conversation_history, learn_from_chat
+            conversation_history, learn_from_chat, client_date
         });
         res.json(result);
     } catch (err) {

@@ -6,6 +6,8 @@ const express = require('express');
 const router = express.Router();
 const inquiryGenerator = require('../services/inquiryGenerator');
 const { suggestionGate } = require('../services/suggestionGate');
+const intentService = require('../services/intentService');
+const { query: dbQuery } = require('../utils/db');
 const logger = require('../utils/logger');
 
 // GET /v0/inquiries/pending - Get pending inquiries (triggers lazy generation)
@@ -124,7 +126,6 @@ router.get('/saved-tips', async (req, res) => {
     if (!user_id) return res.status(400).json({ error: 'user_id is required' });
 
     try {
-        const { query: dbQuery } = require('../utils/db');
         let sql = `SELECT inquiry_id, question_text, topic, context, answered_at
                     FROM oggy_inquiries
                     WHERE user_id = $1 AND question_type = 'ai_advice'
@@ -152,7 +153,6 @@ router.delete('/saved-tips/:inquiry_id', async (req, res) => {
     if (!user_id) return res.status(400).json({ error: 'user_id is required' });
 
     try {
-        const { query: dbQuery } = require('../utils/db');
         await dbQuery(
             `UPDATE oggy_inquiries SET status = 'dismissed', user_answer = NULL
              WHERE inquiry_id = $1 AND user_id = $2 AND question_type = 'ai_advice'`,
@@ -193,6 +193,73 @@ router.put('/suggestion-settings', async (req, res) => {
     } catch (error) {
         logger.logError(error, { operation: 'update-suggestion-settings', requestId: req.requestId });
         res.status(500).json({ error: 'Failed to update suggestion settings' });
+    }
+});
+
+// GET /v0/inquiries/focus-intents - Get user's focus intents (grouped by domain)
+router.get('/focus-intents', async (req, res) => {
+    const userId = req.headers['x-user-id'] || req.query.user_id;
+    if (!userId) return res.status(400).json({ error: 'user_id is required' });
+
+    try {
+        const prefs = await inquiryGenerator.getPreferences(userId);
+        const focusIntents = prefs.focus_intents || [];
+
+        // Group by domain
+        const byDomain = {};
+        for (const intentName of focusIntents) {
+            const domain = intentName.split('.')[0];
+            if (!byDomain[domain]) byDomain[domain] = [];
+            byDomain[domain].push(intentName);
+        }
+
+        res.json({ focus_intents: focusIntents, by_domain: byDomain });
+    } catch (error) {
+        logger.logError(error, { operation: 'get-focus-intents', requestId: req.requestId });
+        res.status(500).json({ error: 'Failed to get focus intents' });
+    }
+});
+
+// PUT /v0/inquiries/focus-intents - Set user's focus intents
+router.put('/focus-intents', async (req, res) => {
+    const userId = req.headers['x-user-id'] || req.body.user_id;
+    const { focus_intents } = req.body;
+    if (!userId) return res.status(400).json({ error: 'user_id is required' });
+    if (!Array.isArray(focus_intents)) return res.status(400).json({ error: 'focus_intents must be an array' });
+
+    try {
+        // Validate all intent names exist in catalog
+        if (focus_intents.length > 0) {
+            // Group by domain for validation
+            const byDomain = {};
+            for (const iName of focus_intents) {
+                const domain = iName.split('.')[0];
+                if (!byDomain[domain]) byDomain[domain] = [];
+                byDomain[domain].push(iName);
+            }
+
+            for (const [domain, names] of Object.entries(byDomain)) {
+                const validation = await intentService.validateIntentTags(names, domain);
+                if (!validation.valid) {
+                    return res.status(400).json({ error: validation.error });
+                }
+            }
+        }
+
+        // Ensure preferences row exists
+        await inquiryGenerator.getPreferences(userId);
+
+        // Update focus_intents
+        await dbQuery(
+            `UPDATE oggy_inquiry_preferences SET focus_intents = $1, updated_at = now() WHERE user_id = $2`,
+            [focus_intents, userId]
+        );
+
+        const updated = await inquiryGenerator.getPreferences(userId);
+        res.json({ success: true, focus_intents: updated.focus_intents || [] });
+    } catch (error) {
+        logger.logError(error, { operation: 'set-focus-intents', requestId: req.requestId });
+        res.status(500).json({ error: 'Failed to set focus intents' });
     }
 });
 

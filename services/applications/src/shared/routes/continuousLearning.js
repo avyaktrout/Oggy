@@ -8,6 +8,7 @@ const router = express.Router();
 const { getInstance } = require('../services/continuousLearningLoop');
 const benchmarkValidator = require('../services/benchmarkValidator');
 const { getReporter } = require('../services/trainingReporter');
+const intentService = require('../services/intentService');
 const { query } = require('../utils/db');
 const logger = require('../utils/logger');
 
@@ -35,8 +36,27 @@ router.post('/start', async (req, res) => {
             starting_scale = null,
             report_email = null,
             report_interval = 'end_only',
-            domain = 'payments'
+            domain = 'payments',
+            target_intents = null,
+            intent_focus = null,
+            project_id = null
         } = req.body;
+
+        // Auto-populate target_intents from project if not explicitly provided
+        let resolvedIntents = target_intents;
+        if (!resolvedIntents && project_id) {
+            try {
+                const projectIntentNames = await intentService.getProjectIntentNames(project_id);
+                if (projectIntentNames.length > 0) {
+                    resolvedIntents = projectIntentNames;
+                    logger.info('Auto-populated target_intents from project', {
+                        project_id, intents: resolvedIntents
+                    });
+                }
+            } catch (err) {
+                logger.warn('Failed to auto-populate intents from project', { error: err.message });
+            }
+        }
 
         const loop = getInstance(user_id);
 
@@ -71,7 +91,9 @@ router.post('/start', async (req, res) => {
             practice_count,
             starting_difficulty,
             starting_scale,
-            domain
+            domain,
+            target_intents: resolvedIntents,
+            intent_focus: intent_focus
         });
 
         // Return immediately with status

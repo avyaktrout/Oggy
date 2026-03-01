@@ -6,6 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const observerService = require('../services/observerService');
+const intentService = require('../services/intentService');
 const logger = require('../utils/logger');
 
 // GET /v0/observer/config
@@ -69,8 +70,25 @@ router.get('/export-rules', async (req, res) => {
 // GET /v0/observer/packs
 router.get('/packs', async (req, res) => {
     try {
-        const { status } = req.query;
-        const packs = await observerService.listPacks(status || null);
+        const { status, intent } = req.query;
+        const userId = req.headers['x-user-id'] || req.query.user_id;
+        const packs = await observerService.listPacks(status || null, intent || null);
+
+        // Attach verified_for_intents flag to each pack
+        if (userId) {
+            await Promise.all(packs.map(async (pack) => {
+                if (pack.intent_tags && pack.intent_tags.length > 0) {
+                    try {
+                        const domain = pack.intent_tags[0].split('.')[0] || 'payments';
+                        const verification = await intentService.getPackVerificationStatus(pack.intent_tags, userId, domain);
+                        pack.verified_for_intents = verification.verified;
+                    } catch (e) {
+                        pack.verified_for_intents = false;
+                    }
+                }
+            }));
+        }
+
         res.json({ packs, count: packs.length });
     } catch (error) {
         logger.logError(error, { operation: 'list-packs', requestId: req.requestId });

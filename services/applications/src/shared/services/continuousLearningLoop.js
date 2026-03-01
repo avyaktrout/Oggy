@@ -20,6 +20,7 @@ const serviceHealthManager = require('./serviceHealthManager');
 const categoryRulesManager = require('../../domains/payments/services/categoryRulesManager');
 const tessaAssessmentGenerator = require('../../domains/payments/services/tessaAssessmentGenerator');
 const adaptiveDifficultyScaler = require('./adaptiveDifficultyScaler'); // { getInstance }
+const intentService = require('./intentService');
 const { registerDomain, getDomainAdapter } = require('../DomainAdapter');
 
 // Register domain adapters (lazy-loaded via factories to avoid circular deps)
@@ -279,7 +280,9 @@ class ContinuousLearningLoop {
             practice_count = 3,
             starting_difficulty = null,  // null = load from DB, or use specified level
             starting_scale = null,       // null = load from DB, or use specified scale
-            domain = 'payments'          // Training domain: 'payments', 'diet', 'general'
+            domain = 'payments',         // Training domain: 'payments', 'diet', 'general'
+            target_intents = null,       // Optional intent names to focus training on
+            intent_focus = null          // Optional focus levels: { intent_name: 'low'|'medium'|'high' }
         } = options;
 
         // Increment session generation - any old async loops will see this and stop
@@ -359,6 +362,35 @@ class ContinuousLearningLoop {
             });
         }
 
+        // If target_intents specified, resolve to focus areas for targeted training
+        if (target_intents && target_intents.length > 0) {
+            try {
+                if (domain === 'payments') {
+                    // Payments: resolve intents to focus categories for SDL
+                    const focusCategories = await intentService.resolveIntentsToFocusCategories(target_intents);
+                    if (focusCategories.length > 0) {
+                        const adapter = getDomainAdapter(domain);
+                        const sdl = adapter.getSdl(userId);
+                        const weightMap = {};
+                        focusCategories.forEach(cat => { weightMap[cat] = 1 / focusCategories.length; });
+                        sdl.setTargetedLearning(weightMap, focusCategories, [], { confusionTargetRate: 0.9 });
+                        logger.info('Intent-targeted training enabled (payments)', { target_intents, focusCategories });
+                    }
+                } else {
+                    // Diet/General/Harmony: pass focus intents to SDL if it supports them
+                    const adapter = getDomainAdapter(domain);
+                    const sdl = adapter.getSdl(userId);
+                    if (typeof sdl.setFocusIntents === 'function') {
+                        sdl.setFocusIntents(target_intents, intent_focus);
+                        logger.info('Intent-targeted training enabled', { domain, target_intents, intent_focus });
+                    }
+                }
+            } catch (intentErr) {
+                logger.warn('Intent-to-focus resolution failed (non-blocking)', { error: intentErr.message });
+            }
+        }
+        this.stats.target_intents = target_intents || [];
+
         logger.info('Starting continuous learning loop', {
             userId,
             duration_minutes,
@@ -368,7 +400,8 @@ class ContinuousLearningLoop {
             starting_difficulty: level,
             scale_name: difficultyConfig.scale_name,
             complexity_factors: difficultyConfig.complexity_factors,
-            maintenance_time_ms: this.stats.maintenance_time_ms
+            maintenance_time_ms: this.stats.maintenance_time_ms,
+            target_intents: target_intents || []
         });
 
         // Set up stop timer if duration specified
@@ -571,16 +604,13 @@ class ContinuousLearningLoop {
                 // Normalize accuracy: payments returns "85.3%", general returns 0.853
                 const accuracyDecimal = this._parseAccuracyToDecimal(learningStats.accuracy);
 
-                const newCorrect = Math.round(
-                    accuracyDecimal * learningStats.total_attempts
-                ) - this.stats.correct_answers;
+                const totalCorrectNow = Math.round(accuracyDecimal * learningStats.total_attempts);
+                const newCorrect = totalCorrectNow - this.stats.correct_answers;
 
                 this.stats.total_questions = learningStats.total_attempts;
-                this.stats.correct_answers = Math.round(
-                    accuracyDecimal * learningStats.total_attempts
-                );
+                this.stats.correct_answers = totalCorrectNow;
                 this.stats.current_window_questions += newQuestions;
-                this.stats.current_window_correct += Math.max(0, newCorrect);
+                this.stats.current_window_correct += Math.max(0, isNaN(newCorrect) ? 0 : newCorrect);
 
                 await this._maybeTriggerBenchmark();
             }
@@ -601,7 +631,7 @@ class ContinuousLearningLoop {
             threshold: (this.config.accuracy_threshold_for_benchmark * 100) + '%'
         });
 
-        if (windowAccuracy >= this.config.accuracy_threshold_for_benchmark) {
+        if (force || windowAccuracy >= this.config.accuracy_threshold_for_benchmark) {
             // === PAUSE TRAINING TIME - ENTERING BENCHMARK MODE ===
             const benchmarkStartTime = Date.now();
 
@@ -729,12 +759,14 @@ class ContinuousLearningLoop {
                 benchmarks_completed: this.stats.benchmarks_generated
             });
 
-            // Resume training
+            // Resume training — SDL.start() resets its internal stats, so re-sync
             this._getSdl().start(this.userId, {
                 interval: this.config.training_interval_ms,
                 practiceCount: this.config.practice_count_per_session,
                 enabled: true
             });
+            this.stats.total_questions = 0;
+            this.stats.correct_answers = 0;
         } else {
             logger.info('Accuracy below threshold - continuing training', {
                 accuracy: (windowAccuracy * 100).toFixed(1) + '%',
@@ -752,8 +784,17 @@ class ContinuousLearningLoop {
 
     async _maybeTriggerBenchmark() {
         const windowQuestions = this.stats.current_window_questions;
-        const windowAccuracy = this.stats.current_window_correct / this.stats.current_window_questions;
+        const windowAccuracy = windowQuestions > 0
+            ? this.stats.current_window_correct / windowQuestions : 0;
         const threshold = this.config.accuracy_threshold_for_benchmark;
+
+        // Guard against NaN from upstream parsing issues
+        if (isNaN(windowAccuracy)) {
+            logger.warn('Window accuracy is NaN — resetting window', { windowQuestions, correct: this.stats.current_window_correct });
+            this.stats.current_window_questions = 0;
+            this.stats.current_window_correct = 0;
+            return;
+        }
 
         // Hard cap: force benchmark when accuracy meets threshold
         if (windowQuestions >= this.config.hard_benchmark_questions) {
@@ -762,10 +803,24 @@ class ContinuousLearningLoop {
                 return;
             }
 
+            // Track consecutive resets — force benchmark after 3 resets (105+ questions)
+            // so domains with inherently lower training accuracy still get evaluated
+            this.stats._hardCapResets = (this.stats._hardCapResets || 0) + 1;
+            if (this.stats._hardCapResets >= 3 && this.stats.benchmarks_generated === 0) {
+                logger.info('Forcing benchmark after repeated hard cap resets with no benchmarks', {
+                    resets: this.stats._hardCapResets,
+                    window_accuracy: (windowAccuracy * 100).toFixed(1) + '%'
+                });
+                await this._checkAndRunBenchmark({ force: true, reason: 'forced_after_resets' });
+                this.stats._hardCapResets = 0;
+                return;
+            }
+
             logger.info('Hard cap reached but accuracy below threshold - resetting window', {
                 window_questions: windowQuestions,
                 window_accuracy: (windowAccuracy * 100).toFixed(1) + '%',
-                threshold: (threshold * 100) + '%'
+                threshold: (threshold * 100) + '%',
+                consecutive_resets: this.stats._hardCapResets
             });
             this.stats.current_window_questions = 0;
             this.stats.current_window_correct = 0;
@@ -1840,9 +1895,12 @@ class ContinuousLearningLoop {
      * Harmony returns "85.3%" (string with %).
      */
     _parseAccuracyToDecimal(accuracy) {
+        if (!accuracy || accuracy === 'N/A') return 0;
         if (typeof accuracy === 'string') {
             // "85.3%" → 0.853
-            return parseFloat(accuracy) / 100;
+            const parsed = parseFloat(accuracy);
+            if (isNaN(parsed)) return 0;
+            return parsed / 100;
         }
         // Number: if > 1, treat as percentage (e.g. 85.3); if <= 1, treat as decimal (e.g. 0.853)
         if (typeof accuracy === 'number') {

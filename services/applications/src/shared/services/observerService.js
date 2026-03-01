@@ -12,6 +12,7 @@ const { query } = require('../utils/db');
 const logger = require('../utils/logger');
 const weaknessAnalyzer = require('./weaknessAnalyzer');
 const categoryRulesManager = require('../../domains/payments/services/categoryRulesManager');
+const intentService = require('./intentService');
 
 const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory-service:3000';
 
@@ -230,9 +231,10 @@ class ObserverService {
             const expectedLift = Math.min(packRules.length * 2, 15); // Conservative estimate
 
             const packId = uuidv4();
+            const intentTags = intentService.deriveIntentTagsFromRules(packRules, categories);
             await query(
-                `INSERT INTO observer_packs (pack_id, version, name, rules, evidence, risk_level, expected_lift, categories_covered)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                `INSERT INTO observer_packs (pack_id, version, name, rules, evidence, risk_level, expected_lift, categories_covered, intent_tags)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
                 [
                     packId,
                     version,
@@ -246,7 +248,8 @@ class ObserverService {
                     }),
                     riskLevel,
                     expectedLift,
-                    categories
+                    categories,
+                    intentTags
                 ]
             );
 
@@ -283,13 +286,25 @@ class ObserverService {
 
     // --- Pack management ---
 
-    async listPacks(status = null) {
-        let sql = 'SELECT * FROM observer_packs ORDER BY created_at DESC LIMIT 20';
+    async listPacks(status = null, intentFilter = null) {
+        let sql = 'SELECT * FROM observer_packs';
         let params = [];
+        const conditions = [];
+
         if (status) {
-            sql = 'SELECT * FROM observer_packs WHERE status = $1 ORDER BY created_at DESC LIMIT 20';
-            params = [status];
+            params.push(status);
+            conditions.push(`status = $${params.length}`);
         }
+        if (intentFilter) {
+            params.push([intentFilter]);
+            conditions.push(`intent_tags && $${params.length}`);
+        }
+
+        if (conditions.length > 0) {
+            sql += ' WHERE ' + conditions.join(' AND ');
+        }
+        sql += ' ORDER BY created_at DESC LIMIT 20';
+
         const result = await query(sql, params);
         return result.rows;
     }

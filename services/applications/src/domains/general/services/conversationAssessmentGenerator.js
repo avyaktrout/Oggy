@@ -33,11 +33,72 @@ const PRACTICE_TYPE_WEIGHTS_DL = {
 // Score threshold: score >= 4 is considered "correct"
 const CORRECT_THRESHOLD = 4;
 
+// Intent → practice type mapping for focus-biased selection
+const INTENT_PRACTICE_TYPE_MAP = {
+    'general.preference_fit': ['context_retention', 'preference_adherence'],
+    'general.explain_why_response': ['general_helpfulness'],
+    'general.ask_clarifying_questions': ['general_helpfulness', 'context_retention'],
+    'general.proactive_suggestions': ['general_helpfulness'],
+    'general.research_synthesis': ['general_helpfulness', 'domain_knowledge'],
+    'general.plan_generation': ['general_helpfulness'],
+    'general.comparison_recommendation': ['general_helpfulness'],
+    'general.study_plan_generation': ['general_helpfulness', 'domain_knowledge'],
+};
+
 class ConversationAssessmentGenerator {
     constructor() {
         this.practiceTypeWeights = { ...PRACTICE_TYPE_WEIGHTS_BASE };
         this._dlChecked = false;
         this._hasDL = false;
+        this._focusWeightsApplied = false;
+    }
+
+    /**
+     * Set focus intents to bias practice type selection
+     * @param {string[]} intentNames - e.g. ['general.preference_fit']
+     */
+    /**
+     * @param {string[]} intentNames - e.g. ['general.preference_fit']
+     * @param {object} [intentFocus] - Optional focus levels: { intent_name: 'low'|'medium'|'high' }
+     */
+    setFocusIntents(intentNames, intentFocus) {
+        if (!intentNames || intentNames.length === 0) return;
+
+        // Focus level weights: how much of total goes to preferred types
+        const FOCUS_WEIGHTS = { low: 0.50, medium: 0.70, high: 0.90 };
+
+        // Collect preferred practice types from intents, weighted by focus level
+        const typeMaxWeight = {};
+        for (const name of intentNames) {
+            const types = INTENT_PRACTICE_TYPE_MAP[name];
+            if (!types) continue;
+            const focusLevel = (intentFocus && intentFocus[name]) || 'medium';
+            const weight = FOCUS_WEIGHTS[focusLevel] || FOCUS_WEIGHTS.medium;
+            for (const t of types) {
+                typeMaxWeight[t] = Math.max(typeMaxWeight[t] || 0, weight);
+            }
+        }
+
+        const preferred = Object.keys(typeMaxWeight);
+        if (preferred.length === 0) return;
+
+        // Compute average focus weight and distribute
+        const avgWeight = preferred.reduce((sum, t) => sum + typeMaxWeight[t], 0) / preferred.length;
+        const remainderShare = 1 - avgWeight;
+
+        const allTypes = Object.keys(this.practiceTypeWeights);
+        const nonPreferred = allTypes.filter(t => !preferred.includes(t));
+        const newWeights = {};
+        const preferredShare = avgWeight / preferred.length;
+        const otherShare = nonPreferred.length > 0 ? remainderShare / nonPreferred.length : 0;
+
+        for (const type of allTypes) {
+            newWeights[type] = preferred.includes(type) ? preferredShare : otherShare;
+        }
+
+        this.practiceTypeWeights = newWeights;
+        this._focusWeightsApplied = true;
+        logger.info('Conversation generator focus weights set', { intents: intentNames, intentFocus, weights: newWeights });
     }
 
     /**

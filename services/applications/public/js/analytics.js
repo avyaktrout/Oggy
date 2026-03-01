@@ -50,6 +50,7 @@
             renderAdvantageChart(data);
             renderByLevelChart(data);
             renderLevelTimeline(data);
+            renderIntentChart('payments');
         } catch (err) {
             showToast('Failed to load analytics: ' + err.message, 'error');
         }
@@ -584,6 +585,85 @@
         } catch (err) {
             console.error('Failed to load expense analytics', err);
         }
+    };
+
+    async function renderIntentChart(domain) {
+        const panel = document.getElementById('intent-panel');
+        const el = document.getElementById('chart-intent');
+        if (!el || !panel) return;
+        try {
+            const data = await apiCall('GET', `/v0/benchmark-analytics/intent-performance?domain=${domain}`);
+            if (!data.intents || data.intents.length === 0) return;
+            const tested = data.intents.filter(i => i.status !== 'untested');
+            if (tested.length === 0) return;
+
+            panel.style.display = '';
+            tested.sort((a, b) => (a.accuracy || 0) - (b.accuracy || 0));
+
+            const labels = tested.map(i => i.display_name);
+            const values = tested.map(i => ((i.accuracy || 0) * 100).toFixed(1));
+            const colors = tested.map(i => i.pass ? '#22c55e' : (i.accuracy >= 0.6 ? '#f59e0b' : '#ef4444'));
+
+            const ctx = el.getContext('2d');
+            if (charts.intent) charts.intent.destroy();
+            charts.intent = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: 'Accuracy %',
+                        data: values,
+                        backgroundColor: colors,
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    indexAxis: 'y',
+                    plugins: {
+                        legend: { display: false },
+                        annotation: {
+                            annotations: {
+                                passLine: {
+                                    type: 'line',
+                                    xMin: 80, xMax: 80,
+                                    borderColor: '#6366f1',
+                                    borderWidth: 2,
+                                    borderDash: [6, 4],
+                                    label: { display: true, content: '80% Pass', position: 'start', font: { size: 10 } }
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } },
+                        y: { ticks: { font: { size: 12 } } }
+                    }
+                }
+            });
+
+            // Show "train on weakest" button if any intents are failing
+            const failing = tested.filter(i => !i.pass);
+            const trainBtn = document.getElementById('intent-train-weakest');
+            if (trainBtn && failing.length > 0) {
+                trainBtn.style.display = '';
+                trainBtn.dataset.weakest = JSON.stringify(failing.map(i => i.intent_name));
+            }
+        } catch (err) {
+            // Intent system may not have data yet
+        }
+    }
+
+    window.trainOnWeakestIntents = async function(domain) {
+        const btn = document.getElementById('intent-train-weakest');
+        const intents = btn && btn.dataset.weakest ? JSON.parse(btn.dataset.weakest) : [];
+        if (intents.length === 0) { showToast('No failing intents to train on'); return; }
+
+        const chatPage = domain === 'diet' ? '/diet-chat.html' : domain === 'general' ? '/general-chat.html' : '/chat.html';
+        // Store target intents in sessionStorage so chat page can pre-select them
+        sessionStorage.setItem('oggy_train_intents', JSON.stringify(intents));
+        window.location.href = chatPage + '?auto_train=1';
     };
 
     // Load immediately, auto-refresh every 30s

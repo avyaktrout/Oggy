@@ -571,9 +571,10 @@ YOUR ROLE:
 1. Answer "what if" scenarios with quantitative reasoning. Estimate how score changes would propagate through the formula chain.
 2. Use publicly available data, historical trends, and cross-city comparisons.
 3. When you notice gaps in the model, proactively suggest new metrics or data points.
-4. If you have a concrete suggestion, append it as a JSON block at the end of your response like:
+4. If you have a concrete suggestion for a new indicator, append it as a JSON block at the end of your response like:
    ===SUGGESTIONS===
-   [{"suggestion_type":"new_indicator","title":"...","description":"...","payload":{...}}]
+   [{"suggestion_type":"new_indicator","title":"...","description":"...","payload":{"key":"snake_case_key","name":"Human Readable Name","dimension":"balance|flow|compassion|discernment|awareness|expression","direction":"lower_is_better|higher_is_better","unit":"per_capita|percent|index|count"}}]
+   The payload MUST include key, name, and dimension. key should be snake_case, dimension must be one of: balance, flow, compassion, discernment, awareness, expression.
 
 Be concise, data-driven, and actionable.`;
 
@@ -598,7 +599,8 @@ Be concise, data-driven, and actionable.`;
                     model: resolved.model,
                     messages: oggyMessages,
                     temperature: 0.7,
-                    max_tokens: 1500
+                    max_tokens: 1500,
+                    timeout: 45000
                 });
                 costGovernor.recordUsage(r.tokens_used || 1000);
                 providerResolver.logRequest(userId, resolved.provider, resolved.model, 'oggy', 'harmonyWhatIf', r.tokens_used, r.latency_ms, true, null);
@@ -611,7 +613,8 @@ Be concise, data-driven, and actionable.`;
                         model: resolved.model,
                         messages: baseMessages,
                         temperature: 0.7,
-                        max_tokens: 1000
+                        max_tokens: 1000,
+                        timeout: 45000
                     });
                     costGovernor.recordUsage(r.tokens_used || 800);
                     providerResolver.logRequest(userId, resolved.provider, resolved.model, 'base', 'harmonyWhatIf', r.tokens_used, r.latency_ms, true, null);

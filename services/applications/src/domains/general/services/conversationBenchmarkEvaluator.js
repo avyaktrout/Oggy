@@ -18,6 +18,7 @@ const axios = require('axios');
 const { query } = require('../../../shared/utils/db');
 const logger = require('../../../shared/utils/logger');
 const providerResolver = require('../../../shared/providers/providerResolver');
+const intentService = require('../../../shared/services/intentService');
 const { costGovernor } = require('../../../shared/middleware/costGovernor');
 const { getInstance: getBenchmarkGenInstance } = require('./conversationBenchmarkGenerator');
 const { parallelMap } = require('../../../shared/utils/parallel');
@@ -107,6 +108,18 @@ class ConversationBenchmarkEvaluator {
             duration_ms
         });
 
+        // Record per-intent performance (non-blocking, after scoring)
+        try {
+            await intentService.recordIntentPerformance(result_id, user_id, scenarioResults, 'general');
+        } catch (intentErr) {
+            logger.warn('Intent performance recording failed (non-blocking)', { error: intentErr.message });
+        }
+
+        // Create memory cards for weak intents (non-blocking)
+        intentService.createMemoryCardsForWeakIntents(result_id, user_id, 'general').catch(err => {
+            logger.warn('Intent weakness memory cards failed (non-blocking)', { error: err.message });
+        });
+
         logger.info('Conversation benchmark evaluation complete', {
             result_id,
             benchmark_id: benchmark.benchmark_id,
@@ -160,18 +173,20 @@ class ConversationBenchmarkEvaluator {
             expectedBehavior = { expected_behavior: scenario.correct_category, evaluation_criteria: 'general_quality' };
         }
 
-        // Retrieve Oggy's memories for this scenario
-        const memories = await this._retrieveMemories(userId, prompt);
+        // Retrieve memories + generate Base response in parallel (Base doesn't need memories)
+        const [memories, baseResponse] = await Promise.all([
+            this._retrieveMemories(userId, prompt),
+            this._generateBaseResponse(userId, prompt, scenario)
+        ]);
 
-        // Generate Oggy response (WITH memories)
+        // Generate Oggy response (WITH memories — depends on memory retrieval)
         const oggyResponse = await this._generateOggyResponse(userId, prompt, memories, scenario);
 
-        // Generate Base response (WITHOUT memories)
-        const baseResponse = await this._generateBaseResponse(userId, prompt, scenario);
-
-        // Use LLM-as-judge to evaluate both responses
-        const oggyEval = await this._judgeResponse(userId, prompt, oggyResponse, expectedBehavior, scenarioType, 'oggy');
-        const baseEval = await this._judgeResponse(userId, prompt, baseResponse, expectedBehavior, scenarioType, 'base');
+        // Judge both responses in parallel (independent evaluations)
+        const [oggyEval, baseEval] = await Promise.all([
+            this._judgeResponse(userId, prompt, oggyResponse, expectedBehavior, scenarioType, 'oggy'),
+            this._judgeResponse(userId, prompt, baseResponse, expectedBehavior, scenarioType, 'base')
+        ]);
 
         return {
             scenario_id: scenario.scenario_id,

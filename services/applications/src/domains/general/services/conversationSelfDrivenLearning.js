@@ -36,6 +36,18 @@ class ConversationSelfDrivenLearning {
             accuracy: 0,
             last_session: null
         };
+        this._focusIntents = null;
+    }
+
+    /**
+     * Set focus intents to bias practice type selection during training
+     * @param {string[]} intentNames - e.g. ['general.preference_fit', 'general.ask_clarifying_questions']
+     * @param {object} [intentFocus] - Optional focus levels: { intent_name: 'low'|'medium'|'high' }
+     */
+    setFocusIntents(intentNames, intentFocus) {
+        this._focusIntents = intentNames;
+        this._intentFocus = intentFocus || null;
+        logger.info('Conversation SDL focus intents set', { intents: intentNames, focus: intentFocus });
     }
 
     /**
@@ -147,6 +159,11 @@ class ConversationSelfDrivenLearning {
             });
 
             const assessmentGen = getAssessmentInstance(userId);
+
+            // Apply focus intents to bias practice type selection
+            if (this._focusIntents) {
+                assessmentGen.setFocusIntents(this._focusIntents, this._intentFocus);
+            }
 
             // Generate all questions in parallel first (each needs its own difficulty)
             const attempts = Array.from({ length: this.practiceCount }, (_, i) => ({

@@ -14,6 +14,7 @@ const OggyCategorizer = require('./oggyCategorizer');
 const sealedBenchmarkGenerator = require('./sealedBenchmarkGenerator');
 const adaptiveDifficultyScaler = require('../../../shared/services/adaptiveDifficultyScaler');
 const { parallelMap } = require('../../../shared/utils/parallel');
+const intentService = require('../../../shared/services/intentService');
 
 const BENCHMARK_UPGRADE_THRESHOLD = parseFloat(process.env.BENCHMARK_UPGRADE_THRESHOLD || '0.90');
 
@@ -192,6 +193,18 @@ class SealedBenchmarkEvaluator {
             }
         });
 
+        // Record per-intent performance (non-blocking, after scoring)
+        try {
+            await intentService.recordIntentPerformance(result_id, user_id, oggy_results, 'payments');
+        } catch (intentErr) {
+            logger.warn('Intent performance recording failed (non-blocking)', { error: intentErr.message });
+        }
+
+        // Create memory cards for weak intents (non-blocking)
+        intentService.createMemoryCardsForWeakIntents(result_id, user_id, 'payments').catch(err => {
+            logger.warn('Intent weakness memory cards failed (non-blocking)', { error: err.message });
+        });
+
         let upgradeResult = { upgraded: false, reason: 'not_attempted' };
         try {
             upgradeResult = await this._maybeAdvanceDifficultyFromBenchmark(
@@ -365,22 +378,14 @@ class SealedBenchmarkEvaluator {
      */
     async _captureTrainingState(user_id) {
         try {
-            // Get domain knowledge count
-            const knowledgeResult = await query(`
-                SELECT COUNT(*) as count
-                FROM domain_knowledge
-                WHERE domain = 'payments'
-            `);
-
-            // Get adaptive difficulty scale info
+            // Get adaptive difficulty scale info (sync)
             const scale_info = adaptiveDifficultyScaler.getInstance(user_id).getScaleInfo();
 
-            // Get memory card count
-            const memoryResult = await query(`
-                SELECT COUNT(*) as count
-                FROM memory_cards
-                WHERE owner_type = 'user' AND owner_id = $1
-            `, [user_id]);
+            // Run both DB queries in parallel (independent)
+            const [knowledgeResult, memoryResult] = await Promise.all([
+                query(`SELECT COUNT(*) as count FROM domain_knowledge WHERE domain = 'payments'`),
+                query(`SELECT COUNT(*) as count FROM memory_cards WHERE owner_type = 'user' AND owner_id = $1`, [user_id])
+            ]);
 
             return {
                 domain_knowledge_count: parseInt(knowledgeResult.rows[0].count),

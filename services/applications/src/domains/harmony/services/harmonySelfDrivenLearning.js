@@ -13,6 +13,7 @@ const { query } = require('../../../shared/utils/db');
 const logger = require('../../../shared/utils/logger');
 const providerResolver = require('../../../shared/providers/providerResolver');
 const harmonySuggestionService = require('./harmonySuggestionService');
+const { parallelMap } = require('../../../shared/utils/parallel');
 
 const instances = new Map();
 
@@ -76,13 +77,13 @@ class HarmonySelfDrivenLearning {
     }
 
     async runLearningSession(attempts = 3) {
-        for (let i = 0; i < attempts; i++) {
-            try {
-                await this.practiceHarmonyQuestion();
-            } catch (err) {
-                logger.error('Harmony SDL practice error', { error: err.message, attempt: i });
-            }
-        }
+        const attemptIndices = Array.from({ length: attempts }, (_, i) => i);
+        await parallelMap(
+            attemptIndices,
+            async (i) => this.practiceHarmonyQuestion(),
+            3,
+            { operationName: 'harmony-sdl-practice', interTaskDelayMs: 200 }
+        );
     }
 
     async practiceHarmonyQuestion() {

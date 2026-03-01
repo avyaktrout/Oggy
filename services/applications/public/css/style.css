@@ -1177,6 +1177,183 @@ tr:hover td { background: var(--bg); }
     margin-top: 4px;
 }
 
+.observer-pack-intents {
+    margin-top: 4px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.intent-badge {
+    display: inline-block;
+    background: #eef2ff;
+    color: #4338ca;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: capitalize;
+}
+
+.intent-verified-badge {
+    display: inline-block;
+    background: #dcfce7;
+    color: #166534;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    margin-left: 6px;
+}
+
+.intent-unverified-badge {
+    display: inline-block;
+    background: #fef3c7;
+    color: #92400e;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    margin-left: 6px;
+}
+
+.intent-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 12px;
+    border-radius: 16px;
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.15s;
+}
+.intent-chip:hover {
+    border-color: #818cf8;
+    color: var(--text-primary);
+}
+.intent-chip-active {
+    background: #eef2ff;
+    border-color: #818cf8;
+    color: #4338ca;
+    font-weight: 600;
+}
+
+/* Focus Intents Section */
+.focus-intents-section {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+}
+
+.focus-intents-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+.focus-intents-title {
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.focus-intents-desc {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.focus-intents-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+/* Custom Intent Form */
+.custom-intent-form {
+    margin-top: 10px;
+    padding: 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.custom-intent-form-title {
+    font-weight: 600;
+    font-size: 13px;
+    margin-bottom: 8px;
+}
+
+.custom-intent-row {
+    display: flex;
+    gap: 10px;
+}
+
+/* Training intent chips with focus levels */
+.intent-chip-train {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 12px;
+    border-radius: 16px;
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.15s;
+}
+.intent-chip-train:hover {
+    border-color: #818cf8;
+}
+.intent-chip-focus-low {
+    background: #f0f0ff;
+    border-color: #a5b4fc;
+    color: #6366f1;
+}
+.intent-chip-focus-medium {
+    background: #e0e7ff;
+    border-color: #818cf8;
+    color: #4338ca;
+    font-weight: 600;
+}
+.intent-chip-focus-high {
+    background: #c7d2fe;
+    border-color: #6366f1;
+    color: #312e81;
+    font-weight: 700;
+}
+.intent-chip-focus-tag {
+    display: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    font-size: 9px;
+    font-weight: 700;
+    text-align: center;
+    line-height: 16px;
+    color: white;
+    flex-shrink: 0;
+}
+.intent-chip-focus-tag.focus-low {
+    display: inline-block;
+    background: #a5b4fc;
+}
+.intent-chip-focus-tag.focus-medium {
+    display: inline-block;
+    background: #818cf8;
+}
+.intent-chip-focus-tag.focus-high {
+    display: inline-block;
+    background: #4f46e5;
+}
+
 .observer-pack-actions {
     margin-top: 8px;
     display: flex;

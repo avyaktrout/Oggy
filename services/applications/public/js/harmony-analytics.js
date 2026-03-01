@@ -266,4 +266,39 @@ async function loadHarmonyBenchmarks() {
     } catch (err) {
         console.error('Failed to load harmony benchmarks', err);
     }
+
+    // Per-intent chart
+    try {
+        const intentData = await apiCall('GET', '/v0/benchmark-analytics/intent-performance?domain=harmony');
+        const tested = (intentData.intents || []).filter(i => i.status !== 'untested');
+        const panel = document.getElementById('intent-panel');
+        if (tested.length > 0 && panel) {
+            panel.style.display = '';
+            tested.sort((a, b) => (a.accuracy || 0) - (b.accuracy || 0));
+            const ctx = document.getElementById('chart-intent').getContext('2d');
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: tested.map(i => i.display_name),
+                    datasets: [{ label: 'Accuracy %', data: tested.map(i => ((i.accuracy || 0) * 100).toFixed(1)), backgroundColor: tested.map(i => i.pass ? '#22c55e' : '#ef4444'), borderRadius: 4 }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } } } }
+            });
+            const failing = tested.filter(i => !i.pass);
+            const trainBtn = document.getElementById('intent-train-weakest');
+            if (trainBtn && failing.length > 0) {
+                trainBtn.style.display = '';
+                trainBtn.dataset.weakest = JSON.stringify(failing.map(i => i.intent_name));
+            }
+        }
+    } catch (e) { /* intent system may not have data */ }
 }
+
+window.trainOnWeakestIntents = async function(domain) {
+    const btn = document.getElementById('intent-train-weakest');
+    const intents = btn && btn.dataset.weakest ? JSON.parse(btn.dataset.weakest) : [];
+    if (intents.length === 0) { showToast('No failing intents to train on'); return; }
+    const chatPage = domain === 'diet' ? '/diet-chat.html' : domain === 'general' ? '/general-chat.html' : '/chat.html';
+    sessionStorage.setItem('oggy_train_intents', JSON.stringify(intents));
+    window.location.href = chatPage + '?auto_train=1';
+};

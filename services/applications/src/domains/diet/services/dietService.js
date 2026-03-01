@@ -178,12 +178,13 @@ class DietService {
 
     // --- Diet Chat ---
     async chat(userId, message, options = {}) {
-        const { conversation_history = [], learn_from_chat = false } = options;
+        const { conversation_history = [], learn_from_chat = false, client_date } = options;
         const startTime = Date.now();
 
         // Build nutrition context for today + recent days so AI can answer about any recent date
-        const now = new Date();
-        const today = now.toISOString().split('T')[0];
+        // Use client_date (user's local date) when provided, fallback to server UTC
+        const today = client_date || new Date().toISOString().split('T')[0];
+        const now = client_date ? new Date(client_date + 'T12:00:00Z') : new Date();
         let nutritionContext = '';
         try {
             const rules = await this.getRules(userId);
@@ -241,16 +242,56 @@ User's diet rules: ${rules.length > 0 ? rules.map(r => `${r.rule_type}: ${r.desc
             ? memoryCards.map((c, i) => `${i + 1}. ${c.content?.text || JSON.stringify(c.content)}`).join('\n')
             : 'No previous diet patterns.';
 
-        const todayFormatted = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-        const systemPrompt = `You are Oggy, a diet and nutrition tracking assistant. You help users track their food, analyze nutrition, and provide diet advice based on their goals and history.
+        const todayFormatted = new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+        // --- Auto-detect and log food from user message BEFORE the LLM call ---
+        let autoLogContext = '';
+        const loggedEntries = [];
+        const foodDetection = this._detectFoodInMessage(message);
+        if (foodDetection) {
+            try {
+                for (const food of foodDetection.items) {
+                    const entry = await this.addEntry(userId, {
+                        entry_type: food.entry_type,
+                        description: food.description,
+                        quantity: food.quantity || 1,
+                        unit: food.unit || 'serving',
+                        meal_type: food.meal_type,
+                        entry_date: today
+                    });
+                    // Fetch the nutrition data that was just auto-analyzed
+                    const nutritionRow = await query(
+                        `SELECT calories, protein_g, carbs_g, fat_g FROM v3_diet_items WHERE entry_id = $1 LIMIT 1`,
+                        [entry.entry_id]
+                    );
+                    const n = nutritionRow.rows[0];
+                    const nutritionStr = n
+                        ? `${Math.round(n.calories)} cal, ${Math.round(n.protein_g)}g protein, ${Math.round(n.carbs_g)}g carbs, ${Math.round(n.fat_g)}g fat`
+                        : 'nutrition being estimated';
+                    loggedEntries.push({ description: food.description, nutrition: nutritionStr, data: n });
+                    logger.info('Auto-logged food from chat', { userId, food: food.description, nutrition: nutritionStr });
+                }
+                autoLogContext = `\n\n# JUST LOGGED (system auto-logged these from the user's message — acknowledge this!)
+${loggedEntries.map(e => `- "${e.description}" was added to today's food log. Nutrition: ${e.nutrition}`).join('\n')}
+In your response: confirm the food was logged, show the nutrition breakdown clearly, and add a brief encouraging comment. Do NOT say you can't log food — it's already been logged above.`;
+            } catch (err) {
+                logger.debug('Auto-log food failed', { error: err.message });
+            }
+        }
+
+        const systemPrompt = `You are Oggy, a diet and nutrition tracking assistant.
 Today is ${todayFormatted} (${today}).
 ${nutritionContext}
 
 # Learned Patterns
 ${memoryContext}
+${autoLogContext}
 
-IMPORTANT: The Nutrition Data above contains the user's ACTUAL food entries for each date. When answering questions about what the user ate, ONLY use entries from the correct date section. "Yesterday" means the day before today (${today}). Do NOT confuse entries from different dates.
-Be helpful, encourage healthy choices, and use the user's tracked data when relevant.`;
+# Rules
+- When answering about what the user ate, reference the Nutrition Data above using the correct date. "Yesterday" = day before ${today}.
+- Be concise. Keep responses short and helpful.
+- If a user mentions food they ate and it was NOT auto-logged above, provide your best nutrition estimate (calories, protein, carbs, fat). Never ask the user for nutrition info — YOU estimate it.
+- Encourage healthy choices and reference the user's tracked data when relevant.`;
 
         await costGovernor.checkBudget(6000);
 
@@ -261,7 +302,14 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
         ];
 
         const baseMessages = [
-            { role: 'system', content: `You are a diet and nutrition assistant. Help users with food tracking and nutrition advice. Be concise and helpful.\nToday is ${todayFormatted} (${today}).\n${nutritionContext}\nIMPORTANT: The Nutrition Data above contains the user's ACTUAL food entries for each date. When answering about what the user ate, ONLY reference entries from the correct date. "Yesterday" means the day before today (${today}). Do NOT confuse entries from different dates.` },
+            { role: 'system', content: `You are a diet and nutrition assistant. Be concise and helpful.
+Today is ${todayFormatted} (${today}).
+${nutritionContext}
+${autoLogContext}
+
+Rules:
+- Reference the Nutrition Data above for questions about past entries. "Yesterday" = day before ${today}.
+- If a user mentions food and it was NOT auto-logged above, provide your best nutrition estimate. Never ask the user for nutrition info.` },
             ...conversation_history.slice(-10),
             { role: 'user', content: message }
         ];
@@ -316,9 +364,92 @@ Be helpful, encourage healthy choices, and use the user's tracked data when rele
         return {
             oggy_response: oggyResult,
             base_response: baseResult,
+            logged_entries: loggedEntries.map(e => e.description),
             trace_id: traceId,
             latency_ms: Date.now() - startTime
         };
+    }
+
+    // --- Food Detection from Chat Messages ---
+    _detectFoodInMessage(message) {
+        const msg = message.trim();
+        if (!msg || msg.length < 5) return null;
+
+        // Patterns that indicate food logging intent
+        const patterns = [
+            // "I had/ate/drank [food] (for meal)"
+            /(?:i\s+)?(?:had|ate|eaten|drank|consumed|grabbed|got|took)\s+(?:a\s+|an\s+|some\s+|the\s+|my\s+)?(.+?)(?:\s+for\s+(breakfast|lunch|dinner|snack))?$/i,
+            // "just had/ate/drank [food]"
+            /just\s+(?:had|ate|drank|consumed|grabbed|got)\s+(?:a\s+|an\s+|some\s+|the\s+)?(.+?)(?:\s+for\s+(breakfast|lunch|dinner|snack))?$/i,
+            // "for breakfast/lunch/dinner I had [food]"
+            /for\s+(breakfast|lunch|dinner|snack)\s+(?:i\s+)?(?:had|ate|drank|got)\s+(?:a\s+|an\s+|some\s+|the\s+)?(.+)/i,
+            // "[food] for lunch/dinner/breakfast"
+            /^(.+?)\s+for\s+(breakfast|lunch|dinner|snack)$/i,
+            // "add [food] (to my log/entries)"
+            /(?:add|log|track|record|put)\s+(?:a\s+|an\s+|some\s+|the\s+|my\s+)?(.+?)(?:\s+to\s+(?:my\s+)?(?:log|entries|food\s*log|tracker|diary))?(?:\s+for\s+(breakfast|lunch|dinner|snack))?$/i,
+            // "can you add [food]"
+            /(?:can\s+you\s+|please\s+)?(?:add|log|track|record)\s+(?:a\s+|an\s+|some\s+|the\s+|my\s+)?(.+?)(?:\s+for\s+(?:me|today))?(?:\s+for\s+(breakfast|lunch|dinner|snack))?$/i,
+        ];
+
+        // Skip if message is clearly a question about existing data (not logging)
+        const skipPatterns = /^(what|how|when|why|did|do|can|should|show|tell|list|give|summarize|analyze|compare)\s/i;
+        if (skipPatterns.test(msg) && !/(add|log|track|record|put)/i.test(msg)) return null;
+
+        // Skip very short generic messages
+        if (msg.split(/\s+/).length < 3 && !/(add|log|track)/i.test(msg)) return null;
+
+        for (const pattern of patterns) {
+            const match = msg.match(pattern);
+            if (match) {
+                let description, mealType;
+
+                // Handle patterns where meal is first capture group
+                if (pattern.source.startsWith('for\\s+')) {
+                    mealType = match[1];
+                    description = match[2];
+                } else {
+                    description = match[1];
+                    mealType = match[2];
+                }
+
+                if (!description || description.length < 2) continue;
+
+                // Clean up description
+                description = description.replace(/\s+for\s+me$/i, '').replace(/\s+today$/i, '').replace(/\s+please$/i, '').trim();
+                if (!description || description.length < 2) continue;
+
+                // Capitalize first letter of each word
+                description = description.replace(/\b\w/g, c => c.toUpperCase());
+
+                // Determine entry_type
+                const liquidWords = /\b(drank|coffee|tea|juice|soda|water|milk|smoothie|shake|beer|wine|latte|espresso|cappuccino|drink|beverage|kombucha|lemonade|coke|pepsi|sprite|gatorade)\b/i;
+                const vitaminWords = /\b(vitamin|supplement|multivitamin|probiotic|omega|fish\s*oil|zinc|iron|magnesium|calcium|creatine)\b/i;
+                const isLiquid = liquidWords.test(msg) || liquidWords.test(description);
+                const isVitamin = vitaminWords.test(msg) || vitaminWords.test(description);
+                const entry_type = isVitamin ? 'vitamin' : isLiquid ? 'liquid' : 'food';
+
+                // Default meal type based on time or food type
+                if (!mealType) {
+                    const hour = new Date().getHours();
+                    if (hour < 11) mealType = 'breakfast';
+                    else if (hour < 15) mealType = 'lunch';
+                    else if (hour < 20) mealType = 'dinner';
+                    else mealType = 'snack';
+                }
+
+                return {
+                    items: [{
+                        description,
+                        meal_type: mealType.toLowerCase(),
+                        entry_type,
+                        quantity: 1,
+                        unit: 'serving'
+                    }]
+                };
+            }
+        }
+
+        return null;
     }
 
     // --- Nutrition Analysis ---

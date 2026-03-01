@@ -48,7 +48,14 @@ Rules:
 - Common receipt abbreviations: LG/LRG=large, SM/SML=small, MD/MED=medium, XL=extra large, CHKN/CKN=chicken, DBL=double, REG=regular, ADD=added topping, W/=with, W/O=without, CRISPY=crispy, GRLD=grilled, FF/FRY=fries, BEV=beverage, DK/DRK=drink, JR=junior, SR=senior/large, ORIG=original, SPCY=spicy, CHZ=cheese, BF=beef, VEG=vegetable
 - "category_suggestion" should be one of: dining, groceries, coffee, entertainment, shopping, transportation, utilities, health, other
 - If the image is not a receipt or is unreadable, return: { "error": "Could not read receipt", "merchant": null, "total_amount": null, "items": [], "is_food_receipt": false, "food_items": [], "category_suggestion": "other" }
-- transaction_date must be in YYYY-MM-DD format. If only partial date visible, infer the full date`;
+- transaction_date must be in YYYY-MM-DD format. If only partial date visible, infer the full date
+
+ACCURACY — READ CAREFULLY:
+- DOUBLE-CHECK every number you extract. Re-read prices character by character. Common OCR mistakes: $11.50 misread as $1.50 or $115.0, $8.99 misread as $899, 1 misread as 7, 5 misread as 6
+- Re-read the merchant name letter by letter if it is partially obscured or stylized
+- The total_amount MUST equal or closely match the sum of item prices (plus tax/tip). If they don't match, re-examine the items
+- For item quantities: look for "x", "×", or a leading number (e.g. "2 Hot Dog"). Do not confuse item codes or SKUs with quantities
+- If a price seems implausibly high or low for the item (e.g. $85 for a coffee), re-examine — you likely misread a digit`;
 
 class ReceiptAnalyzer {
     async analyzeReceipt(userId, imageBase64, mimeType) {
@@ -91,7 +98,24 @@ class ReceiptAnalyzer {
         providerResolver.logRequest(userId, resolved.provider, resolved.model, 'oggy', 'receiptAnalysis', r.tokens_used, r.latency_ms, true, null);
 
         // Parse JSON response
-        return this._parseResponse(r.text);
+        const parsed = this._parseResponse(r.text);
+
+        // Cross-check: verify item prices sum roughly to total
+        if (parsed.items && parsed.items.length > 0 && parsed.total_amount) {
+            const itemSum = parsed.items.reduce((sum, it) => sum + ((it.price || 0) * (it.quantity || 1)), 0);
+            const ratio = itemSum / parsed.total_amount;
+            // If items sum is wildly off from total (excluding tax/tip which adds ~5-25%),
+            // log a warning — the total from the receipt is more likely correct
+            if (ratio < 0.5 || ratio > 1.5) {
+                logger.warn('Receipt analyzer: item sum vs total mismatch', {
+                    itemSum: itemSum.toFixed(2),
+                    total: parsed.total_amount,
+                    ratio: ratio.toFixed(2)
+                });
+            }
+        }
+
+        return parsed;
     }
 
     _parseResponse(text) {

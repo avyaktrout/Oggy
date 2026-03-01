@@ -18,6 +18,7 @@ const circuitBreakerRegistry = require('../../../shared/utils/circuitBreakerRegi
 const { costGovernor } = require('../../../shared/middleware/costGovernor');
 const providerResolver = require('../../../shared/providers/providerResolver');
 const dietBenchmarkGenerator = require('./dietBenchmarkGenerator');
+const intentService = require('../../../shared/services/intentService');
 const { parallelMap } = require('../../../shared/utils/parallel');
 
 const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory:3000';
@@ -137,6 +138,18 @@ class DietBenchmarkEvaluator {
             advantage_percent: advantagePercent,
             oggy_results: oggyResults,
             base_results: baseResults
+        });
+
+        // Record per-intent performance (non-blocking)
+        try {
+            await intentService.recordIntentPerformance(result_id, user_id, oggyResults, 'diet');
+        } catch (intentErr) {
+            logger.warn('Intent performance recording failed (non-blocking)', { error: intentErr.message });
+        }
+
+        // Create memory cards for weak intents (non-blocking)
+        intentService.createMemoryCardsForWeakIntents(result_id, user_id, 'diet').catch(err => {
+            logger.warn('Intent weakness memory cards failed (non-blocking)', { error: err.message });
         });
 
         logger.info('Diet benchmark evaluation complete', {

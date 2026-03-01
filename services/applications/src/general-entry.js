@@ -17,6 +17,7 @@ const domainLearningRouter = require('./domains/general/routes/domainLearning');
 
 // Shared routes used by general domain
 const continuousLearningRouter = require('./shared/routes/continuousLearning');
+const generalObserverRouter = require('./domains/general/routes/generalObserver');
 
 const app = express();
 const PORT = process.env.PORT || 3011;
@@ -76,6 +77,7 @@ app.get('/health', async (req, res) => {
 app.use('/v0/general', generalChatRouter);
 app.use('/v0/general', domainLearningRouter);
 app.use('/v0/continuous-learning', continuousLearningRouter);
+app.use('/v0/general/observer', generalObserverRouter);
 
 // ──────────────────────────────────────────────────
 // Error + 404 handlers
@@ -102,6 +104,15 @@ const server = app.listen(PORT, async () => {
     } catch (error) {
         logger.error('Database connection failed (general)', { error: error.message });
         process.exit(1);
+    }
+
+    // Start general observer schedule
+    try {
+        const generalObserverService = require('./domains/general/services/generalObserverService');
+        generalObserverService.startSchedule(6);
+        logger.info('General observer schedule started (every 6h)');
+    } catch (err) {
+        logger.warn('General observer schedule init failed', { error: err.message });
     }
 
     logger.info('General service ready');

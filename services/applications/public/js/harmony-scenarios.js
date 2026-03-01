@@ -324,10 +324,12 @@ async function sendWhatIf() {
         if (loadEl) loadEl.remove();
 
         if (data.oggy_response) {
-            msgArea.innerHTML += `<div class="whatif-msg whatif-msg-bot"><strong>Oggy:</strong><br>${formatWhatIfResponse(data.oggy_response)}</div>`;
+            const oggyText = typeof data.oggy_response === 'string' ? data.oggy_response : data.oggy_response.text || '';
+            msgArea.innerHTML += `<div class="whatif-msg whatif-msg-bot"><strong>Oggy:</strong><br>${formatWhatIfResponse(oggyText)}</div>`;
         }
         if (data.base_response) {
-            msgArea.innerHTML += `<div class="whatif-msg whatif-msg-base"><strong>Base:</strong><br>${formatWhatIfResponse(data.base_response)}</div>`;
+            const baseText = typeof data.base_response === 'string' ? data.base_response : data.base_response.text || '';
+            msgArea.innerHTML += `<div class="whatif-msg whatif-msg-base"><strong>Base:</strong><br>${formatWhatIfResponse(baseText)}</div>`;
         }
         if (data.suggestions && data.suggestions.length > 0) {
             for (const sug of data.suggestions) {

@@ -36,6 +36,7 @@ const benchmarkAnalyticsRouter = require('./shared/routes/benchmarkAnalytics');
 const memoryPruningRouter = require('./shared/routes/memoryPruning');
 const { migrationExportRouter, migrationImportRouter } = require('./shared/routes/migration');
 const receiptAnalysisRouter = require('./shared/routes/receiptAnalysis');
+const intentsRouter = require('./shared/routes/intents');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -258,6 +259,7 @@ app.use('/v0/benchmark-analytics', benchmarkAnalyticsRouter);
 app.use('/v0/memory-pruning', memoryPruningRouter);
 app.use('/v0/receipt', receiptAnalysisRouter);
 app.use('/v0/migration', migrationImportRouter);
+app.use('/v0/intents', intentsRouter);
 
 // ──────────────────────────────────────────────────
 // Proxy: Payments domain

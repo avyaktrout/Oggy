@@ -440,6 +440,54 @@ router.get('/weakness-data', async (req, res) => {
 });
 
 /**
+ * GET /v0/benchmark-analytics/intent-performance
+ * Per-intent performance summary with pass/fail status and trend
+ */
+router.get('/intent-performance', async (req, res) => {
+    try {
+        const userId = req.query.user_id || 'oggy';
+        const domain = req.query.domain || 'payments';
+        const limit = parseInt(req.query.limit) || 20;
+        const intentService = require('../services/intentService');
+
+        const summary = await intentService.getIntentSummary(userId, domain);
+        const timeSeries = await intentService.getIntentTimeSeries(userId, domain, null, limit);
+
+        // Compute trend for each intent (comparing last 2 results)
+        const intentTrends = {};
+        for (const entry of timeSeries) {
+            if (!intentTrends[entry.intent_name]) {
+                intentTrends[entry.intent_name] = [];
+            }
+            intentTrends[entry.intent_name].push(parseFloat(entry.accuracy));
+        }
+
+        const enriched = summary.map(i => {
+            const history = intentTrends[i.intent_name] || [];
+            let trend = 'stable';
+            if (history.length >= 2) {
+                const diff = history[0] - history[1];
+                if (diff > 0.05) trend = 'improving';
+                else if (diff < -0.05) trend = 'declining';
+            }
+            return { ...i, trend, history_count: history.length };
+        });
+
+        res.json({
+            domain,
+            intents: enriched,
+            total: enriched.length,
+            passing: enriched.filter(i => i.pass === true).length,
+            failing: enriched.filter(i => i.pass === false).length,
+            untested: enriched.filter(i => i.status === 'untested').length
+        });
+    } catch (error) {
+        logger.logError(error, { operation: 'intent-performance' });
+        res.status(500).json({ error: 'Failed to get intent performance', message: error.message });
+    }
+});
+
+/**
  * POST /v0/benchmark-analytics/audit-chat
  * LLM-powered Q&A about Oggy's benchmark performance
  * Body: { question: "What are Oggy's weakest categories?" }

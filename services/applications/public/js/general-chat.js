@@ -7,6 +7,7 @@ const shell = new AgentShell({
     chatEndpoint: "/v0/general/chat",
     trainingEndpoint: "/v0/continuous-learning",
     analyticsPage: "/general-analytics.html",
+    observerBasePath: "/v0/general/observer",
     chatPlaceholder: "Ask Oggy anything...",
     welcomeMessage: "Hi! I'm Oggy, your general-purpose assistant. I remember our conversations and learn from them. Ask me anything!",
     baseWelcome: "Hi! I'm the base model without memory. Compare my answers with Oggy's.",

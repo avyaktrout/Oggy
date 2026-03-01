@@ -117,10 +117,60 @@ class DomainLearningService {
      * Returns { valid: boolean, finalUrl: string }
      * Checks: HTTP status, redirects, bot challenges, soft 404s, JS redirects.
      */
+    /**
+     * Search YouTube for a query and return the first real video URL + title.
+     * Parses ytInitialData from the search results page (no API key needed).
+     */
+    async _searchYouTubeVideo(searchQuery) {
+        try {
+            const encoded = encodeURIComponent(searchQuery);
+            const resp = await axios.get(`https://www.youtube.com/results?search_query=${encoded}`, {
+                timeout: 8000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept-Language': 'en-US,en;q=0.9'
+                },
+                responseType: 'text'
+            });
+            const html = resp.data || '';
+            // Extract video IDs from ytInitialData JSON embedded in the page
+            const videoIds = [];
+            const regex = /"videoId"\s*:\s*"([a-zA-Z0-9_-]{11})"/g;
+            let match;
+            while ((match = regex.exec(html)) !== null) {
+                if (!videoIds.includes(match[1])) videoIds.push(match[1]);
+                if (videoIds.length >= 3) break;
+            }
+            if (videoIds.length === 0) return null;
+
+            // Extract title for the first video
+            const titleRegex = new RegExp(`"videoId"\\s*:\\s*"${videoIds[0]}"[\\s\\S]*?"title"\\s*:\\s*\\{[\\s\\S]*?"text"\\s*:\\s*"([^"]+)"`);
+            const titleMatch = html.match(titleRegex);
+            const title = titleMatch ? titleMatch[1] : searchQuery;
+
+            return {
+                url: `https://www.youtube.com/watch?v=${videoIds[0]}`,
+                title,
+                type: 'video'
+            };
+        } catch (err) {
+            logger.debug('YouTube search failed', { query: searchQuery, error: err.message });
+            return null;
+        }
+    }
+
     async _validateUrl(url) {
+        // YouTube search URLs are always valid (they show search results for the query)
+        if (url.includes('youtube.com/results?search_query=')) {
+            return { valid: true, finalUrl: url };
+        }
         if (url.includes('youtube.com/watch?v=') || url.includes('youtu.be/')) {
             const valid = await this._validateYouTubeUrl(url);
             return { valid, finalUrl: url };
+        }
+        // Reject YouTube channel/playlist pages — AI frequently hallucates channel names
+        if (url.includes('youtube.com/@') || url.includes('youtube.com/channel/') || url.includes('youtube.com/playlist')) {
+            return { valid: false, finalUrl: url };
         }
         if (this._isGenericLandingPage(url)) return { valid: false, finalUrl: url };
 
@@ -146,6 +196,17 @@ class DomainLearningService {
             if (this._isBotChallenge(html, body.length)) return { valid: false, finalUrl };
             if (this._isSoft404(html)) return { valid: false, finalUrl };
             if (this._hasJsRedirectToGeneric(html)) return { valid: false, finalUrl };
+
+            // Detect Wikipedia disambiguation pages — they return 200 but aren't useful
+            if (url.includes('wikipedia.org/wiki/') && (
+                html.includes('class="disambiguation"') ||
+                html.includes('class="dmbox') ||
+                html.includes('may refer to:') ||
+                html.includes('can refer to:') ||
+                html.includes('disambiguation page')
+            )) {
+                return { valid: false, finalUrl };
+            }
 
             return { valid: true, finalUrl };
         } catch {
@@ -174,7 +235,7 @@ class DomainLearningService {
                     })
                 );
 
-                // Keep only valid + unique resources (deduplicate by final URL)
+                // Keep only valid + unique resources (drop invalid ones)
                 topic.resources = [];
                 for (const result of results) {
                     if (result.status !== 'fulfilled' || !result.value.valid) continue;
@@ -195,6 +256,18 @@ class DomainLearningService {
                         seenFinalUrls.add(wikiUrl);
                         topic.resources.push({ title: `${topic.name} — Wikipedia`, url: wikiUrl, type: 'article' });
                     }
+                }
+            }
+
+            // YouTube video fallback — if topic has no video resource, search YouTube for one
+            const hasVideo = topic.resources.some(r => r.type === 'video');
+            if (!hasVideo && topic.name) {
+                const domain = plan.domain || '';
+                const searchQuery = `${domain} ${topic.name} explained`.trim();
+                const video = await this._searchYouTubeVideo(searchQuery);
+                if (video && !seenFinalUrls.has(video.url)) {
+                    seenFinalUrls.add(video.url);
+                    topic.resources.push(video);
                 }
             }
         }
@@ -702,9 +775,12 @@ CRITICAL URL RULES — broken links are automatically removed, so only include l
   * Python docs: https://docs.python.org/3/library/... or https://docs.python.org/3/tutorial/...
   * freeCodeCamp: https://www.freecodecamp.org/learn/... or https://www.freecodecamp.org/news/...
   * Official documentation sites (e.g. https://react.dev, https://nodejs.org/docs/latest/api/)
-  * YouTube CHANNEL pages: https://www.youtube.com/@3Blue1Brown, https://www.youtube.com/@KhanAcademyFinance
-- DO NOT use: Khan Academy article links (blocked by bot protection), Fidelity links, or youtube.com/watch?v= links
-- DO NOT guess or fabricate URLs. If you are not sure a specific page exists, do NOT include it.
+  * HowStuffWorks: https://www.howstuffworks.com/...
+  * Britannica: https://www.britannica.com/topic/...
+  * YouTube videos: https://www.youtube.com/watch?v=VIDEO_ID — use real video IDs from well-known educational creators (3Blue1Brown, CrashCourse, Khan Academy, TED-Ed, Veritasium, Wendover Productions, etc.). Only include IDs you are confident are real. The system will automatically find videos for topics that don't have one, so focus on quality article resources.
+- DO NOT use: Khan Academy article links (blocked by bot protection), Fidelity links, YouTube CHANNEL pages (youtube.com/@anything), YouTube playlist links, YouTube search URLs
+- Wikipedia: Use SPECIFIC article titles that exactly match the real page. E.g. "Travel_planning" not "Travel" or "Accommodation_(lodging)" not "Accommodation". Check that the title is specific enough to avoid disambiguation pages.
+- DO NOT guess or fabricate URLs. If you are not sure a specific page exists, do NOT include it. Only include URLs for pages you are highly confident exist.
 
 ${freeOnly ? `
 IMPORTANT — FREE RESOURCES ONLY:
@@ -801,8 +877,10 @@ Provide 4-6 resources per topic so there is a good variety.
 Use DIVERSE sources — do NOT rely heavily on any one site. Wikipedia should be at most ~30% of total resources.
 
 CRITICAL URL RULES — broken links are automatically removed:
-- Use diverse platforms: Investopedia, Wikipedia, GeeksforGeeks, Coursera, MIT OCW, MDN, freeCodeCamp, official docs, YouTube channel pages
-- DO NOT use: Khan Academy article links, Fidelity links, or youtube.com/watch?v= links
+- Use diverse platforms: Investopedia, Wikipedia, GeeksforGeeks, Coursera, MIT OCW, MDN, freeCodeCamp, HowStuffWorks, Britannica, official docs
+- YouTube: ONLY specific video links (youtube.com/watch?v=...) from well-known creators. NO channel pages (@...) or playlists.
+- Wikipedia: Use SPECIFIC article titles (e.g. "Accommodation_(lodging)" not "Accommodation") to avoid disambiguation pages.
+- DO NOT use: Khan Academy article links, Fidelity links
 - DO NOT guess or fabricate URLs. If not sure a page exists, do NOT include it.
 ${freeOnly ? `
 IMPORTANT — FREE RESOURCES ONLY:

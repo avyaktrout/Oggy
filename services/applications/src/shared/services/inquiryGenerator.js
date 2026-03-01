@@ -15,11 +15,42 @@ const { costGovernor } = require('../middleware/costGovernor');
 const { suggestionGate } = require('./suggestionGate');
 const OggyCategorizer = require('../../domains/payments/services/oggyCategorizer');
 const providerResolver = require('../providers/providerResolver');
+const intentService = require('./intentService');
 
 const categorizer = new OggyCategorizer();
 const HIGH_CONFIDENCE_THRESHOLD = 0.80;
 
 const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory-service:3000';
+
+// Intent → inquiry topic mapping: when user has focus intents, use these instead of generic DOMAIN_GUIDANCE
+const INTENT_INQUIRY_TOPICS = {
+    // Payments
+    'payments.categorize_payment': ['merchant categorization preferences', 'spending category boundaries', 'how you mentally group purchases'],
+    'payments.disambiguate_groceries_vs_shopping': ['grocery vs household shopping habits', 'where you buy non-food items mixed with groceries'],
+    'payments.disambiguate_dining_vs_business_meal': ['business meal vs personal dining rules', 'when dining counts as work expense'],
+    'payments.handle_mixed_cart_dominance': ['multi-category receipt handling', 'how you split combo purchases'],
+    // Diet
+    'diet.estimate_nutrition': ['portion size estimation habits', 'how you judge calories by sight', 'nutrition accuracy goals'],
+    'diet.log_entry_from_text': ['food description conventions', 'how you describe meals', 'logging shorthand preferences'],
+    'diet.verify_with_user': ['when you want Oggy to double-check nutrition', 'verification threshold preferences'],
+    'diet.categorize_food_type': ['how you classify snacks vs meals', 'food type boundaries'],
+    'diet.ask_clarifying_questions': ['what details help with nutrition accuracy', 'when Oggy should ask follow-ups'],
+    'diet.explain_nutrition_assumptions': ['transparency preferences for estimates', 'when to show reasoning'],
+    // General
+    'general.preference_fit': ['communication style preferences', 'response tone and format', 'what makes a response feel right'],
+    'general.explain_why_response': ['how much explanation you want', 'reasoning depth preferences'],
+    'general.ask_clarifying_questions': ['when clarification helps vs slows you down', 'question style preferences'],
+    'general.proactive_suggestions': ['what kinds of proactive tips are useful', 'suggestion frequency preferences'],
+    'general.research_synthesis': ['research depth expectations', 'source preference and citation style'],
+    'general.plan_generation': ['planning detail level', 'timeline and milestone preferences'],
+    'general.comparison_recommendation': ['decision-making criteria', 'comparison format preferences'],
+    'general.study_plan_generation': ['study habits and schedule', 'learning pace preferences'],
+    // Harmony
+    'harmony.compute_metrics': ['metric computation preferences', 'which indicators matter most to you'],
+    'harmony.add_indicator': ['what new data sources you want tracked', 'indicator format preferences'],
+    'harmony.explain_metric_change': ['how much context you want on score changes', 'explanation detail level'],
+    'harmony.suggest_interventions': ['intervention style preferences', 'proactive vs reactive recommendations'],
+};
 
 // Domain-specific best-practices guidance for LLM prompts
 const DOMAIN_GUIDANCE = {
@@ -435,14 +466,59 @@ class InquiryGenerator {
         const domainContext = await this._buildDomainContext(userId, domain);
         const coveredTopics = await this._getCoveredTopics(userId, domain);
 
+        // Check if user has focus intents — if so, replace generic topics with intent-specific ones
+        let topics = guidance.topics;
+        let intentContext = '';
+        let matchedIntentName = null;
+
+        try {
+            const prefs = await this.getPreferences(userId);
+            const domainIntents = (prefs.focus_intents || []).filter(i => i.startsWith(domain + '.'));
+
+            if (domainIntents.length > 0) {
+                // Build intent-specific topics from mapping + fallback to catalog description
+                const intentTopics = [];
+                const intentDetails = [];
+
+                for (const iName of domainIntents) {
+                    const mapped = INTENT_INQUIRY_TOPICS[iName];
+                    if (mapped) {
+                        intentTopics.push(...mapped);
+                    }
+
+                    // Load catalog entry for richer context (also covers custom intents not in map)
+                    try {
+                        const intent = await intentService.getIntent(iName);
+                        if (intent) {
+                            intentDetails.push(`- ${intent.display_name}: ${intent.description || intent.success_criteria || ''}`);
+                            // For custom intents not in INTENT_INQUIRY_TOPICS, derive topics from description
+                            if (!mapped && intent.description) {
+                                intentTopics.push(intent.description);
+                            }
+                        }
+                    } catch (_) { /* non-blocking */ }
+                }
+
+                if (intentTopics.length > 0) {
+                    topics = intentTopics;
+                    matchedIntentName = domainIntents[0]; // primary intent for tagging
+                }
+                if (intentDetails.length > 0) {
+                    intentContext = `\nThe user is focused on improving these skills:\n${intentDetails.join('\n')}\nGenerate suggestions that help the user improve in these specific areas.\n`;
+                }
+            }
+        } catch (err) {
+            logger.debug('Failed to load focus intents for inquiry', { error: err.message });
+        }
+
         const systemPrompt = `You are Oggy, a friendly personal assistant. You need to generate ONE suggestion for the user in the "${guidance.label}" domain.
 
 You can generate either:
 - A "question" to better understand the user's goals, habits, or preferences (with 3-5 multiple choice options)
 - An "advice" tip with actionable guidance based on what you know about the user
-
+${intentContext}
 Best-practice topics to draw from (pick ONE that hasn't been covered):
-${guidance.topics.map(t => `- ${t}`).join('\n')}
+${topics.map(t => `- ${t}`).join('\n')}
 
 Topics ALREADY covered (do NOT repeat these):
 ${coveredTopics.length > 0 ? coveredTopics.map(t => `- ${t}`).join('\n') : '(none yet)'}
@@ -508,6 +584,11 @@ or
                 return null;
             }
 
+            // Attach matched intent for context tagging
+            if (matchedIntentName) {
+                parsed.intent_name = matchedIntentName;
+            }
+
             return parsed;
         } catch (err) {
             if (err.budgetExceeded) {
@@ -523,7 +604,7 @@ or
      * Insert an AI-generated suggestion into the database with topic-based dedup.
      */
     async _insertAISuggestion(userId, aiSuggestion, domain) {
-        const { kind, topic, text, options } = aiSuggestion;
+        const { kind, topic, text, options, intent_name } = aiSuggestion;
         const questionType = kind === 'question' ? 'ai_question' : 'ai_advice';
 
         // Topic-based dedup (14-day window)
@@ -542,6 +623,7 @@ or
 
         const inquiryId = uuidv4();
         const context = { domain, options: options || [] };
+        if (intent_name) context.intent_name = intent_name;
 
         await query(
             `INSERT INTO oggy_inquiries (inquiry_id, user_id, question_text, question_type, context, response_type, topic, generation_date)
@@ -550,7 +632,8 @@ or
         );
 
         logger.info('Generated AI suggestion', {
-            inquiry_id: inquiryId, type: questionType, topic, domain
+            inquiry_id: inquiryId, type: questionType, topic, domain,
+            intent_name: intent_name || null
         });
 
         return {
@@ -783,6 +866,11 @@ or
                 };
                 cardTags = [domain, 'user_preference', qType];
                 if (category) cardTags.push(category);
+            }
+
+            // Tag memory card with intent if this inquiry was intent-driven
+            if (inquiry.context?.intent_name) {
+                cardTags.push(inquiry.context.intent_name);
             }
 
             const cardResponse = await axios.post(`${MEMORY_SERVICE_URL}/cards`, {

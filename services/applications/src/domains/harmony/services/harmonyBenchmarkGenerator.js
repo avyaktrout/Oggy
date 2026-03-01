@@ -12,6 +12,7 @@ const { v4: uuidv4 } = require('uuid');
 const { query } = require('../../../shared/utils/db');
 const logger = require('../../../shared/utils/logger');
 const providerResolver = require('../../../shared/providers/providerResolver');
+const { parallelMap } = require('../../../shared/utils/parallel');
 
 const COMPLEXITY_TIERS = {
     1: { label: 'Foundation', scenarios: 10, types: ['indicator_classification'] },
@@ -46,23 +47,35 @@ async function createBenchmark(options = {}) {
     const scenarios = [];
     let errors = 0;
 
-    // Generate scenarios per type, distributed across tier types
+    // Generate scenarios per type in parallel, distributed across tier types
     const scenariosPerType = Math.ceil(tier.scenarios / tier.types.length);
 
+    // Build task list of { type, index } for all scenarios to generate
+    const genTasks = [];
     for (const type of tier.types) {
-        for (let i = 0; i < scenariosPerType && scenarios.length < tier.scenarios; i++) {
-            try {
-                const scenario = await _generateScenario(type, scale, nodes, indicators, userId);
-                if (scenario) {
-                    scenario.scenario_id = uuidv4();
-                    scenario.benchmark_id = benchmarkId;
-                    scenario.order_index = scenarios.length;
-                    scenarios.push(scenario);
-                }
-            } catch (err) {
-                errors++;
-                logger.error('Harmony benchmark scenario generation failed', { type, error: err.message });
-            }
+        for (let i = 0; i < scenariosPerType; i++) {
+            genTasks.push({ type, i });
+        }
+    }
+
+    const genResult = await parallelMap(
+        genTasks,
+        async (task) => _generateScenario(task.type, scale, nodes, indicators, userId),
+        5,
+        { operationName: 'harmony-benchmark-gen', interTaskDelayMs: 100 }
+    );
+
+    for (const r of genResult.results) {
+        if (scenarios.length >= tier.scenarios) break;
+        if (r.success && r.value) {
+            const scenario = r.value;
+            scenario.scenario_id = uuidv4();
+            scenario.benchmark_id = benchmarkId;
+            scenario.order_index = scenarios.length;
+            scenarios.push(scenario);
+        } else if (!r.success) {
+            errors++;
+            logger.error('Harmony benchmark scenario generation failed', { error: r.error });
         }
     }
 

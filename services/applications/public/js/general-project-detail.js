@@ -36,6 +36,7 @@ async function loadProjectDetail() {
         document.getElementById("project-desc").textContent = projectData.description || "No description";
         document.title = "Oggy - " + (projectData.name || "Project");
         await loadLearningSettings();
+        loadProjectIntents();
         loadNotes();
     } catch (e) {
         document.getElementById("project-name").textContent = "Project not found";
@@ -660,6 +661,73 @@ window.deleteNote = async function(noteId) {
 };
 
 // No per-message buttons — notes are saved as full conversation snapshots via "Save Chat" button
+
+// --- Project Intents ---
+
+async function loadProjectIntents() {
+    const container = document.getElementById('project-intents-list');
+    const boundContainer = document.getElementById('project-intents-bound');
+    if (!container) return;
+
+    try {
+        const [allIntentsData, boundData] = await Promise.all([
+            apiCall('GET', '/v0/intents?domain=general'),
+            apiCall('GET', `/v0/intents/projects/${projectId}`)
+        ]);
+        const allIntents = allIntentsData.intents || [];
+        const boundIntents = boundData.intents || [];
+        const boundIds = new Set(boundIntents.map(i => i.intent_id));
+
+        if (allIntents.length === 0) {
+            container.innerHTML = '<span style="font-size:12px;color:var(--text-muted)">No intents available.</span>';
+            return;
+        }
+
+        container.innerHTML = allIntents.map(i => {
+            const bound = boundIds.has(i.intent_id);
+            return `<label class="intent-chip ${bound ? 'intent-chip-active' : ''}" data-intent-id="${i.intent_id}" data-intent-name="${i.intent_name}" title="${i.description || ''}">
+                <input type="checkbox" value="${i.intent_id}" ${bound ? 'checked' : ''} style="display:none">
+                <span>${i.display_name}</span>
+            </label>`;
+        }).join('');
+
+        container.querySelectorAll('.intent-chip').forEach(chip => {
+            chip.addEventListener('click', async () => {
+                const cb = chip.querySelector('input');
+                const intentId = cb.value;
+                cb.checked = !cb.checked;
+                chip.classList.toggle('intent-chip-active', cb.checked);
+
+                try {
+                    if (cb.checked) {
+                        await apiCall('POST', `/v0/intents/projects/${projectId}`, {
+                            user_id: USER_ID,
+                            intent_ids: [intentId]
+                        });
+                        showToast('Intent bound to project');
+                    } else {
+                        await apiCall('DELETE', `/v0/intents/projects/${projectId}/${intentId}?user_id=${USER_ID}`);
+                        showToast('Intent unbound from project');
+                    }
+                } catch (err) {
+                    // Revert on error
+                    cb.checked = !cb.checked;
+                    chip.classList.toggle('intent-chip-active', cb.checked);
+                    showToast('Failed: ' + err.message, 'error');
+                }
+            });
+        });
+
+        // Show bound count
+        if (boundIntents.length > 0) {
+            boundContainer.innerHTML = `<span style="font-size:11px;color:var(--text-muted)">${boundIntents.length} intent(s) bound — training and inquiries will focus on these</span>`;
+        } else {
+            boundContainer.innerHTML = '<span style="font-size:11px;color:var(--text-muted)">No intents bound. Select intents above to focus training on specific skills.</span>';
+        }
+    } catch (e) {
+        container.innerHTML = '<span style="font-size:12px;color:var(--text-muted)">Failed to load intents.</span>';
+    }
+}
 
 function showSuggestionBanner(suggestion) {
     const banner = document.getElementById("suggestion-banner");

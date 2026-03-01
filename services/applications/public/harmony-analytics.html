@@ -115,6 +115,17 @@
 
         <p style="font-size:12px;color:var(--text-muted)">Snapshots are taken daily at 6:00 PM. Use "Snapshot Now" to capture the current state immediately.</p>
 
+        <!-- Per-Intent Performance -->
+        <div class="analytics-panel" id="intent-panel" style="display:none;margin-top:16px">
+            <h3 class="analytics-panel-title">Per-Intent Performance</h3>
+            <div class="chart-container chart-md">
+                <canvas id="chart-intent"></canvas>
+            </div>
+            <div id="intent-train-weakest" style="display:none;margin-top:10px;text-align:right">
+                <button class="btn btn-sm btn-primary" onclick="trainOnWeakestIntents('harmony')">Train on weakest intents</button>
+            </div>
+        </div>
+
         <!-- Training Performance -->
         <div id="harmony-training-section" style="margin-top:24px">
             <h2 style="font-size:18px;font-weight:600;margin-bottom:12px">Training Performance</h2>

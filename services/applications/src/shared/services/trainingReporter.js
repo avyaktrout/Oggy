@@ -8,6 +8,7 @@ const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
 const { query } = require('../utils/db');
 const weaknessAnalyzer = require('./weaknessAnalyzer');
+const intentService = require('./intentService');
 
 class TrainingReporter {
     constructor() {
@@ -568,6 +569,58 @@ class TrainingReporter {
         return html;
     }
 
+    async _buildIntentSection(stats) {
+        const userId = this.config?.userId;
+        const domain = stats.domain || 'payments';
+        if (!userId) return '';
+
+        try {
+            const summary = await intentService.getIntentSummary(userId, domain);
+            let tested = summary.filter(i => i.status !== 'untested');
+            if (tested.length === 0) return '';
+
+            // If target_intents were selected, only show those in the report
+            const targetIntents = stats.target_intents || [];
+            if (targetIntents.length > 0) {
+                tested = tested.filter(i => targetIntents.includes(i.intent_name));
+                if (tested.length === 0) return '';
+            }
+
+            const rows = tested
+                .sort((a, b) => (a.accuracy || 0) - (b.accuracy || 0))
+                .map(i => {
+                    const pct = ((i.accuracy || 0) * 100).toFixed(0);
+                    const badgeColor = i.pass ? '#22c55e' : '#ef4444';
+                    const badgeText = i.pass ? 'PASS' : 'FAIL';
+                    const barColor = i.pass ? '#22c55e' : (i.accuracy >= 0.6 ? '#f59e0b' : '#ef4444');
+                    return `
+                        <tr>
+                            <td style="padding:6px 8px;font-size:13px;font-weight:500;white-space:nowrap">${i.display_name}</td>
+                            <td style="padding:6px 8px;width:50%">
+                                <table cellpadding="0" cellspacing="0" style="width:100%"><tr>
+                                    <td style="width:80%;padding-right:8px">
+                                        <div style="background:#e2e8f0;border-radius:4px;height:18px;width:100%">
+                                            <div style="background:${barColor};height:18px;border-radius:4px;width:${Math.max(pct, 3)}%"></div>
+                                        </div>
+                                    </td>
+                                    <td style="white-space:nowrap;font-size:13px;font-weight:600;color:#334155">${pct}%</td>
+                                </tr></table>
+                            </td>
+                            <td style="padding:6px 8px;text-align:center">
+                                <span style="display:inline-block;background:${badgeColor};color:white;padding:2px 10px;border-radius:8px;font-size:11px;font-weight:700">${badgeText}</span>
+                            </td>
+                        </tr>`;
+                }).join('');
+
+            return `
+                <h3 style="font-size:14px;color:#64748b;margin:20px 0 8px">Per-Intent Performance</h3>
+                <table style="width:100%;border-collapse:collapse">${rows}</table>`;
+        } catch (err) {
+            logger.warn('Intent section build failed', { error: err.message });
+            return '';
+        }
+    }
+
     async _buildReportHtml(title, stats, benchmarkResult) {
         const bmRows = (stats.benchmark_results || []).map((bm, i) => `
             <tr>
@@ -704,6 +757,8 @@ class TrainingReporter {
                 ${latestSection}
 
                 ${weaknessSection}
+
+                ${await this._buildIntentSection(stats)}
 
                 ${bmRows ? `
                 <h3 style="font-size:14px;color:#64748b;margin:16px 0 8px">Benchmark History</h3>

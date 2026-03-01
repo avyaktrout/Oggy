@@ -17,6 +17,7 @@ const { costGovernor } = require('../../../shared/middleware/costGovernor');
 const providerResolver = require('../../../shared/providers/providerResolver');
 const circuitBreakerRegistry = require('../../../shared/utils/circuitBreakerRegistry');
 const dietAssessmentGenerator = require('./dietAssessmentGenerator');
+const { parallelMap } = require('../../../shared/utils/parallel');
 
 const MEMORY_SERVICE_URL = process.env.MEMORY_SERVICE_URL || 'http://memory:3000';
 const DIET_LEARNING_INTERVAL_MS = parseInt(process.env.DIET_LEARNING_INTERVAL_MS || '300000', 10); // 5 min default
@@ -36,6 +37,18 @@ class DietSelfDrivenLearning {
             last_session: null
         };
         this._sessionInProgress = false;
+        this._focusIntents = null;
+    }
+
+    /**
+     * Set focus intents to bias generator type selection during training
+     * @param {string[]} intentNames - e.g. ['diet.estimate_nutrition', 'diet.log_entry_from_text']
+     * @param {object} [intentFocus] - Optional focus levels: { intent_name: 'low'|'medium'|'high' }
+     */
+    setFocusIntents(intentNames, intentFocus) {
+        this._focusIntents = intentNames;
+        this._intentFocus = intentFocus || null;
+        logger.info('Diet SDL focus intents set', { intents: intentNames, focus: intentFocus });
     }
 
     /**
@@ -153,41 +166,33 @@ class DietSelfDrivenLearning {
 
             const generator = dietAssessmentGenerator.getInstance(userId);
 
-            for (let i = 0; i < this.practiceCount; i++) {
-                try {
-                    // Step 1: Generate a diet question
-                    const question = await generator.generateQuestion(userId, this._selectDifficulty());
+            // Apply focus intents to bias generator type selection
+            if (this._focusIntents) {
+                generator.setFocusIntents(this._focusIntents, this._intentFocus);
+            }
 
-                    if (!question) {
-                        sessionErrors++;
-                        logger.debug('No diet question generated, skipping', { attempt: i + 1 });
-                        continue;
-                    }
+            // Run practice attempts in parallel (concurrency=3, matches general SDL pattern)
+            const attempts = Array.from({ length: this.practiceCount }, (_, i) => i);
+            const self = this;
+
+            const attemptResult = await parallelMap(
+                attempts,
+                async (i) => {
+                    // Step 1: Generate a diet question
+                    const question = await generator.generateQuestion(userId, self._selectDifficulty());
+                    if (!question) return { status: 'error', attempt: i + 1 };
 
                     // Step 2: Ask Oggy to estimate nutrition
-                    const oggyEstimate = await this._getOggyEstimate(userId, question.food_description);
-
-                    if (!oggyEstimate) {
-                        sessionErrors++;
-                        logger.debug('Oggy failed to estimate nutrition, skipping', { attempt: i + 1 });
-                        continue;
-                    }
+                    const oggyEstimate = await self._getOggyEstimate(userId, question.food_description);
+                    if (!oggyEstimate) return { status: 'error', attempt: i + 1 };
 
                     // Step 3: Evaluate the answer
                     const evaluation = generator.evaluateAnswer(question, oggyEstimate);
 
-                    if (evaluation.correct) {
-                        sessionCorrect++;
-                        this.stats.correct++;
-                    } else {
-                        sessionIncorrect++;
-                        this.stats.incorrect++;
-
-                        // Step 4: Create memory card for wrong answers
-                        await this._createCorrectionMemory(userId, question, oggyEstimate, evaluation);
+                    // Step 4: Create memory card for wrong answers
+                    if (!evaluation.correct) {
+                        await self._createCorrectionMemory(userId, question, oggyEstimate, evaluation);
                     }
-
-                    this.stats.total_attempts++;
 
                     logger.debug('Diet practice attempt completed', {
                         sessionId,
@@ -197,15 +202,23 @@ class DietSelfDrivenLearning {
                         errors: evaluation.errors
                     });
 
-                    // Brief delay between attempts
-                    await this._sleep(200);
-                } catch (error) {
+                    return { status: 'done', correct: evaluation.correct, attempt: i + 1 };
+                },
+                3,
+                { operationName: 'diet-sdl-practice', interTaskDelayMs: 200 }
+            );
+
+            for (const r of attemptResult.results) {
+                if (!r.success || r.value.status === 'error') {
                     sessionErrors++;
-                    logger.logError(error, {
-                        operation: 'dietSelfDrivenLearning._runSession.attempt',
-                        sessionId,
-                        attempt: i + 1
-                    });
+                } else if (r.value.correct) {
+                    sessionCorrect++;
+                    this.stats.correct++;
+                    this.stats.total_attempts++;
+                } else {
+                    sessionIncorrect++;
+                    this.stats.incorrect++;
+                    this.stats.total_attempts++;
                 }
             }
 

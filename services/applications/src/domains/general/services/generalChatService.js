@@ -213,26 +213,21 @@ Create only ONE entry per transaction. When confirmed, append:
         ];
 
         try {
-            // Oggy response (with memory)
-            const oggyResolved = await providerResolver.getAdapter(userId, 'oggy');
-            const oggyResult = await this.openaiBreaker.execute(() =>
-                oggyResolved.adapter.chatCompletion({
-                    model: oggyResolved.model,
-                    messages: chatMessages,
-                    temperature: 0.7,
-                    max_tokens: 1000
-                })
-            );
+            // Run Oggy + Base responses in parallel (independent LLM calls)
+            const oggyResolvedP = providerResolver.getAdapter(userId, 'oggy');
+            const baseResolvedP = providerResolver.getAdapter(userId, 'base');
+            const [oggyResolved, baseResolved] = await Promise.all([oggyResolvedP, baseResolvedP]);
 
-            const oggyText = oggyResult.text;
-            costGovernor.recordUsage(oggyResult.tokens_used || Math.ceil((systemPrompt.length + message.length + oggyText.length) / 4));
-            providerResolver.logRequest(userId, oggyResolved.provider, oggyResolved.model, 'oggy', 'generalChat', oggyResult.tokens_used, oggyResult.latency_ms, true, null);
-
-            // Base model response (no memory)
-            let baseText = '';
-            try {
-                const baseResolved = await providerResolver.getAdapter(userId, 'base');
-                const baseResult = await baseResolved.adapter.chatCompletion({
+            const [oggyResult, baseResult] = await Promise.all([
+                this.openaiBreaker.execute(() =>
+                    oggyResolved.adapter.chatCompletion({
+                        model: oggyResolved.model,
+                        messages: chatMessages,
+                        temperature: 0.7,
+                        max_tokens: 1000
+                    })
+                ),
+                baseResolved.adapter.chatCompletion({
                     model: baseResolved.model,
                     messages: [
                         { role: 'system', content: `You are a helpful AI assistant.\nToday is ${todayStr}. When the user refers to relative dates like "yesterday" or "last week", use today's date to resolve them.` },
@@ -241,11 +236,16 @@ Create only ONE entry per transaction. When confirmed, append:
                     ],
                     temperature: 0.7,
                     max_tokens: 1000
-                });
-                baseText = baseResult.text;
+                }).catch(err => ({ text: 'Base model unavailable.', tokens_used: 0, latency_ms: 0, _failed: true }))
+            ]);
+
+            const oggyText = oggyResult.text;
+            costGovernor.recordUsage(oggyResult.tokens_used || Math.ceil((systemPrompt.length + message.length + oggyText.length) / 4));
+            providerResolver.logRequest(userId, oggyResolved.provider, oggyResolved.model, 'oggy', 'generalChat', oggyResult.tokens_used, oggyResult.latency_ms, true, null);
+
+            const baseText = baseResult.text;
+            if (!baseResult._failed) {
                 providerResolver.logRequest(userId, baseResolved.provider, baseResolved.model, 'base', 'generalChat', baseResult.tokens_used, baseResult.latency_ms, true, null);
-            } catch (err) {
-                baseText = 'Base model unavailable.';
             }
 
             // Auto behavior learning (async, non-blocking)

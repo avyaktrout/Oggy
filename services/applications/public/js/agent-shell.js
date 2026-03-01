@@ -95,11 +95,13 @@ class AgentShell {
         // Check if training is running
         if (this.config.capabilities.training) {
             this._checkRunningTraining();
+            this._loadIntentOptions();
         }
 
         // Load inquiry preferences
         if (this.config.capabilities.inquiries) {
             this._loadInquiryPreferences();
+            this._loadFocusIntents();
         }
     }
 
@@ -119,6 +121,56 @@ class AgentShell {
             if (sugToggle) sugToggle.checked = settings.receive_suggestions === true;
             if (sugInterval) sugInterval.value = String(settings.suggestion_interval_seconds || 900);
         } catch (e) { /* Suggestion system may not be ready */ }
+    }
+
+    async _loadFocusIntents() {
+        const container = document.getElementById('focus-intents-list');
+        if (!container) return;
+        const self = this;
+        try {
+            const [intentsData, focusData] = await Promise.all([
+                apiCall('GET', `/v0/intents?domain=${this.config.domain}`),
+                apiCall('GET', `/v0/inquiries/focus-intents?user_id=${USER_ID}`)
+            ]);
+            const intents = intentsData.intents || [];
+            const focusIntents = focusData.focus_intents || [];
+            if (intents.length === 0) {
+                container.innerHTML = '<span style="font-size:12px;color:var(--text-muted)">No intents available for this domain.</span>';
+                return;
+            }
+            container.innerHTML = intents.map(i => {
+                const active = focusIntents.includes(i.intent_name);
+                return `<label class="intent-chip ${active ? 'intent-chip-active' : ''}" data-intent="${i.intent_name}" title="${i.description || ''}">
+                    <input type="checkbox" value="${i.intent_name}" ${active ? 'checked' : ''} style="display:none">
+                    <span>${i.display_name}</span>
+                </label>`;
+            }).join('');
+
+            container.querySelectorAll('.intent-chip').forEach(chip => {
+                chip.addEventListener('click', () => {
+                    const cb = chip.querySelector('input');
+                    cb.checked = !cb.checked;
+                    chip.classList.toggle('intent-chip-active', cb.checked);
+                    self._saveFocusIntents();
+                });
+            });
+        } catch (e) { /* Intent system may not be ready */ }
+    }
+
+    async _saveFocusIntents() {
+        const container = document.getElementById('focus-intents-list');
+        if (!container) return;
+        const selected = Array.from(container.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
+        try {
+            // Get existing focus intents for other domains to preserve them
+            const existing = await apiCall('GET', `/v0/inquiries/focus-intents?user_id=${USER_ID}`);
+            const otherDomainIntents = (existing.focus_intents || []).filter(i => !i.startsWith(this.config.domain + '.'));
+            const merged = [...otherDomainIntents, ...selected];
+            await apiCall('PUT', '/v0/inquiries/focus-intents', { user_id: USER_ID, focus_intents: merged });
+            showToast(selected.length > 0 ? `Focus: ${selected.length} intent(s) selected` : 'Focus intents cleared');
+        } catch (err) {
+            showToast('Failed to update focus intents: ' + err.message, 'error');
+        }
     }
 
     _renderNav() {
@@ -200,6 +252,52 @@ class AgentShell {
                     showToast('Suggestion frequency updated');
                 } catch (err) { showToast('Failed to update: ' + err.message, 'error'); }
             };
+
+            // Custom intent creation
+            window.toggleCustomIntentForm = function() {
+                const form = document.getElementById('custom-intent-form');
+                if (form) form.style.display = form.style.display === 'none' ? 'block' : 'none';
+            };
+            window.createCustomIntent = async function() {
+                const nameInput = document.getElementById('custom-intent-name');
+                const displayInput = document.getElementById('custom-intent-display');
+                const descInput = document.getElementById('custom-intent-desc');
+                const criteriaInput = document.getElementById('custom-intent-criteria');
+                const domain = self.config.domain;
+                const rawName = (nameInput.value || '').trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+                const displayName = (displayInput.value || '').trim();
+                const description = (descInput.value || '').trim();
+                const criteria = (criteriaInput.value || '').trim();
+
+                if (!rawName || !displayName) {
+                    showToast('Name and display name are required', 'error');
+                    return;
+                }
+                const intentName = `${domain}.${rawName}`;
+
+                try {
+                    await apiCall('POST', '/v0/intents', {
+                        user_id: USER_ID,
+                        intent_name: intentName,
+                        domain: domain,
+                        display_name: displayName,
+                        description: description || null,
+                        success_criteria: criteria || null
+                    });
+                    showToast(`Intent "${displayName}" created`);
+                    nameInput.value = '';
+                    displayInput.value = '';
+                    descInput.value = '';
+                    criteriaInput.value = '';
+                    document.getElementById('custom-intent-form').style.display = 'none';
+                    // Reload focus intents to show new intent
+                    self._loadFocusIntents();
+                    self._loadIntentOptions();
+                } catch (err) {
+                    const msg = err.message || 'Failed to create intent';
+                    showToast(msg.includes('already exists') ? 'Intent name already exists' : msg, 'error');
+                }
+            };
         }
 
         // Observer
@@ -216,11 +314,12 @@ class AgentShell {
                     if (merchEl) merchEl.checked = config.receive_merchant_packs === true;
                 } catch (e) { /* Observer may not be ready */ }
             };
-            const loadObserverPacks = async () => {
+            const loadObserverPacks = async (intentFilter) => {
                 const container = document.getElementById('observer-packs');
                 if (!container) return;
                 try {
-                    const data = await apiCall('GET', `${obsBase}/packs`);
+                    const filterParam = intentFilter ? `?intent=${encodeURIComponent(intentFilter)}` : '';
+                    const data = await apiCall('GET', `${obsBase}/packs${filterParam}`);
                     if (!data.packs || data.packs.length === 0) {
                         container.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px 0">No packs available yet. Run an observer job to generate packs.</div>';
                         return;
@@ -230,13 +329,31 @@ class AgentShell {
                         const rules = pack.rules || [];
                         const isApplied = pack.status === 'applied';
                         const isRolledBack = pack.status === 'rolled_back';
+                        const verifiedBadge = pack.verified_for_intents ? '<span class="intent-verified-badge">Verified</span>' : (pack.intent_tags && pack.intent_tags.length > 0 ? '<span class="intent-unverified-badge">Unverified</span>' : '');
                         return `<div class="observer-pack-card">
-                            <div class="observer-pack-header"><strong>${pack.name}</strong><span class="observer-risk-badge" style="background:${riskColor}">${pack.risk_level}</span></div>
-                            <div class="observer-pack-meta">${rules.length} rules | ${(pack.categories_covered || []).join(', ') || 'various'} | +${pack.expected_lift || 0}% expected lift</div>
+                            <div class="observer-pack-header"><strong>${pack.name}</strong><span class="observer-risk-badge" style="background:${riskColor}">${pack.risk_level}</span>${verifiedBadge}</div>
+                            <div class="observer-pack-meta">${rules.length} rules | ${(pack.categories_covered || pack.weakness_types || []).join(', ') || 'various'} | +${pack.expected_lift || 0}% expected lift</div>
+                            ${(pack.intent_tags || []).length > 0 ? `<div class="observer-pack-intents">${pack.intent_tags.map(t => `<span class="intent-badge">${t.split('.').pop().replace(/_/g, ' ')}</span>`).join('')}</div>` : ''}
                             <div class="observer-pack-actions">${isApplied ? `<button class="btn btn-sm btn-danger" onclick="rollbackPack('${pack.pack_id}')">Rollback</button><span style="color:var(--success);font-size:12px">Applied</span>` : isRolledBack ? `<button class="btn btn-sm btn-success" onclick="applyPack('${pack.pack_id}')">Apply</button><span style="color:var(--text-muted);font-size:12px">Rolled back</span>` : `<button class="btn btn-sm btn-success" onclick="applyPack('${pack.pack_id}')">Apply</button>`}</div>
                         </div>`;
                     }).join('');
                 } catch (e) { container.innerHTML = '<div style="color:var(--text-muted);font-size:13px">Failed to load packs</div>'; }
+            };
+            const populateIntentFilter = async () => {
+                const filterSelect = document.getElementById('observer-intent-filter');
+                if (!filterSelect) return;
+                try {
+                    const data = await apiCall('GET', `/v0/intents?domain=${self.config.domain}`);
+                    if (data.intents && data.intents.length > 0) {
+                        filterSelect.innerHTML = '<option value="">All packs</option>' +
+                            data.intents.map(i => `<option value="${i.intent_name}">${i.display_name}</option>`).join('');
+                    }
+                } catch (e) { /* Intent system may not be ready */ }
+            };
+            window.filterPacksByIntent = function() {
+                const filterSelect = document.getElementById('observer-intent-filter');
+                const value = filterSelect ? filterSelect.value : '';
+                loadObserverPacks(value);
             };
             const timeSince = (date) => {
                 const s = Math.floor((Date.now() - date.getTime()) / 1000);
@@ -286,6 +403,7 @@ class AgentShell {
                     loadObserverConfig();
                     loadObserverJobStatus();
                     loadObserverPacks();
+                    populateIntentFilter();
                 } else {
                     body.style.display = 'none';
                     arrow.innerHTML = '&#9654;';
@@ -565,6 +683,84 @@ class AgentShell {
         }
     }
 
+    async _loadIntentOptions() {
+        const container = document.getElementById('train-intents');
+        if (!container) return;
+        const self = this;
+        try {
+            const data = await apiCall('GET', `/v0/intents?domain=${this.config.domain}`);
+            if (data.intents && data.intents.length > 0) {
+                container.innerHTML = data.intents.map(i =>
+                    `<label class="intent-chip-train" data-value="${i.intent_name}" data-focus="" title="${i.description || ''}">
+                        <span class="intent-chip-label">${i.display_name}</span>
+                        <span class="intent-chip-focus-tag"></span>
+                    </label>`
+                ).join('');
+
+                // Cycle: off → low → medium → high → off
+                const FOCUS_CYCLE = ['', 'low', 'medium', 'high'];
+                container.querySelectorAll('.intent-chip-train').forEach(chip => {
+                    chip.addEventListener('click', () => {
+                        const current = chip.dataset.focus || '';
+                        const idx = FOCUS_CYCLE.indexOf(current);
+                        const next = FOCUS_CYCLE[(idx + 1) % FOCUS_CYCLE.length];
+                        chip.dataset.focus = next;
+                        const tag = chip.querySelector('.intent-chip-focus-tag');
+                        if (next) {
+                            tag.textContent = next.charAt(0).toUpperCase();
+                            tag.className = `intent-chip-focus-tag focus-${next}`;
+                            chip.className = `intent-chip-train intent-chip-focus-${next}`;
+                        } else {
+                            tag.textContent = '';
+                            tag.className = 'intent-chip-focus-tag';
+                            chip.className = 'intent-chip-train';
+                        }
+                    });
+                });
+
+                container.closest('.form-group').style.display = '';
+
+                // Auto-select intents if navigated from analytics "train on weakest"
+                const params = new URLSearchParams(window.location.search);
+                if (params.get('auto_train') === '1') {
+                    try {
+                        const weakest = JSON.parse(sessionStorage.getItem('oggy_train_intents') || '[]');
+                        if (weakest.length > 0) {
+                            container.querySelectorAll('.intent-chip-train').forEach(chip => {
+                                if (weakest.includes(chip.dataset.value)) {
+                                    chip.dataset.focus = 'high';
+                                    chip.className = 'intent-chip-train intent-chip-focus-high';
+                                    const tag = chip.querySelector('.intent-chip-focus-tag');
+                                    tag.textContent = 'H';
+                                    tag.className = 'intent-chip-focus-tag focus-high';
+                                }
+                            });
+                            sessionStorage.removeItem('oggy_train_intents');
+                            showToast(`Pre-selected ${weakest.length} weakest intent(s) for training (high focus)`);
+                        }
+                    } catch (e) { /* ignore */ }
+                }
+            }
+        } catch (e) { /* Intent system may not be ready */ }
+    }
+
+    _getTrainingIntentFocus() {
+        const container = document.getElementById('train-intents');
+        if (!container) return { target_intents: null, intent_focus: null };
+        const selected = [];
+        const focusMap = {};
+        container.querySelectorAll('.intent-chip-train').forEach(chip => {
+            const focus = chip.dataset.focus;
+            if (focus) {
+                const name = chip.dataset.value;
+                selected.push(name);
+                focusMap[name] = focus;
+            }
+        });
+        if (selected.length === 0) return { target_intents: null, intent_focus: null };
+        return { target_intents: selected, intent_focus: focusMap };
+    }
+
     // --- Training ---
     async startTraining() {
         const duration = parseInt(document.getElementById('train-duration')?.value || '10');
@@ -577,6 +773,11 @@ class AgentShell {
 
         const reqBody = { user_id: USER_ID, duration_minutes: duration === 0 ? null : duration, run_benchmarks: true, domain: this.config.domain };
         if (email) { reqBody.report_email = email; reqBody.report_interval = reportInterval; }
+        const { target_intents, intent_focus } = this._getTrainingIntentFocus();
+        if (target_intents) {
+            reqBody.target_intents = target_intents;
+            reqBody.intent_focus = intent_focus;
+        }
 
         try {
             await apiCall('POST', `${this.config.trainingEndpoint}/start`, reqBody);

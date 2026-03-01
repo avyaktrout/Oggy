@@ -10,6 +10,7 @@ const { query } = require('../../../shared/utils/db');
 const logger = require('../../../shared/utils/logger');
 const providerResolver = require('../../../shared/providers/providerResolver');
 const harmonySuggestionService = require('./harmonySuggestionService');
+const { parallelMap } = require('../../../shared/utils/parallel');
 
 const HARMONY_DIMENSIONS = 'Balance (safety/economic stability), Flow (mobility/infrastructure access), Compassion (health/housing/food security), Discernment (education/civic engagement), Awareness (environmental/community engagement), Expression (arts/cultural freedom)';
 const DIMENSION_NAMES = ['balance', 'flow', 'compassion', 'discernment', 'awareness', 'expression'];
@@ -40,15 +41,14 @@ async function testOnBenchmark({ benchmark_identifier, user_id }) {
     const trainingState = await _captureTrainingState(user_id);
     const baseStartTime = Date.now();
 
-    // Run Base first (control)
-    for (const scenario of scenarios) {
-        try {
-            const result = await _testBase(scenario);
-            baseResults.push(result);
-        } catch (err) {
-            baseResults.push({ correct: false, error: err.message });
-        }
-    }
+    // Run Base in parallel (control) — matches Oggy wave pattern
+    const baseEvalResult = await parallelMap(
+        scenarios,
+        async (scenario) => _testBase(scenario),
+        5,
+        { operationName: 'harmony-benchmark-base', interTaskDelayMs: 100 }
+    );
+    baseResults.push(...baseEvalResult.results.map(r => r.success ? r.value : { correct: false, error: r.error }));
 
     const baseDuration = Date.now() - baseStartTime;
     const oggyTimeout = baseDuration * 2.5; // Generous timeout for memory overhead
@@ -200,21 +200,20 @@ function _evaluateMatch(answer, correctAnswer, scenarioType) {
 
 async function _captureTrainingState(userId) {
     try {
-        const stateResult = await query(
-            `SELECT scale, difficulty_level FROM continuous_learning_state WHERE user_id = $1 AND domain = 'harmony'`,
-            [userId]
-        );
-        const state = stateResult.rows[0] || { scale: 1, difficulty_level: 1 };
-
         const memoryHost = process.env.MEMORY_SERVICE_URL || 'http://memory-service:3000';
-        let cardCount = 0;
-        try {
-            const resp = await fetch(`${memoryHost}/cards/count?user_id=${userId}&domain=harmony`);
-            if (resp.ok) {
-                const data = await resp.json();
-                cardCount = data.count || 0;
-            }
-        } catch (_) {}
+
+        // Run DB query + memory HTTP call in parallel (independent)
+        const [stateResult, cardCount] = await Promise.all([
+            query(
+                `SELECT scale, difficulty_level FROM continuous_learning_state WHERE user_id = $1 AND domain = 'harmony'`,
+                [userId]
+            ),
+            fetch(`${memoryHost}/cards/count?user_id=${userId}&domain=harmony`)
+                .then(resp => resp.ok ? resp.json().then(d => d.count || 0) : 0)
+                .catch(() => 0)
+        ]);
+
+        const state = stateResult.rows[0] || { scale: 1, difficulty_level: 1 };
 
         return {
             scale: state.scale,

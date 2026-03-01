@@ -28,9 +28,69 @@ const TOLERANCE = {
     fat_g: 0.25       // 25%
 };
 
+// Intent → generator type mapping for focus-biased selection
+const INTENT_GENERATOR_MAP = {
+    'diet.estimate_nutrition': ['branded_foods', 'ai_generated'],
+    'diet.log_entry_from_text': ['user_entries', 'ai_generated'],
+    'diet.verify_with_user': ['user_entries'],
+    'diet.categorize_food_type': ['branded_foods', 'ai_generated'],
+    'diet.ask_clarifying_questions': ['ai_generated'],
+    'diet.explain_nutrition_assumptions': ['ai_generated'],
+};
+
 class DietAssessmentGenerator {
     constructor() {
         this.openaiBreaker = circuitBreakerRegistry.getOrCreate('openai-api');
+        this._focusSourceMix = null;
+    }
+
+    /**
+     * Set focus intents to bias which generator types are used
+     * @param {string[]} intentNames - e.g. ['diet.estimate_nutrition']
+     * @param {object} [intentFocus] - Optional focus levels: { intent_name: 'low'|'medium'|'high' }
+     */
+    setFocusIntents(intentNames, intentFocus) {
+        if (!intentNames || intentNames.length === 0) {
+            this._focusSourceMix = null;
+            return;
+        }
+
+        // Focus level weights: how much of the mix goes to preferred types
+        const FOCUS_WEIGHTS = { low: 0.50, medium: 0.70, high: 0.90 };
+
+        // Collect preferred generator types from intents, weighted by focus level
+        const typeWeights = {};
+        for (const name of intentNames) {
+            const types = INTENT_GENERATOR_MAP[name];
+            if (!types) continue;
+            const focusLevel = (intentFocus && intentFocus[name]) || 'medium';
+            const weight = FOCUS_WEIGHTS[focusLevel] || FOCUS_WEIGHTS.medium;
+            for (const t of types) {
+                typeWeights[t] = Math.max(typeWeights[t] || 0, weight);
+            }
+        }
+
+        const preferred = Object.keys(typeWeights);
+        if (preferred.length === 0) {
+            this._focusSourceMix = null;
+            return;
+        }
+
+        // Compute average focus weight across preferred types
+        const avgWeight = preferred.reduce((sum, t) => sum + typeWeights[t], 0) / preferred.length;
+        const remainderShare = 1 - avgWeight;
+
+        // Build biased source mix
+        const allTypes = ['user_entries', 'branded_foods', 'ai_generated'];
+        const nonPreferred = allTypes.filter(t => !preferred.includes(t));
+        const mix = {};
+        const preferredShare = avgWeight / preferred.length;
+        const otherShare = nonPreferred.length > 0 ? remainderShare / nonPreferred.length : 0;
+        for (const t of preferred) mix[t] = preferredShare;
+        for (const t of nonPreferred) mix[t] = otherShare;
+
+        this._focusSourceMix = mix;
+        logger.info('Diet generator focus mix set', { intents: intentNames, intentFocus, mix });
     }
 
     /**
@@ -42,15 +102,16 @@ class DietAssessmentGenerator {
     async generateQuestion(userId, difficulty = 3) {
         const rand = Math.random();
         let question = null;
+        const mix = this._focusSourceMix || SOURCE_MIX;
 
         try {
-            if (rand < SOURCE_MIX.user_entries) {
+            if (rand < mix.user_entries) {
                 question = await this._generateFromUserEntries(userId, difficulty);
-            } else if (rand < SOURCE_MIX.user_entries + SOURCE_MIX.branded_foods) {
+            } else if (rand < mix.user_entries + mix.branded_foods) {
                 question = await this._generateFromBrandedFoods(difficulty);
             }
 
-            // AI-generated fallback or primary (30%)
+            // AI-generated fallback or primary
             if (!question) {
                 question = await this._generateFromAI(userId, difficulty);
             }

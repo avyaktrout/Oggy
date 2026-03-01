@@ -56,6 +56,15 @@
                     </select>
                 </div>
             </div>
+            <div class="report-row" style="margin-top:4px">
+                <div class="form-group" style="margin-bottom:0;flex:1;display:none">
+                    <div style="display:flex;align-items:center;justify-content:space-between">
+                        <label>Focus intents <span style="font-weight:normal;color:var(--text-muted)">(click to cycle: Low / Medium / High)</span></label>
+                        <button class="btn btn-sm btn-outline" onclick="toggleCustomIntentForm()" style="font-size:11px;padding:2px 8px">+ Custom</button>
+                    </div>
+                    <div id="train-intents" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px"></div>
+                </div>
+            </div>
             <div class="training-status" id="training-status" style="display:none">
                 <div class="training-stat">
                     <div class="training-stat-label">Level</div>
@@ -107,9 +116,9 @@
                     </label>
                 </div>
             </div>
-            <div class="inquiry-settings-desc">Clarification questions (uncategorized payments, ambiguous merchants) always appear. Suggestions follow the schedule below.</div>
+            <div class="inquiry-settings-desc">Clarification questions always appear. Suggestions follow the schedule below.</div>
             <div class="suggestion-settings" id="suggestion-settings">
-                <label class="toggle-label" title="When enabled, Oggy proactively suggests cost-cutting tips and spending insights">
+                <label class="toggle-label" title="When enabled, Oggy proactively suggests nutrition tips and diet insights">
                     <input type="checkbox" id="suggestion-toggle" onchange="toggleSuggestions(this.checked)">
                     <span class="toggle-switch"></span>
                     <span class="toggle-text">Receive suggestions</span>
@@ -128,6 +137,41 @@
                         <option value="86400">Once a day</option>
                     </select>
                 </label>
+            </div>
+            <div class="focus-intents-section">
+                <div class="focus-intents-header">
+                    <span class="focus-intents-title">Focus Intents</span>
+                    <button class="btn btn-sm btn-outline" onclick="toggleCustomIntentForm()" style="font-size:11px;padding:3px 10px">+ Custom</button>
+                </div>
+                <div class="focus-intents-desc">Select skills to focus inquiry suggestions on. Oggy will ask questions related to these areas.</div>
+                <div id="focus-intents-list" class="focus-intents-chips">
+                    <span style="font-size:12px;color:var(--text-muted)">Loading intents...</span>
+                </div>
+                <div id="custom-intent-form" class="custom-intent-form" style="display:none">
+                    <div class="custom-intent-form-title">Create Custom Intent</div>
+                    <div class="custom-intent-row">
+                        <div class="form-group" style="margin-bottom:0;flex:1">
+                            <label style="font-size:11px">Skill Name</label>
+                            <input type="text" id="custom-intent-name" placeholder="e.g. track_macros" style="font-size:12px;padding:5px 8px">
+                        </div>
+                        <div class="form-group" style="margin-bottom:0;flex:1">
+                            <label style="font-size:11px">Display Name</label>
+                            <input type="text" id="custom-intent-display" placeholder="e.g. Track Macros" style="font-size:12px;padding:5px 8px">
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-bottom:0;margin-top:6px">
+                        <label style="font-size:11px">Description <span style="font-weight:normal;color:var(--text-muted)">(optional)</span></label>
+                        <input type="text" id="custom-intent-desc" placeholder="What should Oggy learn about?" style="font-size:12px;padding:5px 8px">
+                    </div>
+                    <div class="form-group" style="margin-bottom:0;margin-top:6px">
+                        <label style="font-size:11px">Success Criteria <span style="font-weight:normal;color:var(--text-muted)">(optional)</span></label>
+                        <input type="text" id="custom-intent-criteria" placeholder="How to measure success" style="font-size:12px;padding:5px 8px">
+                    </div>
+                    <div style="display:flex;gap:8px;margin-top:8px">
+                        <button class="btn btn-sm btn-primary" onclick="createCustomIntent()" style="font-size:11px">Create</button>
+                        <button class="btn btn-sm btn-outline" onclick="toggleCustomIntentForm()" style="font-size:11px">Cancel</button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -149,10 +193,10 @@
                         <span class="toggle-switch"></span>
                         <span class="toggle-text">Receive suggestions</span>
                     </label>
-                    <label class="toggle-label" title="Receive merchant-specific rule packs">
+                    <label class="toggle-label" title="Receive nutrition improvement packs">
                         <input type="checkbox" id="observer-merchant" onchange="updateObserverConfig('receive_merchant_packs', this.checked)">
                         <span class="toggle-switch"></span>
-                        <span class="toggle-text">Merchant packs</span>
+                        <span class="toggle-text">Nutrition packs</span>
                     </label>
                 </div>
                 <!-- Observer Job Dashboard -->
@@ -176,6 +220,12 @@
                     <div class="observer-job-meta" id="observer-job-meta"></div>
                 </div>
 
+                <div style="margin-bottom:6px;display:flex;align-items:center;gap:8px">
+                    <label style="font-size:12px;color:var(--text-muted);white-space:nowrap">Filter by intent:</label>
+                    <select id="observer-intent-filter" onchange="filterPacksByIntent()" style="font-size:12px;padding:2px 6px;border-radius:4px;border:1px solid var(--border);flex:1">
+                        <option value="">All packs</option>
+                    </select>
+                </div>
                 <div class="observer-packs" id="observer-packs">
                     <div style="color:var(--text-muted);font-size:13px;padding:8px 0">Loading packs...</div>
                 </div>
