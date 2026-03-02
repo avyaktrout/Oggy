@@ -1,13 +1,24 @@
 // Inquiry notification widget - loaded on all pages
 (function() {
+    // Track which inquiry is currently displayed to avoid re-render while user is interacting
+    let _displayedInquiryId = null;
+
     window.updateInquiryWidget = function(inquiries) {
         const container = document.getElementById('inquiry-banner-container');
         if (!container || !inquiries || inquiries.length === 0) {
             if (container) container.innerHTML = '';
+            _displayedInquiryId = null;
             return;
         }
 
         const inquiry = inquiries[0]; // Show first pending inquiry
+
+        // Skip re-render if the same inquiry is already displayed — prevents
+        // wiping the textarea / selected option while the user is interacting
+        if (_displayedInquiryId === inquiry.inquiry_id) {
+            return;
+        }
+
         const options = inquiry.context?.options || [];
         const isConfirmation = inquiry.question_type === 'high_confidence_confirmation';
         const isAdvice = inquiry.question_type === 'ai_advice';
@@ -27,6 +38,7 @@
                     </div>
                 </div>
             `;
+            _displayedInquiryId = inquiry.inquiry_id;
             return;
         }
 
@@ -52,6 +64,7 @@
                     </div>
                 </div>
             `;
+            _displayedInquiryId = inquiry.inquiry_id;
             return;
         }
 
@@ -92,6 +105,7 @@
                 </div>
             </div>
         `;
+        _displayedInquiryId = inquiry.inquiry_id;
     };
 
     window.showConfirmationCorrection = function(inquiryId) {
@@ -136,6 +150,7 @@
                 additional_context: additional_context || detailText || null
             });
             _selectedOption = null;
+            _displayedInquiryId = null;
             showToast('Thanks! Oggy learned from your answer.');
             checkInquiries();
         } catch (err) {
@@ -149,6 +164,7 @@
                 user_id: USER_ID,
                 answer: answer
             });
+            _displayedInquiryId = null;
             showToast('Thanks! Oggy learned from your answer.');
             checkInquiries();
         } catch (err) {
@@ -162,6 +178,7 @@
                 user_id: USER_ID,
                 answer: 'saved'
             });
+            _displayedInquiryId = null;
             showToast('Tip saved! Oggy will remember this.');
             checkInquiries();
             loadSavedTips();
@@ -181,6 +198,7 @@
             await apiCall('POST', `/v0/inquiries/${inquiryId}/dismiss`, {
                 user_id: USER_ID
             });
+            _displayedInquiryId = null;
             checkInquiries();
         } catch (err) {
             showToast(err.message, 'error');

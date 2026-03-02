@@ -50,6 +50,31 @@ const INTENT_INQUIRY_TOPICS = {
     'harmony.add_indicator': ['what new data sources you want tracked', 'indicator format preferences'],
     'harmony.explain_metric_change': ['how much context you want on score changes', 'explanation detail level'],
     'harmony.suggest_interventions': ['intervention style preferences', 'proactive vs reactive recommendations'],
+    // Understand The User (cross-domain)
+    'payments.understand_user': [
+        'your financial goals for the next 6-12 months', 'what spending categories matter most to you',
+        'how you want Oggy to flag or alert on spending', 'your savings targets and priorities',
+        'what budgeting approach feels natural to you', 'financial habits you want to build or break',
+        'how detailed you want spending breakdowns to be'
+    ],
+    'diet.understand_user': [
+        'your dietary goals and nutritional priorities', 'any dietary restrictions or preferences',
+        'what a successful day of eating looks like for you', 'how you want Oggy to track your meals',
+        'your relationship with calorie counting and macros', 'health outcomes you are working toward',
+        'eating habits you want to improve or maintain'
+    ],
+    'general.understand_user': [
+        'what you mainly use this chat for', 'your goals and what you are working on right now',
+        'how Oggy can be most helpful to you day-to-day', 'topics you want Oggy to proactively help with',
+        'your preferred response style and depth', 'projects or areas of focus in your life',
+        'what would make Oggy indispensable for you'
+    ],
+    'harmony.understand_user': [
+        'which city wellbeing dimensions matter most to you', 'your civic engagement goals and interests',
+        'what city or community you care about improving', 'how you want to use the harmony map insights',
+        'policy areas you are passionate about', 'what kind of city data you find most actionable',
+        'your vision for community improvement'
+    ],
 };
 
 // Domain-specific best-practices guidance for LLM prompts

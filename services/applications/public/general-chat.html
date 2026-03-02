@@ -38,6 +38,7 @@
                     <button class="btn btn-danger btn-sm" id="train-stop" onclick="shellStopTraining()" style="display:none">Stop</button>
                 </div>
             </div>
+            <div class="section-guide">Start a training session to help Oggy practice answering questions and improve over time. Pick a duration, hit Start, and Oggy will run practice rounds in the background. You can keep chatting while it trains.</div>
             <div class="report-row" id="training-report-options">
                 <div class="form-group" style="margin-bottom:0;flex:1;min-width:180px">
                     <label>Email for reports</label>
@@ -116,6 +117,7 @@
                     </label>
                 </div>
             </div>
+            <div class="section-guide">Oggy will periodically ask you questions to better understand your preferences and goals. Select Focus Intents below to guide what Oggy asks about — for example, choose "Understand The User" to help Oggy learn how to be most useful to you.</div>
             <div class="inquiry-settings-desc">Clarification questions always appear. Suggestions follow the schedule below.</div>
             <div class="suggestion-settings" id="suggestion-settings">
                 <label class="toggle-label" title="When enabled, Oggy proactively suggests tips and insights">
@@ -176,6 +178,7 @@
         </div>
 
         <!-- Project Selector -->
+        <div class="section-guide" style="margin-bottom:8px">Choose a project to give Oggy context about what you're working on. Conversations and learning will be tied to that project. Create projects from the Manage Projects page.</div>
         <div style="margin-bottom:12px;display:flex;align-items:center;gap:12px">
             <label style="font-size:13px;font-weight:600;color:var(--text-muted)">PROJECT:</label>
             <select id="project-select" onchange="selectProject(this.value)" style="padding:6px 12px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;min-width:200px">
@@ -191,6 +194,7 @@
                 <span class="observer-toggle-arrow" id="observer-arrow">&#9654;</span>
             </div>
             <div class="observer-panel-body" id="observer-body" style="display:none">
+                <div class="section-guide" style="margin-bottom:10px">The Observer watches patterns across users and suggests improvement packs for Oggy. Enable "Receive suggestions" to get packs, then review and apply or dismiss them. Toggle "Share learning" to contribute your data anonymously.</div>
                 <div class="observer-toggles">
                     <label class="toggle-label" title="Share anonymized learning data to help improve packs">
                         <input type="checkbox" id="observer-share" onchange="updateObserverConfig('share_learning', this.checked)">
@@ -242,6 +246,7 @@
         </div>
 
         <!-- Chat -->
+        <div class="section-guide" style="margin-bottom:8px">Chat with Oggy on the left (remembers past conversations) and compare with the Base model on the right (no memory). Turn on "Learn from chat" so Oggy improves from your conversations.</div>
         <div class="chat-title-row">
             <h1 class="page-title" style="margin-bottom:0">General Chat</h1>
             <div class="chat-controls">
@@ -286,6 +291,7 @@
 
         <!-- Saved Tips Panel -->
         <div class="saved-tips-panel" id="saved-tips-panel">
+            <div class="section-guide" style="margin-bottom:6px">Tips you've saved from Oggy's suggestions appear here. Click to expand and review or remove them.</div>
             <div class="saved-tips-header" onclick="toggleSavedTips()">
                 <div>
                     <span class="saved-tips-title">Saved Tips</span>
@@ -308,6 +314,7 @@
                 <span class="audit-toggle-arrow" id="audit-arrow">&#9654;</span>
             </div>
             <div class="audit-chat-body" id="audit-body" style="display:none">
+                <div class="section-guide" style="margin-bottom:10px">Ask Oggy how it's doing — things like "What are you struggling with?" or "How has your accuracy changed?" Type your question below.</div>
                 <div class="audit-chat-messages" id="audit-messages">
                     <div class="audit-msg audit-msg-bot">Ask me anything about Oggy&#39;s general chat performance.</div>
                 </div>
