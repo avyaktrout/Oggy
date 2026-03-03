@@ -5,6 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const domainLearningService = require('../services/domainLearningService');
+const { query } = require('../../../shared/utils/db');
 const logger = require('../../../shared/utils/logger');
 
 // Suggest domain tags for a project
@@ -71,10 +72,29 @@ router.get('/domain-tags', async (req, res) => {
 router.post('/domain-learning/build-pack', async (req, res) => {
     try {
         const userId = req.body.user_id;
-        const { tag_id } = req.body;
+        const { tag_id, project_id } = req.body;
         if (!tag_id) return res.status(400).json({ error: 'tag_id required' });
 
-        const pack = await domainLearningService.buildKnowledgePack(userId, tag_id);
+        // Load project intents if project_id provided
+        let intentContext = null;
+        if (project_id) {
+            try {
+                const intentResult = await query(
+                    `SELECT ic.intent_name, ic.display_name, ic.description
+                     FROM project_intents pi
+                     JOIN intent_catalog ic ON pi.intent_name = ic.intent_name
+                     WHERE pi.project_id = $1 AND pi.user_id = $2`,
+                    [project_id, userId]
+                );
+                if (intentResult.rows.length > 0) {
+                    intentContext = intentResult.rows;
+                }
+            } catch (e) {
+                logger.debug('Failed to load project intents for pack build', { error: e.message });
+            }
+        }
+
+        const pack = await domainLearningService.buildKnowledgePack(userId, tag_id, intentContext);
         res.json(pack);
     } catch (err) {
         logger.logError(err, { operation: 'build-knowledge-pack' });

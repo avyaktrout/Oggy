@@ -409,7 +409,7 @@ Respond with ONLY the JSON array.`;
      * Build a knowledge pack for a domain tag.
      * LLM generates 10-20 knowledge cards covering the domain.
      */
-    async buildKnowledgePack(userId, tagId) {
+    async buildKnowledgePack(userId, tagId, intentContext = null) {
         const tagResult = await query(
             'SELECT tag, display_name, description FROM dl_domain_tags WHERE tag_id = $1 AND user_id = $2',
             [tagId, userId]
@@ -424,9 +424,15 @@ Respond with ONLY the JSON array.`;
         );
         const version = versionResult.rows[0].next_version;
 
+        let intentFocus = '';
+        if (intentContext && intentContext.length > 0) {
+            const intentList = intentContext.map(i => `- ${i.display_name}: ${i.description || i.intent_name}`).join('\n');
+            intentFocus = `\n\nFocus the cards with these learning intents in mind:\n${intentList}\nTailor the content to address these specific focus areas within the domain.\n`;
+        }
+
         const prompt = `Generate a comprehensive knowledge pack for the domain: "${tag.display_name || tag.tag}"
 Description: ${tag.description || 'General knowledge about ' + tag.tag}
-
+${intentFocus}
 Create 12-18 knowledge cards covering key concepts, formulas, patterns, and best practices.
 Each card should be a standalone fact/concept that helps a learner.
 

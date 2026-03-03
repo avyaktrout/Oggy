@@ -224,7 +224,7 @@ async function loadProjectTags() {
 async function buildPack(tagId) {
     showToast("Building knowledge pack...", "info");
     try {
-        const data = await apiCall("POST", "/v0/general/domain-learning/build-pack", { tag_id: tagId });
+        const data = await apiCall("POST", "/v0/general/domain-learning/build-pack", { tag_id: tagId, project_id: projectId });
         showToast(`Pack v${data.version} built with ${data.card_count} cards`, "success");
         loadProjectTags();
     } catch (e) {
@@ -759,6 +759,12 @@ async function loadProjectIntents() {
                         await apiCall('DELETE', `/v0/intents/projects/${projectId}/${intentId}?user_id=${USER_ID}`);
                         showToast('Intent unbound from project');
                     }
+                    // Sync bound intents to SDI focus intents
+                    try {
+                        const updatedBound = await apiCall('GET', `/v0/intents/projects/${projectId}`);
+                        const focusNames = (updatedBound.intents || []).map(i => 'general.' + i.intent_name);
+                        await apiCall('PUT', '/v0/inquiries/focus-intents', { focus_intents: focusNames });
+                    } catch (_) { /* non-blocking */ }
                 } catch (err) {
                     // Revert on error
                     cb.checked = !cb.checked;

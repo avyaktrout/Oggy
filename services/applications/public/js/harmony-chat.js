@@ -325,5 +325,115 @@ async function pollSdlSuggestionStatus() {
     } catch (err) { /* ignore on load */ }
 })();
 
+// ──────────────────────────────────────────────────
+// Notes
+// ──────────────────────────────────────────────────
+
+async function loadHarmonyNotes() {
+    try {
+        const data = await apiCall('GET', '/v0/harmony/notes');
+        const notes = data.notes || [];
+        const list = document.getElementById('notes-list');
+        const countEl = document.getElementById('notes-count');
+
+        countEl.textContent = notes.length ? `(${notes.length})` : '';
+
+        if (!notes.length) {
+            list.innerHTML = '<p style="color:var(--text-muted);font-size:13px">No notes yet.</p>';
+            return;
+        }
+
+        // Group by day
+        const grouped = {};
+        notes.forEach(n => {
+            const day = new Date(n.created_at).toLocaleDateString();
+            if (!grouped[day]) grouped[day] = [];
+            grouped[day].push(n);
+        });
+
+        let html = '';
+        for (const [day, dayNotes] of Object.entries(grouped)) {
+            html += `<div style="font-size:11px;font-weight:600;color:var(--text-muted);margin:12px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--border)">${day}</div>`;
+            for (const n of dayNotes) {
+                const time = new Date(n.created_at).toLocaleTimeString();
+                const sourceLabel = n.source_role === 'conversation' ? 'chat' : n.source_role;
+                html += `<div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:8px;font-size:12px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-size:11px;color:var(--text-muted)">
+                        <span>${time} <span style="font-size:10px;color:var(--accent)">${sourceLabel}</span></span>
+                        <button class="btn btn-sm" onclick="deleteHarmonyNote('${n.note_id}')" style="font-size:10px;padding:1px 6px;background:none;border:1px solid var(--border);color:var(--text-muted)">&times;</button>
+                    </div>
+                    <div style="white-space:pre-wrap">${escapeHtml(n.content)}</div>
+                </div>`;
+            }
+        }
+        list.innerHTML = html;
+    } catch (err) {
+        console.error('Failed to load harmony notes', err);
+    }
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+async function saveChatAsNote() {
+    const oggyMsgs = document.getElementById('oggy-messages');
+    const msgs = oggyMsgs.querySelectorAll('.chat-msg');
+    if (msgs.length <= 1) { alert('No conversation to save.'); return; }
+
+    let content = '';
+    msgs.forEach(m => {
+        const role = m.classList.contains('chat-msg-user') ? 'User' : 'Oggy';
+        content += `${role}: ${m.textContent.trim()}\n`;
+    });
+
+    try {
+        await apiCall('POST', '/v0/harmony/notes', { content: content.trim(), source_role: 'conversation' });
+        await loadHarmonyNotes();
+        showToast('Chat saved as note');
+    } catch (err) {
+        alert('Failed to save chat as note: ' + (err.message || err));
+    }
+}
+window.saveChatAsNote = saveChatAsNote;
+
+function toggleAddNote() {
+    const form = document.getElementById('add-note-form');
+    form.style.display = form.style.display === 'none' ? '' : 'none';
+    if (form.style.display !== 'none') document.getElementById('manual-note-input').focus();
+}
+window.toggleAddNote = toggleAddNote;
+
+async function saveManualNote() {
+    const input = document.getElementById('manual-note-input');
+    const content = input.value.trim();
+    if (!content) return;
+    try {
+        await apiCall('POST', '/v0/harmony/notes', { content, source_role: 'manual' });
+        input.value = '';
+        document.getElementById('add-note-form').style.display = 'none';
+        await loadHarmonyNotes();
+        showToast('Note saved');
+    } catch (err) {
+        alert('Failed to save note: ' + (err.message || err));
+    }
+}
+window.saveManualNote = saveManualNote;
+
+async function deleteHarmonyNote(noteId) {
+    try {
+        await apiCall('DELETE', `/v0/harmony/notes/${noteId}`);
+        await loadHarmonyNotes();
+    } catch (err) {
+        alert('Failed to delete note: ' + (err.message || err));
+    }
+}
+window.deleteHarmonyNote = deleteHarmonyNote;
+
+// Load notes on page load
+loadHarmonyNotes();
+
 // Load pending suggestions on page load
 refreshSuggestions();

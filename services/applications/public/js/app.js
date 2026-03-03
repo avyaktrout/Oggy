@@ -118,16 +118,16 @@ function showToast(message, type = 'success') {
 // --- Navigation ---
 const SIDEBAR_APPS = [
     {
-        id: 'payments', label: 'Payments',
+        id: 'payments', label: 'FinSense',
         pages: [
-            { id: 'enter', label: 'Enter Payment', href: '/' },
-            { id: 'view', label: 'View Payments', href: '/payments.html' },
+            { id: 'enter', label: 'Enter Transaction', href: '/' },
+            { id: 'view', label: 'View Transactions', href: '/payments.html' },
             { id: 'chat', label: 'Chat & Training', href: '/chat.html' },
             { id: 'analytics', label: 'Analytics', href: '/analytics.html' }
         ]
     },
     {
-        id: 'general', label: 'General Assistant',
+        id: 'general', label: 'GenExplorer',
         pages: [
             { id: 'chat', label: 'Chat & Training', href: '/general-chat.html' },
             { id: 'projects', label: 'Projects', href: '/general-projects.html' },
@@ -135,7 +135,7 @@ const SIDEBAR_APPS = [
         ]
     },
     {
-        id: 'diet', label: 'Diet Agent',
+        id: 'diet', label: 'HealthAssist',
         pages: [
             { id: 'enter', label: 'Enter Food', href: '/diet-enter.html' },
             { id: 'nutrition', label: 'View Nutrition', href: '/diet-nutrition.html' },

@@ -536,12 +536,31 @@ class InquiryGenerator {
             logger.debug('Failed to load focus intents for inquiry', { error: err.message });
         }
 
+        // Load active project context to make suggestions project-specific
+        let projectContext = '';
+        try {
+            const projectResult = await query(
+                `SELECT p.project_name, p.description
+                 FROM v2_projects p
+                 JOIN project_intents pi ON p.project_id = pi.project_id
+                 WHERE pi.user_id = $1
+                 ORDER BY pi.added_at DESC LIMIT 1`,
+                [userId]
+            );
+            if (projectResult.rows.length > 0) {
+                const proj = projectResult.rows[0];
+                projectContext = `\nThe user is currently working on a project called "${proj.project_name}"${proj.description ? ': ' + proj.description : ''}. Tailor your questions to this project's topic.\n`;
+            }
+        } catch (err) {
+            logger.debug('Failed to load project context for inquiry', { error: err.message });
+        }
+
         const systemPrompt = `You are Oggy, a friendly personal assistant. You need to generate ONE suggestion for the user in the "${guidance.label}" domain.
 
 You can generate either:
 - A "question" to better understand the user's goals, habits, or preferences (with 3-5 multiple choice options)
 - An "advice" tip with actionable guidance based on what you know about the user
-${intentContext}
+${intentContext}${projectContext}
 Best-practice topics to draw from (pick ONE that hasn't been covered):
 ${topics.map(t => `- ${t}`).join('\n')}
 

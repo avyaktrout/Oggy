@@ -41,7 +41,8 @@ router.get('/nodes', async (req, res) => {
         const { scope, parent_id } = req.query;
         let sql = `
             SELECT n.node_id, n.scope, n.name, n.geometry, n.population, n.metadata,
-                   s.harmony, s.e_scaled, s.balance, s.flow, s.care
+                   s.harmony, s.e_scaled, s.balance, s.flow, s.care,
+                   s.awareness, s.expression, s.intent_coherence
             FROM harmony_nodes n
             LEFT JOIN harmony_scores s ON n.node_id = s.node_id
         `;
@@ -401,7 +402,7 @@ const { costGovernor } = require('../../../shared/middleware/costGovernor');
 router.post('/chat', async (req, res) => {
     try {
         const userId = req.userId || req.body.user_id;
-        const { message, conversation_history = [] } = req.body;
+        const { message, conversation_history = [], learn_from_chat = false } = req.body;
         if (!message) return res.status(400).json({ error: 'message is required' });
 
         // Build context from latest city scores
@@ -415,7 +416,7 @@ router.post('/chat', async (req, res) => {
         `);
 
         const cityContext = citiesResult.rows.map(c =>
-            `${c.name}: H=${((c.harmony||0)*100).toFixed(1)}% E=${((c.e_scaled||0)*100).toFixed(1)}% B=${((c.balance||0)*100).toFixed(1)}% F=${((c.flow||0)*100).toFixed(1)}% C=${((c.care||0)*100).toFixed(1)}% S=${((c.intent_coherence||0)*100).toFixed(1)}%`
+            `${c.name}: H=${((c.harmony||0)*100).toFixed(1)}% E=${((c.e_scaled||0)*100).toFixed(1)}% B=${((c.balance||0)*100).toFixed(1)}% F=${((c.flow||0)*100).toFixed(1)}% C=${((c.care||0)*100).toFixed(1)}% S=${((c.intent_coherence||0)*100).toFixed(1)}% A=${((c.awareness||0)*100).toFixed(1)}% X=${((c.expression||0)*100).toFixed(1)}%`
         ).join('\n');
 
         const systemPrompt = `You are Oggy, a Harmony Map assistant that helps users understand city well-being metrics.
@@ -481,6 +482,25 @@ Help users understand what drives city scores, suggest improvements, and explain
                 }
             })()
         ]);
+
+        // Learn from chat: store exchange as memory card
+        if (learn_from_chat && oggyResult.text) {
+            try {
+                const memoryServiceUrl = process.env.MEMORY_SERVICE_URL || 'http://memory-service:3000';
+                const fetch = require('node-fetch');
+                await fetch(`${memoryServiceUrl}/v0/memory`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+                    body: JSON.stringify({
+                        content: { text: `User asked: ${message}\nOggy answered: ${oggyResult.text}` },
+                        tags: ['harmony', 'conversation'],
+                        source: 'harmony-chat'
+                    })
+                });
+            } catch (memErr) {
+                logger.debug('Failed to store harmony chat memory', { error: memErr.message });
+            }
+        }
 
         res.json({
             oggy_response: { text: oggyResult.text, used_memory: false },
@@ -865,6 +885,57 @@ router.get('/suggestions/sdl/status', async (req, res) => {
         res.json(sdl.getStats());
     } catch (err) {
         logger.logError(err, { operation: 'harmony-sdl-suggestion-status' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ──────────────────────────────────────────────────
+// Notes
+// ──────────────────────────────────────────────────
+
+router.get('/notes', async (req, res) => {
+    try {
+        const userId = req.userId || req.query.user_id;
+        const result = await query(
+            `SELECT note_id, content, source_role, created_at
+             FROM harmony_chat_notes WHERE user_id = $1
+             ORDER BY created_at DESC LIMIT 200`,
+            [userId]
+        );
+        res.json({ notes: result.rows });
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-notes-list' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.post('/notes', async (req, res) => {
+    try {
+        const userId = req.userId || req.body.user_id;
+        const { content, source_role = 'manual' } = req.body;
+        if (!content) return res.status(400).json({ error: 'content is required' });
+        const result = await query(
+            `INSERT INTO harmony_chat_notes (user_id, content, source_role)
+             VALUES ($1, $2, $3) RETURNING *`,
+            [userId, content, source_role]
+        );
+        res.json(result.rows[0]);
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-notes-create' });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.delete('/notes/:noteId', async (req, res) => {
+    try {
+        const userId = req.userId || req.query.user_id;
+        await query(
+            `DELETE FROM harmony_chat_notes WHERE note_id = $1 AND user_id = $2`,
+            [req.params.noteId, userId]
+        );
+        res.json({ deleted: true });
+    } catch (err) {
+        logger.logError(err, { operation: 'harmony-notes-delete' });
         res.status(500).json({ error: err.message });
     }
 });
