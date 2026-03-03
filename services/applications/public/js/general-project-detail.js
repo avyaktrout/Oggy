@@ -38,9 +38,59 @@ async function loadProjectDetail() {
         await loadLearningSettings();
         loadProjectIntents();
         loadNotes();
+        loadProjectMessages();
     } catch (e) {
         document.getElementById("project-name").textContent = "Project not found";
         showToast("Failed to load project", "error");
+    }
+}
+
+async function loadProjectMessages() {
+    try {
+        const data = await apiCall("GET", `/v0/general/projects/${projectId}/messages?user_id=${USER_ID}&limit=100`);
+        const messages = data.messages || [];
+        if (messages.length === 0) return;
+
+        const oggyContainer = document.getElementById("oggy-messages");
+        const baseContainer = document.getElementById("base-messages");
+
+        // Render saved messages into the chat panels
+        for (const msg of messages) {
+            if (msg.role === "base") {
+                // Base model response goes only to base column
+                const baseDiv = document.createElement("div");
+                baseDiv.className = "chat-msg chat-msg-bot";
+                baseDiv.textContent = msg.content;
+                baseContainer.appendChild(baseDiv);
+            } else {
+                // User + assistant go to Oggy column
+                const oggyDiv = document.createElement("div");
+                oggyDiv.className = msg.role === "user" ? "chat-msg chat-msg-user" : "chat-msg chat-msg-bot";
+                oggyDiv.textContent = msg.content;
+                oggyContainer.appendChild(oggyDiv);
+
+                // User messages also go to base column
+                if (msg.role === "user") {
+                    const baseDiv = document.createElement("div");
+                    baseDiv.className = "chat-msg chat-msg-user";
+                    baseDiv.textContent = msg.content;
+                    baseContainer.appendChild(baseDiv);
+                }
+            }
+        }
+
+        // Scroll both to bottom
+        oggyContainer.scrollTop = oggyContainer.scrollHeight;
+        baseContainer.scrollTop = baseContainer.scrollHeight;
+
+        // Also feed the conversation history into the shell so continued chat has context
+        if (shell && shell.conversationHistory) {
+            for (const msg of messages) {
+                shell.conversationHistory.push({ role: msg.role === "user" ? "user" : "assistant", content: msg.content });
+            }
+        }
+    } catch (e) {
+        // Non-blocking — project may have no messages yet
     }
 }
 

@@ -882,7 +882,7 @@ class AgentShell {
         container.scrollTop = container.scrollHeight;
 
         try {
-            const data = await apiCall('POST', this.config.auditProvider.endpoint, { question });
+            const data = await apiCall('POST', this.config.auditProvider.endpoint, { question, domain: this.config.domain });
             typingDiv.remove();
             const answerDiv = document.createElement('div');
             answerDiv.className = 'audit-msg audit-msg-bot';

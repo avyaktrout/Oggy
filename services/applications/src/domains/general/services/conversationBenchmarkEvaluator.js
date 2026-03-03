@@ -6,7 +6,7 @@
  *   - preference_alignment (1-5)
  *   - helpfulness (1-5)
  *
- * A scenario is "correct" if the average score across criteria >= 4.
+ * A scenario is "correct" if ALL individual criteria scores >= 4.
  * Wrong scenarios generate memory cards for future improvement.
  *
  * Uses parallelMap from ../utils/parallel with concurrency=3
@@ -182,10 +182,15 @@ class ConversationBenchmarkEvaluator {
         // Generate Oggy response (WITH memories — depends on memory retrieval)
         const oggyResponse = await this._generateOggyResponse(userId, prompt, memories, scenario);
 
+        // Build memory summary for judge context
+        const memorySummary = memories.length > 0
+            ? memories.map((m, i) => `${i + 1}. ${m.content?.text || JSON.stringify(m.content)}`).join('\n')
+            : null;
+
         // Judge both responses in parallel (independent evaluations)
         const [oggyEval, baseEval] = await Promise.all([
-            this._judgeResponse(userId, prompt, oggyResponse, expectedBehavior, scenarioType, 'oggy'),
-            this._judgeResponse(userId, prompt, baseResponse, expectedBehavior, scenarioType, 'base')
+            this._judgeResponse(userId, prompt, oggyResponse, expectedBehavior, scenarioType, 'oggy', memorySummary),
+            this._judgeResponse(userId, prompt, baseResponse, expectedBehavior, scenarioType, 'base', null)
         ]);
 
         return {
@@ -196,7 +201,7 @@ class ConversationBenchmarkEvaluator {
                 response: oggyResponse.substring(0, 500),
                 scores: oggyEval.scores,
                 avg_score: oggyEval.avg_score,
-                correct: oggyEval.avg_score >= CORRECT_THRESHOLD,
+                correct: this._allScoresPass(oggyEval.scores),
                 feedback: oggyEval.feedback,
                 memory_count: memories.length
             },
@@ -204,7 +209,7 @@ class ConversationBenchmarkEvaluator {
                 response: baseResponse.substring(0, 500),
                 scores: baseEval.scores,
                 avg_score: baseEval.avg_score,
-                correct: baseEval.avg_score >= CORRECT_THRESHOLD,
+                correct: this._allScoresPass(baseEval.scores),
                 feedback: baseEval.feedback
             }
         };
@@ -279,7 +284,8 @@ Respond helpfully and naturally. If you recall relevant information from past co
                 model: resolved.model,
                 messages,
                 temperature: 0.7,
-                max_tokens: 800
+                max_tokens: 800,
+                timeout: 60000
             });
 
             const tokensUsed = result.tokens_used || Math.ceil((systemPrompt.length + prompt.length + (result.text || '').length) / 4);
@@ -324,7 +330,8 @@ Respond helpfully and naturally. If you recall relevant information from past co
                 model: resolved.model,
                 messages,
                 temperature: 0.7,
-                max_tokens: 800
+                max_tokens: 800,
+                timeout: 60000
             });
 
             const tokensUsed = result.tokens_used || Math.ceil((prompt.length + (result.text || '').length) / 4);
@@ -347,8 +354,25 @@ Respond helpfully and naturally. If you recall relevant information from past co
      * Use LLM-as-judge to evaluate a response on three criteria.
      * Returns { scores: { context_awareness, preference_alignment, helpfulness }, avg_score, feedback }.
      */
-    async _judgeResponse(userId, prompt, response, expectedBehavior, scenarioType, role) {
+    async _judgeResponse(userId, prompt, response, expectedBehavior, scenarioType, role, memorySummary = null) {
         await costGovernor.checkBudget(2000);
+
+        const isMemoryScenario = scenarioType === 'context_retention' || scenarioType === 'preference_adherence' || scenarioType.startsWith('domain_knowledge');
+
+        // Build memory-aware judge instructions
+        let memorySection = '';
+        if (isMemoryScenario && role === 'oggy' && memorySummary) {
+            memorySection = `\nMEMORIES AVAILABLE TO THIS ASSISTANT:
+The assistant (Oggy) had access to these learned memories from prior conversations:
+${memorySummary}
+
+IMPORTANT: For context_awareness and preference_alignment, evaluate whether the response ACTUALLY USES the memories above. A response that gives correct information but doesn't demonstrate use of learned context should score lower on context_awareness (max 3).`;
+        } else if (isMemoryScenario && role === 'base') {
+            memorySection = `\nNOTE: This assistant (Base) has NO access to conversation history, user preferences, or learned memories. It is a generic AI with no personalization. Score context_awareness and preference_alignment based on what a model WITHOUT any user knowledge could reasonably produce:
+- If the scenario requires recalling prior conversations or user-specific context, context_awareness should be 1-2 (since the model has no memory).
+- If the scenario requires respecting specific user preferences, preference_alignment should be 1-2 (since the model doesn't know them).
+- Only helpfulness can score high if the generic response is otherwise useful.`;
+        }
 
         const judgePrompt = `Evaluate the following AI assistant response on three criteria.
 
@@ -363,19 +387,26 @@ ${expectedBehavior.expected_behavior || 'Provide a helpful, accurate response'}
 
 EVALUATION CRITERIA:
 ${expectedBehavior.evaluation_criteria || 'general_quality'}
+${memorySection}
 
 ASSISTANT RESPONSE:
 ${response}
 
 Score each criterion 1-5:
 
-1. **context_awareness**: Does the response show awareness of relevant context, prior conversations, or situational details?
-   - 1 = Completely ignores context
-   - 5 = Perfectly incorporates all relevant context
+1. **context_awareness**: Does the response show awareness of relevant context, prior conversations, or situational details? A response that is generically good but doesn't incorporate specific context from prior interactions should NOT score above 3.
+   - 1 = Completely ignores context / no prior context used
+   - 2 = Vaguely relevant but no specific context demonstrated
+   - 3 = Generic but reasonable (no memory demonstrated)
+   - 4 = References some specific prior context
+   - 5 = Perfectly incorporates all relevant context from prior interactions
 
-2. **preference_alignment**: Does the response respect known user preferences (tone, format, style, etc.)?
-   - 1 = Violates preferences
-   - 5 = Perfectly aligns with preferences
+2. **preference_alignment**: Does the response respect known user preferences (tone, format, style, etc.)? A response that happens to match preferences by coincidence (without demonstrating learned knowledge) should NOT score above 3.
+   - 1 = Violates or ignores user preferences
+   - 2 = Default style, no personalization shown
+   - 3 = Generically acceptable but not personalized
+   - 4 = Shows clear adaptation to some user preferences
+   - 5 = Perfectly aligns with user preferences through demonstrated knowledge
 
 3. **helpfulness**: Is the response accurate, clear, complete, and useful?
    - 1 = Unhelpful or incorrect
@@ -406,7 +437,8 @@ Return ONLY valid JSON:
                     { role: 'user', content: judgePrompt }
                 ],
                 temperature: 0.2, // Low temperature for consistent judgment
-                max_tokens: 400
+                max_tokens: 400,
+                timeout: 60000
             });
 
             const tokensUsed = result.tokens_used || Math.ceil((judgePrompt.length + (result.text || '').length) / 4);
@@ -468,6 +500,14 @@ Return ONLY valid JSON:
         if (isNaN(num) || num < 1) return 2;
         if (num > 5) return 5;
         return num;
+    }
+
+    /**
+     * Check if ALL individual scores meet the threshold.
+     * Prevents high scores on one criterion from masking weakness in another.
+     */
+    _allScoresPass(scores) {
+        return Object.values(scores).every(s => s >= CORRECT_THRESHOLD);
     }
 
     // ─── Result Aggregation ────────────────────────────────────────────

@@ -326,6 +326,8 @@ class ContinuousLearningLoop {
         this.stats = {
             total_questions: 0,
             correct_answers: 0,
+            cumulative_questions: 0,    // Never resets during session
+            cumulative_correct: 0,      // Never resets during session
             current_window_questions: 0,
             current_window_correct: 0,
             benchmarks_generated: 0,
@@ -493,8 +495,10 @@ class ContinuousLearningLoop {
             estimated_completion: estimatedCompletion,
             // Status
             status: this.stats.is_benchmarking ? 'benchmarking' : (this.isRunning ? 'training' : 'stopped'),
-            overall_accuracy: this.stats.total_questions > 0
-                ? ((this.stats.correct_answers / this.stats.total_questions) * 100).toFixed(1) + '%'
+            total_questions: this.stats.cumulative_questions || this.stats.total_questions,
+            correct_answers: this.stats.cumulative_correct || this.stats.correct_answers,
+            overall_accuracy: (this.stats.cumulative_questions || this.stats.total_questions) > 0
+                ? (((this.stats.cumulative_correct || this.stats.correct_answers) / (this.stats.cumulative_questions || this.stats.total_questions)) * 100).toFixed(1) + '%'
                 : 'N/A',
             current_window_accuracy: this.stats.current_window_questions > 0
                 ? ((this.stats.current_window_correct / this.stats.current_window_questions) * 100).toFixed(1) + '%'
@@ -609,6 +613,8 @@ class ContinuousLearningLoop {
 
                 this.stats.total_questions = learningStats.total_attempts;
                 this.stats.correct_answers = totalCorrectNow;
+                this.stats.cumulative_questions += newQuestions;
+                this.stats.cumulative_correct += Math.max(0, isNaN(newCorrect) ? 0 : newCorrect);
                 this.stats.current_window_questions += newQuestions;
                 this.stats.current_window_correct += Math.max(0, isNaN(newCorrect) ? 0 : newCorrect);
 

@@ -160,10 +160,11 @@ router.get('/', async (req, res) => {
         // Get the ACTUAL current level from DB (benchmark names reflect pre-benchmark level)
         let actualLevel = latest.level;
         try {
-            const stateResult = await query(
-                `SELECT scale, difficulty_level FROM continuous_learning_state WHERE user_id = $1 LIMIT 1`,
-                [userId]
-            );
+            const stateQuery = domain
+                ? `SELECT scale, difficulty_level FROM continuous_learning_state WHERE user_id = $1 AND domain = $2 LIMIT 1`
+                : `SELECT scale, difficulty_level FROM continuous_learning_state WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1`;
+            const stateParams = domain ? [userId, domain] : [userId];
+            const stateResult = await query(stateQuery, stateParams);
             if (stateResult.rows.length > 0) {
                 const s = stateResult.rows[0];
                 actualLevel = `S${s.scale}L${s.difficulty_level}`;
@@ -383,8 +384,8 @@ function _buildAuditContext(benchmarkRows, aggregated) {
         }
     }
 
-    ctx += `\n--- Recent Benchmark Trend ---\n`;
-    for (const r of benchmarkRows.slice(-10)) {
+    ctx += `\n--- Recent Benchmark Trend (newest first) ---\n`;
+    for (const r of benchmarkRows.slice(0, 10)) {
         const ts = new Date(r.tested_at).toLocaleDateString();
         ctx += `${ts}: Oggy ${parseFloat(r.oggy_accuracy * 100).toFixed(1)}% vs Base ${parseFloat(r.base_accuracy * 100).toFixed(1)}% (delta: ${(r.advantage_delta * 100).toFixed(1)}pp)\n`;
     }
@@ -504,6 +505,7 @@ router.post('/audit-chat', async (req, res) => {
 
         // Get last 15 benchmarks with detailed_results for this user
         const userId = req.body.user_id || 'oggy';
+        const domain = req.body.domain || null;
         const benchmarkRows = await query(`
             SELECT r.result_id, r.detailed_results, r.oggy_accuracy, r.base_accuracy,
                    r.advantage_delta, r.tested_at, r.total_scenarios,
@@ -512,9 +514,13 @@ router.post('/audit-chat', async (req, res) => {
             JOIN sealed_benchmarks b ON r.benchmark_id = b.benchmark_id
             WHERE r.user_id = $1
               AND r.oggy_accuracy != 'NaN' AND r.base_accuracy != 'NaN'
+              AND ($2::text IS NULL
+                   OR b.domain = $2
+                   OR b.metadata->>'domain' = $2
+                   OR ($2 = 'payments' AND (b.domain IS NULL OR b.domain = '') AND (b.metadata->>'domain') IS NULL))
             ORDER BY r.tested_at DESC
             LIMIT 15
-        `, [userId]);
+        `, [userId, domain]);
 
         if (benchmarkRows.rows.length === 0) {
             return res.json({

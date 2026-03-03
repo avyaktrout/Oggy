@@ -289,11 +289,14 @@ Create only ONE entry per transaction. When confirmed, append:
             // Store message in DB if project context
             if (project_id) {
                 try {
-                    await query(
-                        `INSERT INTO v2_project_messages (project_id, user_id, role, content, oggy_response, used_memory, trace_id)
-                         VALUES ($1, $2, 'user', $3, false, false, NULL), ($1, $2, 'assistant', $4, true, $5, $6)`,
-                        [project_id, userId, message, oggyText, memoryCards.length > 0, traceId]
-                    );
+                    const insertValues = [project_id, userId, message, oggyText, memoryCards.length > 0, traceId];
+                    let insertSQL = `INSERT INTO v2_project_messages (project_id, user_id, role, content, oggy_response, used_memory, trace_id)
+                         VALUES ($1, $2, 'user', $3, false, false, NULL), ($1, $2, 'assistant', $4, true, $5, $6)`;
+                    if (baseText && !baseResult._failed) {
+                        insertSQL += `, ($1, $2, 'base', $7, false, false, NULL)`;
+                        insertValues.push(baseText);
+                    }
+                    await query(insertSQL, insertValues);
                 } catch (err) {
                     logger.debug('Failed to store project message', { error: err.message });
                 }
