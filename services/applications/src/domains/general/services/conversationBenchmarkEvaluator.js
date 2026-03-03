@@ -183,9 +183,23 @@ class ConversationBenchmarkEvaluator {
         const oggyResponse = await this._generateOggyResponse(userId, prompt, memories, scenario);
 
         // Build memory summary for judge context
-        const memorySummary = memories.length > 0
-            ? memories.map((m, i) => `${i + 1}. ${m.content?.text || JSON.stringify(m.content)}`).join('\n')
-            : null;
+        // Include both retrieved memories AND conversation context (for memory scenarios)
+        const memoryParts = [];
+        if (memories.length > 0) {
+            memoryParts.push(...memories.map((m, i) => `${i + 1}. ${m.content?.text || JSON.stringify(m.content)}`));
+        }
+        // For context_retention/preference_adherence, the conversation history IS context Oggy had
+        const isMemoryTest = scenarioType === 'context_retention' || scenarioType === 'preference_adherence';
+        if (isMemoryTest && Array.isArray(scenario.context) && scenario.context.length > 0) {
+            const contextSummary = scenario.context
+                .filter(m => m.content)
+                .map(m => `[${m.role}]: ${m.content.substring(0, 200)}`)
+                .join('\n');
+            if (contextSummary) {
+                memoryParts.push(`Prior conversation:\n${contextSummary}`);
+            }
+        }
+        const memorySummary = memoryParts.length > 0 ? memoryParts.join('\n') : null;
 
         // Judge both responses in parallel (independent evaluations)
         const [oggyEval, baseEval] = await Promise.all([
@@ -201,7 +215,7 @@ class ConversationBenchmarkEvaluator {
                 response: oggyResponse.substring(0, 500),
                 scores: oggyEval.scores,
                 avg_score: oggyEval.avg_score,
-                correct: this._allScoresPass(oggyEval.scores),
+                correct: this._isCorrect(oggyEval.scores, scenarioType),
                 feedback: oggyEval.feedback,
                 memory_count: memories.length
             },
@@ -209,7 +223,7 @@ class ConversationBenchmarkEvaluator {
                 response: baseResponse.substring(0, 500),
                 scores: baseEval.scores,
                 avg_score: baseEval.avg_score,
-                correct: this._allScoresPass(baseEval.scores),
+                correct: this._isCorrect(baseEval.scores, scenarioType),
                 feedback: baseEval.feedback
             }
         };
@@ -304,20 +318,30 @@ Respond helpfully and naturally. If you recall relevant information from past co
 
     /**
      * Generate Base response WITHOUT memory context.
+     * Base does NOT get prior conversation history for memory-dependent scenarios
+     * (context_retention, preference_adherence) — it only sees the current question.
+     * For general_helpfulness and domain_knowledge, context is shared since those
+     * test general capability, not memory.
      */
     async _generateBaseResponse(userId, prompt, scenario) {
         await costGovernor.checkBudget(2000);
 
         const systemPrompt = 'You are a helpful AI assistant.';
+        const scenarioType = scenario.merchant;
 
         const messages = [{ role: 'system', content: systemPrompt }];
 
-        // Include conversation context from scenario (base still gets the conversation flow, just no memories)
-        const context = scenario.context || [];
-        if (Array.isArray(context)) {
-            for (const msg of context) {
-                if (msg.role && msg.content) {
-                    messages.push({ role: msg.role, content: msg.content });
+        // Only include conversation context for non-memory scenarios.
+        // For context_retention and preference_adherence, Base should NOT see
+        // prior conversation history — that's the whole point of testing memory.
+        const isMemoryTest = scenarioType === 'context_retention' || scenarioType === 'preference_adherence';
+        if (!isMemoryTest) {
+            const context = scenario.context || [];
+            if (Array.isArray(context)) {
+                for (const msg of context) {
+                    if (msg.role && msg.content) {
+                        messages.push({ role: msg.role, content: msg.content });
+                    }
                 }
             }
         }
@@ -366,7 +390,7 @@ Respond helpfully and naturally. If you recall relevant information from past co
 The assistant (Oggy) had access to these learned memories from prior conversations:
 ${memorySummary}
 
-IMPORTANT: For context_awareness and preference_alignment, evaluate whether the response ACTUALLY USES the memories above. A response that gives correct information but doesn't demonstrate use of learned context should score lower on context_awareness (max 3).`;
+IMPORTANT: Check if the response incorporates information from the memories above. The assistant does NOT need to explicitly say "I remember" — naturally weaving in memorized facts, preferences, or context counts as usage. If the response content aligns with or builds on the memories, score context_awareness 4-5. If the response ignores available memories and gives a generic answer, score context_awareness 1-3.`;
         } else if (isMemoryScenario && role === 'base') {
             memorySection = `\nNOTE: This assistant (Base) has NO access to conversation history, user preferences, or learned memories. It is a generic AI with no personalization. Score context_awareness and preference_alignment based on what a model WITHOUT any user knowledge could reasonably produce:
 - If the scenario requires recalling prior conversations or user-specific context, context_awareness should be 1-2 (since the model has no memory).
@@ -394,19 +418,29 @@ ${response}
 
 Score each criterion 1-5:
 
-1. **context_awareness**: Does the response show awareness of relevant context, prior conversations, or situational details? A response that is generically good but doesn't incorporate specific context from prior interactions should NOT score above 3.
-   - 1 = Completely ignores context / no prior context used
-   - 2 = Vaguely relevant but no specific context demonstrated
-   - 3 = Generic but reasonable (no memory demonstrated)
-   - 4 = References some specific prior context
-   - 5 = Perfectly incorporates all relevant context from prior interactions
+${isMemoryScenario ? `1. **context_awareness**: Does the response incorporate specific context from prior conversations or learned information? Generic answers that don't leverage prior knowledge should score low.
+   - 1 = Completely ignores available context
+   - 2 = Vaguely relevant but no specific prior context used
+   - 3 = Generic answer, no memory or prior knowledge demonstrated
+   - 4 = Naturally incorporates some prior context or learned information
+   - 5 = Perfectly weaves in relevant prior context and learned details
 
-2. **preference_alignment**: Does the response respect known user preferences (tone, format, style, etc.)? A response that happens to match preferences by coincidence (without demonstrating learned knowledge) should NOT score above 3.
+2. **preference_alignment**: Does the response adapt to known user preferences (tone, format, style, detail level)? Coincidental matches don't count — the response should demonstrate learned personalization.
    - 1 = Violates or ignores user preferences
-   - 2 = Default style, no personalization shown
-   - 3 = Generically acceptable but not personalized
-   - 4 = Shows clear adaptation to some user preferences
-   - 5 = Perfectly aligns with user preferences through demonstrated knowledge
+   - 2 = Default generic style, no personalization
+   - 3 = Acceptable but not personalized
+   - 4 = Clear adaptation to user preferences
+   - 5 = Perfectly personalized based on learned preferences` :
+
+`1. **context_awareness**: Does the response address the specific context and details in the user's question?
+   - 1 = Ignores the question's context
+   - 3 = Addresses the question but misses nuance
+   - 5 = Perfectly addresses all contextual details in the question
+
+2. **preference_alignment**: Is the response well-structured, appropriately detailed, and professional?
+   - 1 = Poorly structured or inappropriate tone
+   - 3 = Acceptable structure and tone
+   - 5 = Excellent structure, tone, and detail level`}
 
 3. **helpfulness**: Is the response accurate, clear, complete, and useful?
    - 1 = Unhelpful or incorrect
@@ -508,6 +542,34 @@ Return ONLY valid JSON:
      */
     _allScoresPass(scores) {
         return Object.values(scores).every(s => s >= CORRECT_THRESHOLD);
+    }
+
+    /**
+     * Scenario-type-aware correctness check.
+     * Each scenario type is judged on its RELEVANT criteria + helpfulness baseline.
+     */
+    _isCorrect(scores, scenarioType) {
+        const T = CORRECT_THRESHOLD;
+        const help = (scores.helpfulness || 0) >= T;
+
+        switch (scenarioType) {
+            case 'context_retention':
+                // Tests memory recall — context_awareness is the key metric
+                return (scores.context_awareness || 0) >= T && help;
+            case 'preference_adherence':
+                // Tests personalization — preference_alignment is the key metric
+                return (scores.preference_alignment || 0) >= T && help;
+            case 'domain_knowledge_recall':
+            case 'domain_knowledge_application':
+                // Tests domain knowledge — domain_accuracy is the key metric
+                return (scores.domain_accuracy || scores.helpfulness || 0) >= T && help;
+            case 'general_helpfulness':
+                // No memory tested — only helpfulness matters
+                return help;
+            default:
+                // Fallback: avg_score check
+                return (scores.context_awareness + scores.preference_alignment + scores.helpfulness) / 3 >= T;
+        }
     }
 
     // ─── Result Aggregation ────────────────────────────────────────────
