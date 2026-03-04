@@ -1,0 +1,6 @@
+# Files to exclude from deploy tar archives
+# These contain environment-specific values that must not be overwritten on EC2
+.env
+.env.*
+node_modules
+.git
