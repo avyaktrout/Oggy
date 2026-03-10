@@ -37,6 +37,16 @@
         }
         .login-status.success { color: var(--success); }
         .login-status.error { color: var(--danger); }
+        .login-divider {
+            display: flex; align-items: center; margin: 24px 0; gap: 12px;
+            color: var(--text-muted); font-size: 13px;
+        }
+        .login-divider::before, .login-divider::after {
+            content: ''; flex: 1; height: 1px; background: var(--border);
+        }
+        .login-section-label {
+            font-size: 13px; color: var(--text-muted); margin-bottom: 12px; text-align: left;
+        }
         .login-dev-url {
             margin-top: 12px; padding: 10px; background: var(--bg-secondary);
             border: 1px solid var(--border); border-radius: var(--radius);
@@ -49,12 +59,24 @@
 <body>
     <div class="login-card">
         <div class="login-brand">Oggy</div>
-        <div class="login-subtitle">Sign in with your email to continue</div>
+        <div class="login-subtitle">Sign in to continue</div>
 
+        <form onsubmit="demoLogin(event)">
+            <input type="text" class="login-input" id="demo-username"
+                   placeholder="Username" required autofocus autocomplete="username">
+            <input type="password" class="login-input" id="demo-password"
+                   placeholder="Password" required autocomplete="current-password">
+            <button type="submit" class="login-btn" id="demo-btn">Sign In</button>
+        </form>
+        <div class="login-status" id="demo-status"></div>
+
+        <div class="login-divider">or</div>
+
+        <div class="login-section-label">Sign in with email</div>
         <form onsubmit="requestMagicLink(event)">
             <input type="email" class="login-input" id="login-email"
-                   placeholder="you@example.com" required autofocus>
-            <button type="submit" class="login-btn" id="login-btn">Send Magic Link</button>
+                   placeholder="you@example.com" required>
+            <button type="submit" class="login-btn" id="login-btn" style="background: var(--text-muted);">Send Magic Link</button>
         </form>
 
         <div class="login-status" id="login-status"></div>
@@ -62,6 +84,44 @@
     </div>
 
     <script>
+        async function demoLogin(e) {
+            e.preventDefault();
+            const username = document.getElementById('demo-username').value.trim();
+            const password = document.getElementById('demo-password').value;
+            const btn = document.getElementById('demo-btn');
+            const status = document.getElementById('demo-status');
+
+            btn.disabled = true;
+            btn.textContent = 'Signing in...';
+            status.textContent = '';
+            status.className = 'login-status';
+
+            try {
+                const res = await fetch('/v0/auth/demo-login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password }),
+                    credentials: 'include'
+                });
+                const data = await res.json();
+
+                if (res.ok) {
+                    status.textContent = 'Signed in! Redirecting...';
+                    status.className = 'login-status success';
+                    window.location.href = '/';
+                } else {
+                    status.textContent = data.error || 'Invalid credentials.';
+                    status.className = 'login-status error';
+                }
+            } catch (err) {
+                status.textContent = 'Network error. Please try again.';
+                status.className = 'login-status error';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Sign In';
+            }
+        }
+
         async function requestMagicLink(e) {
             e.preventDefault();
             const email = document.getElementById('login-email').value.trim();

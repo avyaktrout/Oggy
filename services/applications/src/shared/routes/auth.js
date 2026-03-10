@@ -9,6 +9,47 @@ const authService = require('../services/authService');
 const { parseCookies } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
+// POST /v0/auth/demo-login
+router.post('/demo-login', async (req, res) => {
+    const { username, password } = req.body;
+    if (!username || !password) return res.status(400).json({ error: 'Username and password are required' });
+
+    if (username !== 'Demo_Oggy' || password !== 'welcomeToOggy') {
+        return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    try {
+        const demoEmail = 'demo_oggy@oggy-v1.com';
+        const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+
+        // Ensure demo user is in the allowlist
+        const existing = await authService.isEmailAllowed(demoEmail);
+        if (!existing) {
+            await authService.addAllowedEmail(demoEmail, 'Demo User', 'user');
+        }
+
+        const userId = 'demo_oggy';
+        const session = await authService.createSession(userId, demoEmail, ip);
+        await authService.initializeTenant(userId, demoEmail).catch(() => {});
+
+        const cookieOpts = [
+            `oggy_session=${session.session_token}`,
+            'Path=/',
+            'HttpOnly',
+            'SameSite=Lax',
+            `Max-Age=${7 * 24 * 60 * 60}`
+        ];
+        if (req.protocol === 'https' || process.env.NODE_ENV === 'production') {
+            cookieOpts.push('Secure');
+        }
+        res.setHeader('Set-Cookie', cookieOpts.join('; '));
+        res.json({ success: true });
+    } catch (error) {
+        logger.logError(error, { operation: 'demo-login', requestId: req.requestId });
+        res.status(500).json({ error: 'Login failed' });
+    }
+});
+
 // POST /v0/auth/request-magic-link
 router.post('/request-magic-link', async (req, res) => {
     const { email } = req.body;
