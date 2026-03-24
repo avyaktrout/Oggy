@@ -1,7 +1,7 @@
 # Oggy Systems Design Document
 
-**Version:** 0.3.0
-**Last Updated:** February 2026
+**Version:** 0.4.0
+**Last Updated:** March 2026
 
 ---
 
@@ -10,9 +10,9 @@
 Oggy is an AI personal assistant that **learns and improves from every interaction**. Unlike static AI wrappers that produce the same quality output regardless of usage history, Oggy maintains a persistent memory substrate, continuously trains against sealed benchmarks, and scientifically measures its own improvement over time.
 
 Oggy operates across four domains:
-- **Payments** — Expense categorization, spending analysis, merchant disambiguation
-- **Diet** — Food logging, nutrition estimation, dietary rule enforcement
-- **General** — Research synthesis, plan generation, study plans, recommendations
+- **FinSense** (Payments) — Expense categorization, spending analysis, merchant disambiguation
+- **HealthAssist** (Diet) — Food logging, nutrition estimation, dietary rule enforcement
+- **GenExplorer** (General) — Research synthesis, plan generation, study plans, recommendations
 - **Harmony** — Geographic wellness scoring, scenario planning, intervention suggestions
 
 Each domain shares the same learning infrastructure: memory retrieval, benchmark evaluation, self-driven training loops, observer-based federated learning, and per-intent performance tracking.
@@ -28,7 +28,7 @@ Every improvement Oggy makes is provable. Sealed benchmarks (immutable test sets
 Oggy's memory is not a chat history dump. It's a structured 4-tier substrate with utility scoring, reliability tracking, and usage counters. Low-value memories are pruned. High-value ones are promoted. Every memory access is audited.
 
 ### 2.3 Domain Isolation with Shared Infrastructure
-Each domain (payments, diet, general, harmony) runs as an independent service with its own routes, services, and database tables. But all domains share the same learning pipeline: continuous learning loops, benchmark evaluation, observer packs, intent tracking, and the memory service.
+Each domain (FinSense, HealthAssist, GenExplorer, Harmony) runs as an independent service with its own routes, services, and database tables. But all domains share the same learning pipeline: continuous learning loops, benchmark evaluation, observer packs, intent tracking, and the memory service.
 
 ### 2.4 Dual-Model Comparison
 Every chat interaction runs two models in parallel: Oggy (with memory retrieval) and a base model (without memory). Users see both responses side by side, making the value of learning directly visible.
@@ -50,14 +50,14 @@ Every chat interaction runs two models in parallel: Oggy (with memory retrieval)
                     │  analytics, intents, migration)   │
                     └───┬──────┬──────┬──────┬─────────┘
                         │      │      │      │
-           ┌────────────▼┐  ┌──▼───┐ ┌▼────┐ ┌▼───────┐
-           │  Payments   │  │General│ │Diet │ │Harmony │
-           │   (:3010)   │  │(:3011)│ │(:3012)│(:3013) │
-           │  expenses   │  │ chat  │ │entries│ │ map   │
-           │  chat       │  │projects│ │nutrition│scores│
-           │  benchmarks │  │learning│ │rules │ │scenarios│
-           │  observer   │  │       │ │USDA  │ │suggest │
-           └──────┬──────┘  └──┬───┘ └──┬──┘ └──┬─────┘
+           ┌────────────▼┐  ┌──▼────────┐ ┌▼──────────┐ ┌▼───────┐
+           │  FinSense   │  │GenExplorer│ │HealthAssist│ │Harmony │
+           │   (:3010)   │  │  (:3011)  │ │  (:3012)   │ │(:3013) │
+           │  expenses   │  │  chat     │ │  entries   │ │ map    │
+           │  chat       │  │  projects │ │  nutrition │ │ scores │
+           │  benchmarks │  │  learning │ │  rules     │ │scenarios│
+           │  observer   │  │           │ │  USDA      │ │suggest │
+           └──────┬──────┘  └──┬────────┘ └──┬────────┘ └──┬─────┘
                   │            │        │       │
            ┌──────▼────────────▼────────▼───────▼──────┐
            │              Memory Service (:3000)        │
@@ -239,9 +239,9 @@ Intents are routing metadata that enable per-capability measurement and targetin
 
 | Domain | Intents | Examples |
 |--------|---------|----------|
-| Payments | 6 | categorize_payment, disambiguate_groceries_vs_shopping |
-| Diet | 6 | log_entry_from_text, estimate_nutrition |
-| General | 8 | plan_generation, research_synthesis, preference_fit |
+| FinSense | 6 | categorize_payment, disambiguate_groceries_vs_shopping |
+| HealthAssist | 6 | log_entry_from_text, estimate_nutrition |
+| GenExplorer | 8 | plan_generation, research_synthesis, preference_fit |
 | Harmony | 6 | compute_metrics, suggest_interventions |
 
 ### 7.2 Intent Resolution
@@ -301,13 +301,13 @@ Every Oggy response is audited:
 
 ## 10. Domain-Specific Design
 
-### 10.1 Payments
+### 10.1 FinSense (Payments)
 - **Expense CRUD**: Create, categorize, query, summarize
 - **Tessa Assessment Generator**: Creates novel payment scenarios from domain knowledge for training
 - **Category Rules Manager**: Disambiguation rules for confused pairs
 - **Receipt Analysis**: Vision LLM extracts merchant, amount, line items from receipt images
 
-### 10.2 Diet
+### 10.2 HealthAssist (Diet)
 - **Food Entry System**: Food, liquid, vitamin, supplement entries by meal type
 - **Nutrition Estimation**: AI-estimated + USDA-verified nutrition facts
 - **USDA Integration**: 380,000+ lab-verified foods with 3-tier caching (memory → DB → API)
@@ -315,7 +315,7 @@ Every Oggy response is audited:
 - **Saved Meals**: Save and replay frequent meals
 - **Diet Rules**: Goals, limits, allergies, avoid-lists enforced during chat
 
-### 10.3 General
+### 10.3 GenExplorer (General)
 - **Multi-Turn Chat**: Research, planning, recommendations with memory
 - **Project Management**: Organize conversations into projects with notes
 - **Domain Learning**: Suggest domain tags, build knowledge packs, study plans
@@ -334,14 +334,29 @@ Every Oggy response is audited:
 ## 11. Authentication & Multi-Tenancy
 
 ### 11.1 Auth Flow
+
+Oggy supports two authentication methods:
+
+**Demo Login (Username/Password)**
+```
+User → Enter Demo_Oggy / welcomeToOggy → POST /v0/auth/demo-login
+     → Session Created (7 days) → Redirect to Dashboard
+```
+A single shared demo account provides instant access for reviewers and evaluators without requiring email verification. The demo user is auto-provisioned in the allowlist on first login.
+
+**Magic Link Login (Email)**
 ```
 User → Request Magic Link → Email Sent
      → Click Link → Token Verified → Session Created (7 days)
      → Every Request: Session Cookie + CSRF Token
 ```
+Quick login: if the email was verified within the past 6 hours, a new session is created instantly without re-sending an email.
 
-### 11.2 Multi-Tenancy
-- Invite-only via email allowlist
+### 11.2 Login Page Design
+The login page presents demo credentials first (username/password form) with a secondary "or sign in with email" option below. This prioritizes frictionless access for demos while preserving the full magic link flow for registered users.
+
+### 11.3 Multi-Tenancy
+- Invite-only via email allowlist (magic link) or shared demo account
 - User IDs derived from email: `email.split('@')[0]`
 - All data queries filtered by user_id
 - Observer data sharing is opt-in and PII-stripped
@@ -354,7 +369,7 @@ User → Request Magic Link → Email Sent
 ```
 1. User sends message via browser
 2. Gateway authenticates (session + CSRF)
-3. Gateway proxies to domain service (e.g., Payments :3010)
+3. Gateway proxies to domain service (e.g., FinSense :3010)
 4. Domain service calls Memory Service: POST /retrieve
    → Returns top-k relevant memory cards
 5. Domain service constructs system prompt:
@@ -428,9 +443,9 @@ External API calls (OpenAI, USDA, Memory Service) use circuit breakers:
 | Container | Port | Memory | CMD |
 |-----------|------|--------|-----|
 | oggy-gateway | 3001 | 128MB | node src/gateway.js |
-| oggy-payments | 3010 | 256MB | node src/payments-entry.js |
-| oggy-general | 3011 | 128MB | node src/general-entry.js |
-| oggy-diet | 3012 | 128MB | node src/diet-entry.js |
+| oggy-payments (FinSense) | 3010 | 256MB | node src/payments-entry.js |
+| oggy-general (GenExplorer) | 3011 | 128MB | node src/general-entry.js |
+| oggy-diet (HealthAssist) | 3012 | 128MB | node src/diet-entry.js |
 | oggy-harmony | 3013 | 128MB | node src/harmony-entry.js |
 | oggy-memory | 3000 | 128MB | node src/index.js |
 | oggy-learning | 8000 | 128MB | uvicorn main:app |

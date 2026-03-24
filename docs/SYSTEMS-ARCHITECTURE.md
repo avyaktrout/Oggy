@@ -1,7 +1,7 @@
 # Oggy Systems Architecture Document
 
-**Version:** 0.3.0
-**Last Updated:** February 2026
+**Version:** 0.4.0
+**Last Updated:** March 2026
 
 ---
 
@@ -11,7 +11,7 @@
 |-------|-----------|---------|
 | **Frontend** | Vanilla HTML/CSS/JS | Server-rendered pages with client-side interactivity |
 | **API Gateway** | Node.js 20 + Express.js | Auth, CORS, static files, request proxying |
-| **Domain Services** | Node.js 20 + Express.js | Business logic per domain (×4 services) |
+| **Domain Services** | Node.js 20 + Express.js | Business logic per domain (FinSense, GenExplorer, HealthAssist, Harmony) |
 | **Memory Service** | Node.js 20 + Express.js | Persistent memory CRUD, semantic retrieval, audit |
 | **Learning Service** | Python 3.11 + FastAPI | CIR gates, scoring, self-driven learning agents |
 | **Database** | PostgreSQL 15 | Primary data store, 30+ tables |
@@ -38,7 +38,7 @@ Oggy runs as 9 containers from a single Docker Compose file:
 │                    Docker Compose                        │
 │                                                          │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────┐ │
-│  │ Gateway  │  │ Payments │  │ General  │  │  Diet   │ │
+│  │ Gateway  │  │ FinSense │  │GenExplorer│  │HealthAs│ │
 │  │  :3001   │  │  :3010   │  │  :3011   │  │  :3012  │ │
 │  │ 128MB    │  │  256MB   │  │  128MB   │  │  128MB  │ │
 │  └──────────┘  └──────────┘  └──────────┘  └─────────┘ │
@@ -66,10 +66,10 @@ All service-to-service communication uses REST over HTTP within the Docker netwo
 ```
 Browser → Cloudflare → Gateway (:3001)
                           │
-                          ├──▶ Payments (:3010)  ──▶ Memory (:3000)
-                          ├──▶ General  (:3011)  ──▶ Memory (:3000)
-                          ├──▶ Diet     (:3012)  ──▶ Memory (:3000)
-                          ├──▶ Harmony  (:3013)  ──▶ Memory (:3000)
+                          ├──▶ FinSense    (:3010)  ──▶ Memory (:3000)
+                          ├──▶ GenExplorer (:3011)  ──▶ Memory (:3000)
+                          ├──▶ HealthAssist(:3012)  ──▶ Memory (:3000)
+                          ├──▶ Harmony     (:3013)  ──▶ Memory (:3000)
                           └──▶ Learning (:8000)
 ```
 
@@ -108,7 +108,7 @@ PostgreSQL 15 hosts all application data across 30+ tables. The migration system
 | `sdl_plans` | Self-driven learning plans (trigger: uncertainty/drift/novelty/coverage) |
 | `cir_violations` | Core Integrity Rules gate violations (request/response security) |
 
-#### Payments Domain
+#### FinSense (Payments) Domain
 | Table | Purpose |
 |-------|---------|
 | `expenses` | Transaction records with category, merchant, amount, tags |
@@ -116,7 +116,7 @@ PostgreSQL 15 hosts all application data across 30+ tables. The migration system
 | `domain_knowledge` | Curated knowledge corpus for assessment generation |
 | `knowledge_promotions` | Audit trail for knowledge → memory promotion |
 
-#### Diet Domain
+#### HealthAssist (Diet) Domain
 | Table | Purpose |
 |-------|---------|
 | `v3_diet_entries` | Food/liquid/vitamin/supplement entries by meal type |
@@ -174,9 +174,9 @@ PostgreSQL 15 hosts all application data across 30+ tables. The migration system
 ```
 services/applications/db/init/          # Shared & gateway migrations
 services/applications/src/domains/
-  payments/db/                          # Payments-specific
-  general/db/                           # General-specific
-  diet/db/                              # Diet-specific
+  payments/db/                          # FinSense-specific
+  general/db/                           # GenExplorer-specific
+  diet/db/                              # HealthAssist-specific
   harmony/db/                           # Harmony-specific
 services/memory/db/init/                # Memory service migrations
 ```
@@ -264,9 +264,9 @@ The frontend uses **vanilla HTML, CSS, and JavaScript** — no framework, no bui
 | Domain | Pages |
 |--------|-------|
 | **Core** | index.html (dashboard), login.html, settings.html, admin.html |
-| **Payments** | payments.html, chat.html, analytics.html |
-| **Diet** | diet-enter.html, diet-nutrition.html, diet-chat.html, diet-analytics.html |
-| **General** | general-chat.html, general-projects.html, general-project-detail.html, general-analytics.html |
+| **FinSense** | payments.html, chat.html, analytics.html |
+| **HealthAssist** | diet-enter.html, diet-nutrition.html, diet-chat.html, diet-analytics.html |
+| **GenExplorer** | general-chat.html, general-projects.html, general-project-detail.html, general-analytics.html |
 | **Harmony** | harmony-map.html, harmony-chat.html, harmony-scenarios.html, harmony-data.html, harmony-analytics.html |
 
 ### 5.3 AgentShell Pattern
@@ -296,6 +296,26 @@ Analytics pages use **Chart.js** for visualization:
 
 ### 6.1 Auth Flow
 
+Two authentication paths are supported:
+
+**Path A: Demo Login (Username/Password)**
+```
+┌──────┐   POST /v0/auth/demo-login           ┌─────────┐
+│Client│ ──────────────────────────────────▶   │ Gateway │
+└──────┘   { username, password }              └────┬────┘
+                                                    │
+                                          Validate credentials
+                                          Auto-provision user
+                                          Create session
+                                                    │
+┌──────┐   ◀── Set-Cookie: oggy_session       ┌────▼────┐
+│Client│ ◀─────────────────────────────────    │ Gateway │
+└──────┘   Redirect to /                       └─────────┘
+```
+
+A single demo account (`Demo_Oggy` / `welcomeToOggy`) provides instant access. On first login, the demo user is auto-added to `auth_allowed_emails` and a session is created. No email verification required.
+
+**Path B: Magic Link Login (Email)**
 ```
 ┌──────┐   POST /v0/auth/request-magic-link   ┌─────────┐
 │Client│ ──────────────────────────────────▶   │ Gateway │
@@ -321,17 +341,19 @@ Analytics pages use **Chart.js** for visualization:
 └──────┘   ◀── { csrf_token, user }           └─────────┘
 ```
 
+Quick login optimization: if the email was verified within the past 6 hours, a new session is created instantly without re-sending an email.
+
 ### 6.2 Security Measures
 
 | Measure | Implementation |
 |---------|---------------|
-| **Authentication** | Magic link email (6-hour token expiry) |
+| **Authentication** | Demo login (username/password) + Magic link email (6-hour token expiry) |
 | **Sessions** | 7-day secure cookies |
 | **CSRF Protection** | Token per session, validated on every mutation |
 | **Rate Limiting** | Per-email and per-IP on magic link requests |
 | **API Key Storage** | AES-256-GCM encryption at rest |
 | **Internal Auth** | X-User-Id header trust on Docker network only |
-| **Invite-Only** | Email allowlist (admin-managed) |
+| **Invite-Only** | Email allowlist (admin-managed) + shared demo account |
 | **HTTPS** | Cloudflare Tunnel (TLS termination) |
 | **CORS** | Configurable origin allowlist |
 
@@ -484,7 +506,7 @@ EC2:     cd /opt/oggy
          docker compose -f docker-compose.staging.yml up -d --build
 
 Verify:  curl http://localhost:3001/health
-         → { ok: true, checks: { database, memoryService, payments, general, diet, harmony } }
+         → { ok: true, checks: { database, memoryService, finSense, genExplorer, healthAssist, harmony } }
 ```
 
 ### 10.3 Resource Allocation
@@ -492,9 +514,9 @@ Verify:  curl http://localhost:3001/health
 | Container | Memory Limit | CPU Shares |
 |-----------|-------------|------------|
 | Gateway | 128MB | Default |
-| Payments | 256MB | Default |
-| General | 128MB | Default |
-| Diet | 128MB | Default |
+| FinSense | 256MB | Default |
+| GenExplorer | 128MB | Default |
+| HealthAssist | 128MB | Default |
 | Harmony | 128MB | Default |
 | Memory | 128MB | Default |
 | Learning | 128MB | Default |
@@ -516,10 +538,10 @@ Verify:  curl http://localhost:3001/health
 
 | Service | Endpoints | Key Features |
 |---------|-----------|--------------|
-| **Gateway** | ~50 | Auth (9), Preferences (7), Settings (6), Health (12), Analytics (7), Migration (2), Pruning (3), Intents (7) |
-| **Payments** | ~20 | Expenses (5), Categorization (2), Chat (1), Query (4), Training (3), Benchmarks (6) |
-| **General** | ~25 | Chat (1), Projects (8), Domain Learning (16), Analytics (1) |
-| **Diet** | ~20 | Entries (4), Nutrition (1), Rules (3), Goals (2), Search (2), Barcode (1), Meals (5), Chat (1) |
+| **Gateway** | ~50 | Auth (10 — incl. demo-login), Preferences (7), Settings (6), Health (12), Analytics (7), Migration (2), Pruning (3), Intents (7) |
+| **FinSense** | ~20 | Expenses (5), Categorization (2), Chat (1), Query (4), Training (3), Benchmarks (6) |
+| **GenExplorer** | ~25 | Chat (1), Projects (8), Domain Learning (16), Analytics (1) |
+| **HealthAssist** | ~20 | Entries (4), Nutrition (1), Rules (3), Goals (2), Search (2), Barcode (1), Meals (5), Chat (1) |
 | **Harmony** | ~35 | Nodes (6), Compute (2), Scenarios (5), Datasets (2), Audit (2), Alerts (2), Chat (2), Suggestions (10), Observer (12) |
 | **Memory** | ~8 | Cards (3), Retrieval (1), Audit (4), Utility (1) |
 
@@ -650,9 +672,9 @@ oggy/
 │   │   │   └── *.html               # 20 HTML pages
 │   │   └── src/
 │   │       ├── gateway.js           # API gateway entry
-│   │       ├── payments-entry.js    # Payments service entry
-│   │       ├── general-entry.js     # General service entry
-│   │       ├── diet-entry.js        # Diet service entry
+│   │       ├── payments-entry.js    # FinSense service entry
+│   │       ├── general-entry.js     # GenExplorer service entry
+│   │       ├── diet-entry.js        # HealthAssist service entry
 │   │       ├── harmony-entry.js     # Harmony service entry
 │   │       ├── index.js             # Monolith fallback
 │   │       ├── shared/
@@ -663,19 +685,19 @@ oggy/
 │   │       │   ├── utils/           # 14 utility modules
 │   │       │   └── DomainAdapter.js # Domain registry
 │   │       └── domains/
-│   │           ├── payments/
+│   │           ├── payments/         # FinSense domain
 │   │           │   ├── routes/      # 4 route files
 │   │           │   ├── services/    # 9 service files
 │   │           │   └── db/          # 2 migration files
-│   │           ├── general/
+│   │           ├── general/         # GenExplorer domain
 │   │           │   ├── routes/      # 2 route files
 │   │           │   ├── services/    # 6 service files
 │   │           │   └── db/          # 3 migration files
-│   │           ├── diet/
+│   │           ├── diet/            # HealthAssist domain
 │   │           │   ├── routes/      # 1 route file
 │   │           │   ├── services/    # 5 service files
 │   │           │   └── db/          # 4 migration files
-│   │           └── harmony/
+│   │           └── harmony/         # Harmony domain
 │   │               ├── routes/      # 2 route files
 │   │               ├── services/    # 10 service files
 │   │               └── db/          # 5 migration files
